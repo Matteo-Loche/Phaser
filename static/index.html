@@ -49,8 +49,8 @@
     .app {
       display: grid;
       grid-template-rows: var(--header-h) 1fr;
-      grid-template-columns: var(--sidebar-w) 1fr;
-      grid-template-areas: "header header" "sidebar main";
+      grid-template-columns: var(--sidebar-w) 8px 1fr;
+      grid-template-areas: "header header header" "sidebar resizer main";
       height: 100dvh;
     }
     header {
@@ -96,6 +96,27 @@
       gap: 0.5rem;
     }
 
+    /* ---------- Sidebar resizer ---------- */
+    .sidebar-resizer {
+      grid-area: resizer;
+      position: relative;
+      cursor: col-resize;
+      background: var(--border);
+      touch-action: none;
+      z-index: 25;
+    }
+    .sidebar-resizer::after {
+      content: "";
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 4px; height: 38px; border-radius: 999px;
+      background: var(--muted); opacity: 0.45;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    .sidebar-resizer:hover { background: var(--accent-dim); }
+    .sidebar-resizer:hover::after { background: var(--accent); opacity: 1; }
+
     /* ---------- Mobile drawer ---------- */
     .backdrop {
       display: none;
@@ -108,6 +129,7 @@
         grid-template-columns: 1fr;
         grid-template-areas: "header" "main";
       }
+      .sidebar-resizer { display: none; }
       .icon-btn { display: inline-flex; }
       aside {
         position: fixed;
@@ -232,8 +254,17 @@
     /* ---------- Plot ---------- */
     .plot-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
     .plot-wrap {
-      position: relative;
       flex: 1; min-height: 0;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    .plot-square {
+      position: relative;
+      aspect-ratio: 1 / 1;
+      height: 100%;
+      width: auto;
+      max-width: 100%;
+      max-height: 100%;
       border: 1px solid var(--border); border-radius: var(--radius);
       background: #fff; overflow: hidden;
     }
@@ -369,6 +400,9 @@
       </div>
     </aside>
 
+    <div class="sidebar-resizer" id="sidebarResizer"
+         title="Drag to resize · double-click to reset" aria-hidden="true"></div>
+
     <main>
       <div class="plot-toolbar">
         <span class="pill" id="stalePill" style="display:none">stale — recompute</span>
@@ -388,10 +422,12 @@
         <span class="meta" id="plotMeta">No diagram yet.</span>
       </div>
       <div class="plot-wrap">
-        <div id="plotDiv"></div>
-        <div class="empty" id="plotEmpty">
-          <div style="font-size:2rem">⬡</div>
-          <div>Set your system and press <b>Compute diagram</b>.</div>
+        <div class="plot-square">
+          <div id="plotDiv"></div>
+          <div class="empty" id="plotEmpty">
+            <div style="font-size:2rem">⬡</div>
+            <div>Set your system and press <b>Compute diagram</b>.</div>
+          </div>
         </div>
       </div>
     </main>
@@ -826,6 +862,72 @@
     }
 
     /* ---------------- inputs binding ---------------- */
+    /* ---------------- layout: sidebar resizer ---------------- */
+    const LAYOUT_KEY = "phaserLayout.v1";
+
+    function triggerPlotResize() {
+      if (window.Plotly && document.getElementById("plotDiv") && runtime.lastResult) {
+        try { Plotly.Plots.resize("plotDiv"); } catch (e) {}
+      }
+    }
+
+    function clampSidebarW(px) {
+      const max = Math.min(window.innerWidth * 0.5, 720);
+      return Math.round(Math.max(280, Math.min(px, Math.max(280, max))));
+    }
+
+    function initSidebarResizer() {
+      const app = $("app");
+      const resizer = $("sidebarResizer");
+      if (!resizer) return;
+
+      try {
+        const saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || "{}");
+        if (saved.sidebarW) app.style.setProperty("--sidebar-w", clampSidebarW(saved.sidebarW) + "px");
+      } catch (e) {}
+
+      let dragging = false, rafPending = false;
+      const isMobile = () => window.matchMedia("(max-width: 900px)").matches;
+      const scheduleResize = () => {
+        if (rafPending) return;
+        rafPending = true;
+        requestAnimationFrame(() => { rafPending = false; triggerPlotResize(); });
+      };
+
+      resizer.addEventListener("pointerdown", e => {
+        if (isMobile()) return;
+        dragging = true;
+        resizer.setPointerCapture?.(e.pointerId);
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+        e.preventDefault();
+      });
+      window.addEventListener("pointermove", e => {
+        if (!dragging) return;
+        app.style.setProperty("--sidebar-w", clampSidebarW(e.clientX) + "px");
+        scheduleResize();
+      });
+      window.addEventListener("pointerup", () => {
+        if (!dragging) return;
+        dragging = false;
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        const w = parseInt(getComputedStyle(app).getPropertyValue("--sidebar-w"), 10);
+        if (w) { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify({ sidebarW: w })); } catch (e) {} }
+        triggerPlotResize();
+      });
+      resizer.addEventListener("dblclick", () => {
+        app.style.removeProperty("--sidebar-w");
+        try { localStorage.removeItem(LAYOUT_KEY); } catch (e) {}
+        triggerPlotResize();
+      });
+      window.addEventListener("resize", () => {
+        const cur = parseInt(getComputedStyle(app).getPropertyValue("--sidebar-w"), 10);
+        if (cur && !isMobile()) app.style.setProperty("--sidebar-w", clampSidebarW(cur) + "px");
+        triggerPlotResize();
+      });
+    }
+
     function bindControls() {
       $("dbSelect").addEventListener("change", async e => {
         state.dbId = e.target.value;
@@ -1072,11 +1174,15 @@
 
     /* ---------------- plotting ---------------- */
     const AQ_GREY = "#eef0f3"; // light white-grey for all aqueous species in solid view
+    const NONE_COLOR = "#ffffff"; // non-convergent / no dominant species -> white (all views)
 
     function buildDiscreteColorscale(names, aqueousSet) {
       const n = names.length, scale = [];
       for (let i = 0; i < n; i++) {
-        const c = (aqueousSet && aqueousSet.has(names[i])) ? AQ_GREY : colorForPhase(names[i]);
+        let c;
+        if (names[i] === "none") c = NONE_COLOR;
+        else if (aqueousSet && aqueousSet.has(names[i])) c = AQ_GREY;
+        else c = colorForPhase(names[i]);
         scale.push([i / n, c]); scale.push([(i + 1) / n, c]);
       }
       return scale;
@@ -1197,13 +1303,16 @@
       }
       if (state.showBoundaries) traces.push(boundaryTrace(plotResult));
 
-      const ax = { showgrid: false, zeroline: false, mirror: true, ticks: "outside", linecolor: "#222" };
+      const ax = {
+        showgrid: false, zeroline: false, mirror: true, ticks: "outside", linecolor: "#222",
+        tickfont: { size: 15 },
+      };
       const layout = {
-        margin: { l: 64, r: 20, t: 16, b: 52 },
+        margin: { l: 70, r: 20, t: 16, b: 60 },
         paper_bgcolor: "#fff", plot_bgcolor: "#fff",
         showlegend: false,
-        xaxis: Object.assign({ title: { text: "pH" }, range: [x[0], x.at(-1)] }, ax),
-        yaxis: Object.assign({ title: { text: yLabel }, range: [y[0], y.at(-1)] }, ax),
+        xaxis: Object.assign({ title: { text: "pH", font: { size: 18 } }, range: [x[0], x.at(-1)] }, ax),
+        yaxis: Object.assign({ title: { text: yLabel, font: { size: 18 } }, range: [y[0], y.at(-1)] }, ax),
         annotations: componentAnnotations(plotResult),
       };
       if (!traces.length) {
@@ -1253,6 +1362,7 @@
 
     async function init() {
       bindControls();
+      initSidebarResizer();
       try {
         runtime.cfg = await api("/api/config");
         const dbList = await api("/api/databases");
