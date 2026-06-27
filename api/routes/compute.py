@@ -4,7 +4,13 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ... import config
-from ...services.compute import create_job, get_job, get_job_result, run_compute_job
+from ...services.compute import (
+    create_job,
+    delete_job,
+    get_job,
+    get_job_result,
+    run_compute_job,
+)
 from ..models import ComputeRequest
 
 router = APIRouter(tags=["compute"])
@@ -42,3 +48,10 @@ def job_result(job_id: str):
     if result is None:
         raise HTTPException(409, f"Job status: {job.get('status')}")
     return result
+
+
+@router.delete("/api/job/{job_id}")
+def remove_job(job_id: str):
+    if not delete_job(job_id):
+        raise HTTPException(404, "Job not found")
+    return {"deleted": True}

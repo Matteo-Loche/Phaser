@@ -437,6 +437,11 @@
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
     const LS_KEY = "phaseDiagramState.v7";
+    const RESULT_DB = "phaserResultCache.v1";
+    const RESULT_STORE = "results";
+    const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
+    const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+    const RESULT_CACHE_MAX = 12;
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
     const MOL_SCALE = {
       "mol/kgw": 1, "mmol/kgw": 1e-3, "umol/kgw": 1e-6,
@@ -1061,6 +1066,100 @@
       }
     }
 
+    /* ---------------- browser result cache ---------------- */
+    function stableStringify(value) {
+      if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+      if (value && typeof value === "object") {
+        return `{${Object.keys(value).sort().map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
+      }
+      return JSON.stringify(value);
+    }
+
+    function cacheKeyFor(text) {
+      let h = 2166136261;
+      for (let i = 0; i < text.length; i++) {
+        h ^= text.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return `fnv-${(h >>> 0).toString(16)}`;
+    }
+
+    function openResultDb() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(RESULT_DB, 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains(RESULT_STORE)) {
+            const store = db.createObjectStore(RESULT_STORE, { keyPath: "key" });
+            store.createIndex("createdAt", "createdAt");
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    function txStore(db, mode = "readonly") {
+      return db.transaction(RESULT_STORE, mode).objectStore(RESULT_STORE);
+    }
+
+    async function getCachedResult(key) {
+      const db = await openResultDb();
+      return new Promise((resolve, reject) => {
+        const req = txStore(db).get(key);
+        req.onsuccess = () => {
+          const rec = req.result;
+          if (!rec) { resolve(null); return; }
+          if (Date.now() - rec.createdAt > RESULT_CACHE_TTL_MS) {
+            deleteCachedResult(key).catch(() => {});
+            resolve(null);
+            return;
+          }
+          resolve(rec.result);
+        };
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function putCachedResult(key, result) {
+      const db = await openResultDb();
+      await new Promise((resolve, reject) => {
+        const req = txStore(db, "readwrite").put({ key, result, createdAt: Date.now() });
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+      try { sessionStorage.setItem(RESULT_SESSION_KEY, key); } catch (e) {}
+      pruneResultCache().catch(() => {});
+    }
+
+    async function deleteCachedResult(key) {
+      const db = await openResultDb();
+      return new Promise((resolve, reject) => {
+        const req = txStore(db, "readwrite").delete(key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function pruneResultCache() {
+      const db = await openResultDb();
+      const records = await new Promise((resolve, reject) => {
+        const req = txStore(db).getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => reject(req.error);
+      });
+      const now = Date.now();
+      const stale = records.filter(r => now - r.createdAt > RESULT_CACHE_TTL_MS);
+      const fresh = records.filter(r => now - r.createdAt <= RESULT_CACHE_TTL_MS)
+        .sort((a, b) => b.createdAt - a.createdAt);
+      const overflow = fresh.slice(RESULT_CACHE_MAX);
+      await Promise.all([...stale, ...overflow].map(r => deleteCachedResult(r.key)));
+    }
+
+    async function forgetServerJob(jobId) {
+      try { await api(`/api/job/${jobId}`, { method: "DELETE" }); } catch (e) {}
+    }
+
     /* ---------------- compute ---------------- */
     async function compute() {
       const totals = activeTotals();
@@ -1085,17 +1184,31 @@
 
       try {
         $("computeBtn").disabled = true;
-        setStatus("Starting job…");
         $("app").classList.remove("drawer-open");
+        const cacheKey = cacheKeyFor(stableStringify(body));
+        try {
+          const cached = await getCachedResult(cacheKey);
+          if (cached) {
+            drawDiagram(cached);
+            runtime.hasResult = true;
+            $("stalePill").style.display = "none";
+            setStatus("Loaded diagram from this browser's cache.", "ok");
+            $("computeBtn").disabled = false;
+            return;
+          }
+        } catch (cacheErr) {
+          /* Cache failures should not block computation. */
+        }
+        setStatus("Starting job…");
         const { job_id } = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
-        pollJob(job_id);
+        pollJob(job_id, cacheKey);
       } catch (e) {
         setStatus(e.message, "err");
         $("computeBtn").disabled = false;
       }
     }
 
-    function pollJob(jobId) {
+    function pollJob(jobId, cacheKey) {
       clearInterval(runtime.pollTimer);
       const bar = $("progressBar");
       bar.style.display = "block";
@@ -1107,12 +1220,18 @@
           clearInterval(runtime.pollTimer);
           bar.style.display = "none";
           $("computeBtn").disabled = false;
-          if (st.status === "error") { setStatus(st.error || "Computation failed", "err"); return; }
+          if (st.status === "error") {
+            forgetServerJob(jobId);
+            setStatus(st.error || "Computation failed", "err");
+            return;
+          }
           const result = await api(`/api/job/${jobId}/result`);
+          try { await putCachedResult(cacheKey, result); } catch (cacheErr) {}
+          forgetServerJob(jobId);
           drawDiagram(result);
           runtime.hasResult = true;
           $("stalePill").style.display = "none";
-          setStatus(`Done — ${st.phases_used?.length ?? "?"} phases evaluated.`, "ok");
+          setStatus(`Done — ${st.phases_used?.length ?? "?"} phases evaluated and cached in this browser.`, "ok");
         } catch (e) {
           clearInterval(runtime.pollTimer);
           bar.style.display = "none";

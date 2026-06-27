@@ -44,6 +44,11 @@ def get_job_result(job_id: str) -> dict[str, Any] | None:
     return job.get("result")
 
 
+def delete_job(job_id: str) -> bool:
+    with _jobs_lock:
+        return _jobs.pop(job_id, None) is not None
+
+
 def run_compute_job(job_id: str, body: ComputeRequest) -> None:
     thread = threading.Thread(target=_run_job, args=(job_id, body), daemon=True)
     thread.start()
