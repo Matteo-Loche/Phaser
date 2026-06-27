@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark light" />
+  <title>Phase Diagram Calculator</title>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --panel-2: #131c29;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8b9cb3;
+      --accent: #4da3ff;
+      --accent-dim: #2d6cb5;
+      --ok: #3dd68c;
+      --warn: #f5a623;
+      --err: #ff6b6b;
+
+      --space: clamp(0.6rem, 0.4rem + 0.6vw, 1rem);
+      --radius: 10px;
+      --sidebar-w: clamp(320px, 30vw, 420px);
+      --header-h: 56px;
+      --tap: 40px;
+      --fs-base: clamp(0.85rem, 0.8rem + 0.2vw, 0.95rem);
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #eef2f7; --panel: #ffffff; --panel-2: #f4f7fb; --border: #d3dceb;
+        --text: #16202e; --muted: #5a6b82; --accent: #1f6fd6; --accent-dim: #cfe2fb;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-size: var(--fs-base);
+      background: var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+    button, input, select, textarea { font: inherit; color: inherit; }
+
+    /* ---------- App shell ---------- */
+    .app {
+      display: grid;
+      grid-template-rows: var(--header-h) 1fr;
+      grid-template-columns: var(--sidebar-w) 1fr;
+      grid-template-areas: "header header" "sidebar main";
+      height: 100dvh;
+    }
+    header {
+      grid-area: header;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0 var(--space);
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+      z-index: 30;
+    }
+    header .title { display: flex; flex-direction: column; min-width: 0; }
+    header h1 { margin: 0; font-size: clamp(0.95rem, 0.85rem + 0.4vw, 1.15rem); font-weight: 650; white-space: nowrap; }
+    header .subtitle { color: var(--muted); font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    header .spacer { flex: 1; }
+    .icon-btn {
+      display: none;
+      align-items: center; justify-content: center;
+      width: var(--tap); height: var(--tap);
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--panel-2); cursor: pointer;
+    }
+
+    aside {
+      grid-area: sidebar;
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: var(--space);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space);
+    }
+    main {
+      grid-area: main;
+      min-width: 0;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      padding: var(--space);
+      gap: 0.5rem;
+    }
+
+    /* ---------- Mobile drawer ---------- */
+    .backdrop {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 40;
+    }
+    @media (max-width: 900px) {
+      .app {
+        grid-template-columns: 1fr;
+        grid-template-areas: "header" "main";
+      }
+      .icon-btn { display: inline-flex; }
+      aside {
+        position: fixed;
+        top: 0; left: 0; bottom: 0;
+        width: min(86vw, 380px);
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        box-shadow: 0 0 30px rgba(0,0,0,0.4);
+      }
+      .app.drawer-open aside { transform: translateX(0); }
+      .app.drawer-open .backdrop { display: block; }
+    }
+
+    /* ---------- Cards ---------- */
+    .card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--panel-2);
+    }
+    .card > summary, .card > .card-head {
+      list-style: none;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.7rem 0.85rem;
+      font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--muted); font-weight: 600;
+      user-select: none;
+    }
+    .card > summary::-webkit-details-marker { display: none; }
+    .card > summary .chev { transition: transform 0.2s; margin-left: auto; }
+    .card[open] > summary .chev { transform: rotate(90deg); }
+    .card .body { padding: 0 0.85rem 0.85rem; display: flex; flex-direction: column; gap: 0.6rem; }
+
+    label { display: block; font-size: 0.74rem; color: var(--muted); margin-bottom: 0.25rem; }
+    input[type="number"], input[type="text"], select {
+      width: 100%; min-height: var(--tap);
+      padding: 0.45rem 0.55rem;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg);
+    }
+    input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+    .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.5rem; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0.5rem; }
+
+    /* ---------- Species chips ---------- */
+    .species-head {
+      display: grid;
+      grid-template-columns: minmax(72px, 1fr) minmax(0, 1.4fr) var(--tap);
+      gap: 0.4rem; font-size: 0.68rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0.2rem;
+    }
+    .species-list { display: flex; flex-direction: column; gap: 0.4rem; }
+    .species-row {
+      display: grid;
+      grid-template-columns: minmax(72px, 1fr) minmax(0, 1.4fr) auto;
+      align-items: center; gap: 0.4rem;
+    }
+    .species-row .name { font-weight: 600; padding-left: 0.2rem; }
+    .species-row .rm {
+      width: var(--tap); height: var(--tap);
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg); color: var(--err); cursor: pointer;
+      font-size: 1.1rem; line-height: 1;
+    }
+    .species-row .rm:hover { background: rgba(255,107,107,0.12); }
+    .add-species { display: grid; grid-template-columns: 1fr auto; gap: 0.4rem; }
+
+    /* ---------- Phases ---------- */
+    .phase-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+    .phase-search { flex: 1; min-width: 120px; }
+    .phase-box {
+      max-height: clamp(160px, 28vh, 320px);
+      overflow-y: auto; overscroll-behavior: contain;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg);
+    }
+    .phase-item {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+    }
+    .phase-item:last-child { border-bottom: none; }
+    .phase-item input { width: 18px; height: 18px; flex: none; }
+    .phase-item .pname { font-weight: 600; }
+    .phase-item .pelem { color: var(--muted); font-size: 0.72rem; }
+    .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; border: 1px solid rgba(0,0,0,0.25); }
+
+    /* ---------- Buttons ---------- */
+    .btn-row { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    button.btn {
+      min-height: var(--tap);
+      border: none; border-radius: 8px;
+      padding: 0 0.9rem; cursor: pointer;
+      background: var(--accent); color: #fff; font-weight: 600;
+      display: inline-flex; align-items: center; gap: 0.4rem;
+    }
+    button.btn:hover { filter: brightness(1.08); }
+    button.btn.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    button.btn.block { width: 100%; justify-content: center; }
+    button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .pill {
+      display: inline-flex; align-items: center; gap: 0.3rem;
+      padding: 0.15rem 0.55rem; border-radius: 999px;
+      background: var(--accent-dim); color: var(--accent);
+      font-size: 0.72rem; font-weight: 600;
+    }
+    .pill.ok { background: rgba(61,214,140,0.16); color: var(--ok); }
+    .pill.err { background: rgba(255,107,107,0.16); color: var(--err); }
+    .pill.warn { background: rgba(245,166,35,0.16); color: var(--warn); }
+
+    .status { font-size: 0.8rem; color: var(--muted); min-height: 1.1rem; }
+    .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+    progress { width: 100%; height: 8px; }
+
+    .toggle { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
+    .toggle input { width: 18px; height: 18px; }
+
+    /* ---------- Plot ---------- */
+    .plot-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+    .plot-wrap {
+      position: relative;
+      flex: 1; min-height: 0;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: #fff; overflow: hidden;
+    }
+    #plotDiv { width: 100%; height: 100%; }
+    .meta { font-size: 0.76rem; color: var(--muted); }
+    .empty {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      color: #94a3b8; text-align: center; padding: 2rem; flex-direction: column; gap: 0.5rem;
+      pointer-events: none;
+    }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+    .seg button { min-height: var(--tap); padding: 0 0.8rem; background: var(--bg); border: none; cursor: pointer; color: var(--text); }
+    .seg button.active { background: var(--accent); color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header>
+      <button class="icon-btn" id="menuBtn" aria-label="Toggle controls">☰</button>
+      <div class="title">
+        <h1>Phase Diagram Calculator</h1>
+        <span class="subtitle">PHREEQC · Thermoddem · pH / Eh predominance · multiprocessing</span>
+      </div>
+      <div class="spacer"></div>
+      <span class="pill" id="healthPill">…</span>
+    </header>
+
+    <div class="backdrop" id="backdrop"></div>
+
+    <aside id="sidebar">
+      <details class="card">
+        <summary>Database <span class="chev">›</span></summary>
+        <div class="body">
+          <div>
+            <label for="dbSelect">PHREEQC database</label>
+            <select id="dbSelect"></select>
+            <div class="meta" id="dbMeta" style="margin-top:0.35rem"></div>
+          </div>
+          <div class="btn-row">
+            <button class="btn secondary" id="loadElementsBtn">Reload elements</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="card" open>
+        <summary>Chemical system <span class="pill" id="elemCount">0</span><span class="chev">›</span></summary>
+        <div class="body">
+          <div class="add-species">
+            <input id="speciesPicker" list="speciesOptions" placeholder="Add species (e.g. Fe, C(4), S(6))" />
+            <datalist id="speciesOptions"></datalist>
+            <button class="btn" id="addSpeciesBtn">Add</button>
+          </div>
+          <div class="species-head"><span>species</span><span id="unitHead">concentration (mmol/kgw)</span><span></span></div>
+          <div class="species-list" id="speciesList"></div>
+          <div class="grid3">
+            <div>
+              <label for="units">Units</label>
+              <select id="units"></select>
+            </div>
+            <div>
+              <label for="chargeSpecies">Charge balance</label>
+              <select id="chargeSpecies"></select>
+            </div>
+            <div>
+              <label for="tempC">Temp (°C)</label>
+              <input id="tempC" type="number" step="0.1" />
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details class="card" open>
+        <summary>Axes <span class="chev">›</span></summary>
+        <div class="body">
+          <div>
+            <label>Vertical axis (redox)</label>
+            <div class="seg" id="yAxisSeg">
+              <button data-axis="pe" class="active">pe</button>
+              <button data-axis="eh">Eh (V)</button>
+            </div>
+          </div>
+          <div class="grid2">
+            <div><label>pH min</label><input id="phMin" type="number" step="0.1" /></div>
+            <div><label>pH max</label><input id="phMax" type="number" step="0.1" /></div>
+          </div>
+          <div>
+            <label>pH resolution: <span id="phLevelsVal"></span></label>
+            <input id="phLevels" type="range" min="10" max="200" step="1" />
+          </div>
+          <div class="grid2">
+            <div><label id="yMinLabel">pe min</label><input id="yMin" type="number" step="0.1" /></div>
+            <div><label id="yMaxLabel">pe max</label><input id="yMax" type="number" step="0.1" /></div>
+          </div>
+          <div>
+            <label id="yLevelsLabel">pe resolution: <span id="yLevelsVal"></span></label>
+            <input id="yLevels" type="range" min="10" max="200" step="1" />
+          </div>
+          <div class="meta" id="gridMeta"></div>
+        </div>
+      </details>
+
+      <details class="card" open>
+        <summary>Phases <span class="pill" id="phaseSelCount">0</span><span class="chev">›</span></summary>
+        <div class="body">
+          <div class="phase-toolbar">
+            <input class="phase-search" id="phaseSearch" placeholder="Filter solids…" />
+            <button class="btn secondary" id="selAll">All</button>
+            <button class="btn secondary" id="selNone">None</button>
+          </div>
+          <div class="phase-box" id="phaseBox"><div class="meta" style="padding:0.6rem">Add species to discover phases.</div></div>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary>Configuration <span class="chev">›</span></summary>
+        <div class="body">
+          <div class="btn-row">
+            <button class="btn secondary" id="saveServerBtn">Save to server</button>
+            <button class="btn secondary" id="exportBtn">Export JSON</button>
+            <button class="btn secondary" id="importBtn">Import JSON</button>
+            <button class="btn secondary" id="resetBtn">Reset</button>
+          </div>
+          <input type="file" id="importFile" accept="application/json" style="display:none" />
+          <div class="meta">Live config auto-saves to this browser. Use Save to server to persist a shared default.</div>
+        </div>
+      </details>
+
+      <div>
+        <button class="btn block" id="computeBtn">Compute diagram</button>
+        <progress id="progressBar" value="0" max="100" style="margin-top:0.5rem;display:none"></progress>
+        <div class="status" id="statusMsg" style="margin-top:0.4rem"></div>
+      </div>
+    </aside>
+
+    <main>
+      <div class="plot-toolbar">
+        <span class="pill" id="stalePill" style="display:none">stale — recompute</span>
+        <label style="font-size:0.78rem;color:var(--muted)">Display</label>
+        <select id="displayMode" style="min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+          <option value="solid">Solid predominance</option>
+          <option value="element">Aqueous species (by element)</option>
+        </select>
+        <span id="solidSubsetWrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.6rem;font-size:0.78rem">
+          <span style="color:var(--muted)">Solid elements:</span>
+          <span id="solidSubsetBoxes"></span>
+        </span>
+        <select id="targetElement" style="display:none;min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)"></select>
+        <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
+        <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
+        <div class="spacer" style="flex:1"></div>
+        <span class="meta" id="plotMeta">No diagram yet.</span>
+      </div>
+      <div class="plot-wrap">
+        <div id="plotDiv"></div>
+        <div class="empty" id="plotEmpty">
+          <div style="font-size:2rem">⬡</div>
+          <div>Set your system and press <b>Compute diagram</b>.</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+  (function () {
+    "use strict";
+
+    const PHASE_COLORS = {
+      aqueous: "#d5e8f7", Siderite: "#3498db", Goethite: "#c0392b",
+      Lepidocrocite: "#e67e22", "Ferrihydrite(2L)": "#9b59b6", Hematite: "#8e0000",
+      Magnetite: "#2c3e50", Wustite: "#7f8c8d", "Fe(OH)2": "#1abc9c",
+    };
+    const FALLBACK_PALETTE = [
+      "#e74c3c","#3498db","#2ecc71","#f39c12","#9b59b6","#1abc9c",
+      "#e67e22","#34495e","#16a085","#c0392b","#8e44ad","#27ae60",
+      "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
+    ];
+    const LS_KEY = "phaseDiagramState.v6";
+    const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
+    const MOL_SCALE = {
+      "mol/kgw": 1, "mmol/kgw": 1e-3, "umol/kgw": 1e-6,
+      "mol/l": 1, "mmol/l": 1e-3, "umol/l": 1e-6,
+    };
+
+    const DEFAULT_STATE = {
+      dbId: "",
+      totals: [{ species: "Fe", value: 1 }, { species: "C(4)", value: 1 }],
+      units: "mmol/kgw",
+      tempC: 25,
+      chargeSpecies: "Na",
+      ph: { min: 2, max: 12, levels: 60 },
+      y: { axis: "pe", peMin: -10, peMax: 14, levels: 60 },
+      displayMode: "solid",
+      solidSubsetElements: [],
+      targetElement: "Fe",
+      labelsOnly: false,
+      showBoundaries: true,
+      phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
+    };
+
+    const runtime = {
+      cfg: null,
+      databases: [],
+      catalog: [],          // discovered phases [{name, elements}]
+      colorByName: {},      // stable color assignment
+      lastResult: null,
+      pollTimer: null,
+      phaseSeq: 0,
+      phaseDebounce: null,
+      persistDebounce: null,
+      hasResult: false,
+    };
+
+    let state = structuredClone(DEFAULT_STATE);
+
+    const $ = (id) => document.getElementById(id);
+
+    /* ---------------- helpers ---------------- */
+    function peToEh(pe, t) { return pe * F * (t + 273.15); }
+    function ehToPe(eh, t) { return eh / (F * (t + 273.15)); }
+
+    function convertConc(value, fromUnit, toUnit) {
+      if (fromUnit === toUnit) return value;
+      if (!(fromUnit in MOL_SCALE) || !(toUnit in MOL_SCALE)) return null;
+      if (fromUnit.endsWith("/kgw") !== toUnit.endsWith("/kgw")) return null;
+      return value * MOL_SCALE[fromUnit] / MOL_SCALE[toUnit];
+    }
+
+    function displayYMin() {
+      return state.y.axis === "eh" ? peToEh(state.y.peMin, state.tempC) : state.y.peMin;
+    }
+    function displayYMax() {
+      return state.y.axis === "eh" ? peToEh(state.y.peMax, state.tempC) : state.y.peMax;
+    }
+    function plotPeAxis(result) {
+      return result.pe || result.y || [];
+    }
+    function plotYValues(result) {
+      const pe = plotPeAxis(result);
+      return state.y.axis === "eh"
+        ? pe.map(p => peToEh(p, result.temp_c))
+        : pe;
+    }
+    function plotYLabel() {
+      return state.y.axis === "eh" ? "Eh (V)" : "pe";
+    }
+
+    function elementOf(species) {
+      const m = String(species).match(/^([A-Z][a-z]?)/);
+      return m ? m[1] : species;
+    }
+    function systemElements() {
+      return [...new Set(state.totals.map(t => elementOf(t.species)))];
+    }
+    function activeTotals() {
+      const out = {};
+      state.totals.forEach(t => { if (t.value > 0) out[t.species] = t.value; });
+      return out;
+    }
+    function colorForPhase(name) {
+      if (PHASE_COLORS[name]) return PHASE_COLORS[name];
+      if (!(name in runtime.colorByName)) {
+        const idx = Object.keys(runtime.colorByName).length;
+        runtime.colorByName[name] = FALLBACK_PALETTE[idx % FALLBACK_PALETTE.length];
+      }
+      return runtime.colorByName[name];
+    }
+    function labelForPhase(name) {
+      if (name === "none") return "—";
+      return name.replace("(2L)", "").replace("(disordered)", "");
+    }
+
+    function subsetKey(elems) {
+      return [...elems].sort().join("-");
+    }
+
+    function renderSolidSubsetBoxes(result) {
+      const wrap = $("solidSubsetBoxes");
+      const elems = result?.system_elements || systemElements();
+      if (!state.solidSubsetElements.length) {
+        state.solidSubsetElements = [...elems];
+      }
+      wrap.innerHTML = elems.map(e => {
+        const checked = state.solidSubsetElements.includes(e) ? "checked" : "";
+        return `<label class="toggle" style="font-size:0.78rem"><input type="checkbox" data-elem="${e}" ${checked} /> ${e}</label>`;
+      }).join("");
+      wrap.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener("change", () => {
+          const e = cb.dataset.elem;
+          if (cb.checked) {
+            if (!state.solidSubsetElements.includes(e)) state.solidSubsetElements.push(e);
+          } else {
+            state.solidSubsetElements = state.solidSubsetElements.filter(x => x !== e);
+          }
+          if (!state.solidSubsetElements.length) {
+            state.solidSubsetElements = [e];
+            cb.checked = true;
+          }
+          persist();
+          if (runtime.lastResult) drawDiagram(runtime.lastResult);
+        });
+      });
+    }
+
+    function refreshTargetElementOptions(result) {
+      const sel = $("targetElement");
+      const elems = result?.system_elements || result?.layers?.elements
+        ? Object.keys(result.layers.elements)
+        : systemElements();
+      sel.innerHTML = elems.map(e => `<option value="${e}">${e}</option>`).join("");
+      if (elems.includes(state.targetElement)) sel.value = state.targetElement;
+      else if (elems.length) { state.targetElement = elems[0]; sel.value = elems[0]; }
+    }
+
+    function syncDisplayControls() {
+      const isElement = state.displayMode === "element";
+      $("targetElement").style.display = isElement ? "inline-block" : "none";
+      $("solidSubsetWrap").style.display = isElement ? "none" : "inline-flex";
+    }
+
+    function activeLayer(result) {
+      const layers = result.layers || {};
+      if (state.displayMode === "element" && layers.elements) {
+        const elem = state.targetElement;
+        const layer = layers.elements[elem];
+        if (layer) return { grid: layer.grid, names: layer.names, label: `${elem} aqueous species`, aqueous: [] };
+      }
+      const key = subsetKey(state.solidSubsetElements);
+      const solidSubsets = layers.solid_subsets || {};
+      const layer = solidSubsets[key];
+      if (layer) {
+        const label = `Solids (${state.solidSubsetElements.sort().join(", ")}) + fluid species`;
+        return { grid: layer.grid, names: layer.names, label, aqueous: layer.aqueous_names || [] };
+      }
+      const fallback = solidSubsets[subsetKey(result.system_elements || [])];
+      if (fallback) return { grid: fallback.grid, names: fallback.names, label: "Solid predominance", aqueous: fallback.aqueous_names || [] };
+      return { grid: result.grid, names: result.phase_names, label: "Solid predominance", aqueous: [] };
+    }
+    function setStatus(msg, kind = "") {
+      const el = $("statusMsg");
+      el.textContent = msg || "";
+      el.className = "status" + (kind ? " " + kind : "");
+    }
+    function setHealth(text, kind) {
+      const el = $("healthPill");
+      el.textContent = text;
+      el.className = "pill" + (kind ? " " + kind : "");
+    }
+    async function api(path, opts = {}) {
+      const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+      return data;
+    }
+    function debounce(fnRef, key, ms) {
+      clearTimeout(runtime[key]);
+      runtime[key] = setTimeout(fnRef, ms);
+    }
+
+    /* ---------------- persistence ---------------- */
+    function persist() {
+      try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+    }
+    function loadLocal() {
+      try {
+        const raw = localStorage.getItem(LS_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch (e) {}
+      return null;
+    }
+    function applyState(next) {
+      state = Object.assign(structuredClone(DEFAULT_STATE), next || {});
+      state.ph = Object.assign({}, DEFAULT_STATE.ph, state.ph);
+      state.y = Object.assign({}, DEFAULT_STATE.y, state.y);
+      state.phaseSel = state.phaseSel || {};
+      state.totals = Array.isArray(state.totals) ? state.totals : structuredClone(DEFAULT_STATE.totals);
+      // Migrate legacy y-axis bounds (always stored as pe internally now).
+      if (state.y) {
+        if (state.y.peMin == null && state.y.min != null) {
+          if (state.y.axis === "eh") {
+            state.y.peMin = ehToPe(state.y.min, state.tempC || 25);
+            state.y.peMax = ehToPe(state.y.max, state.tempC || 25);
+          } else {
+            state.y.peMin = state.y.min;
+            state.y.peMax = state.y.max;
+          }
+          delete state.y.min;
+          delete state.y.max;
+        }
+        state.y.peMin ??= DEFAULT_STATE.y.peMin;
+        state.y.peMax ??= DEFAULT_STATE.y.peMax;
+        state.y.levels ??= DEFAULT_STATE.y.levels;
+        state.y.axis ??= "pe";
+      }
+      if (!state.units) state.units = runtime.cfg?.default_units || DEFAULT_STATE.units;
+      if (!state.dbId && state.dbPath) {
+        const legacy = runtime.databases.find(d => d.filename && state.dbPath.endsWith(d.filename));
+        state.dbId = legacy?.id || "";
+        delete state.dbPath;
+      }
+    }
+
+    function selectedDatabase() {
+      return runtime.databases.find(d => d.id === state.dbId) || null;
+    }
+
+    function fillDatabaseOptions() {
+      const sel = $("dbSelect");
+      const dbs = runtime.databases.filter(d => d.exists);
+      sel.innerHTML = dbs.length
+        ? dbs.map(d => {
+            const label = d.source === "generated" ? `${d.name} (generated)` : d.name;
+            const selected = d.id === state.dbId ? "selected" : "";
+            return `<option value="${d.id}" ${selected}>${label}</option>`;
+          }).join("")
+        : `<option value="">No databases available</option>`;
+
+      if (!state.dbId || !dbs.some(d => d.id === state.dbId)) {
+        state.dbId = runtime.cfg?.default_db_id || dbs[0]?.id || "";
+        sel.value = state.dbId;
+      }
+
+      const current = selectedDatabase();
+      $("dbMeta").textContent = current
+        ? `${current.filename} · ${current.source}`
+        : "No database selected on server.";
+    }
+
+    /* ---------------- reactivity core ---------------- */
+    function commit({ totalsChanged = false } = {}) {
+      persist();
+      if (runtime.hasResult) markStale();
+      if (totalsChanged) {
+        state.solidSubsetElements = [];
+        renderSpecies();
+        debounce(refreshPhases, "phaseDebounce", 350);
+      }
+      renderGridMeta();
+    }
+    function markStale() {
+      $("stalePill").style.display = runtime.hasResult ? "inline-flex" : "none";
+    }
+
+    /* ---------------- rendering: species ---------------- */
+    function renderSpecies() {
+      const list = $("speciesList");
+      list.innerHTML = "";
+      state.totals.forEach((t, i) => {
+        const row = document.createElement("div");
+        row.className = "species-row";
+        row.innerHTML = `
+          <span class="name">${t.species}</span>
+          <input type="number" step="any" min="0" value="${t.value}" aria-label="${t.species} concentration" />
+          <button class="rm" title="Remove ${t.species}">×</button>`;
+        const num = row.querySelector("input");
+        num.addEventListener("input", () => {
+          state.totals[i].value = parseFloat(num.value) || 0;
+          commit();
+        });
+        row.querySelector(".rm").addEventListener("click", () => {
+          state.totals.splice(i, 1);
+          commit({ totalsChanged: true });
+        });
+        list.appendChild(row);
+      });
+      $("elemCount").textContent = state.totals.length;
+      $("unitHead").textContent = `concentration (${state.units})`;
+      refreshChargeOptions();
+    }
+
+    function fillUnitOptions() {
+      const sel = $("units");
+      const opts = runtime.cfg?.unit_options || ["mmol/kgw"];
+      sel.innerHTML = opts.map(u => `<option value="${u}">${u}</option>`).join("");
+      sel.value = state.units || runtime.cfg?.default_units || "mmol/kgw";
+    }
+
+    function addSpecies(name) {
+      const sp = (name || "").trim();
+      if (!sp) return;
+      if (state.totals.some(t => t.species.toLowerCase() === sp.toLowerCase())) {
+        setStatus(`${sp} already added.`, "warn");
+        return;
+      }
+      state.totals.push({ species: sp, value: runtime.cfg?.default_species_conc ?? 1 });
+      $("speciesPicker").value = "";
+      commit({ totalsChanged: true });
+    }
+
+    function refreshChargeOptions() {
+      const sel = $("chargeSpecies");
+      const opts = new Set(["Na", "Cl"]);
+      state.totals.forEach(t => opts.add(t.species));
+      const cur = state.chargeSpecies;
+      sel.innerHTML = "";
+      [...opts].forEach(o => {
+        const op = document.createElement("option");
+        op.value = o; op.textContent = o;
+        if (o === cur) op.selected = true;
+        sel.appendChild(op);
+      });
+      if (![...opts].includes(cur)) { state.chargeSpecies = "Na"; sel.value = "Na"; }
+    }
+
+    /* ---------------- rendering: phases ---------------- */
+    async function refreshPhases() {
+      const elems = systemElements();
+      if (!elems.length) {
+        runtime.catalog = [];
+        renderPhases();
+        return;
+      }
+      const seq = ++runtime.phaseSeq;
+      $("phaseBox").innerHTML = `<div class="meta" style="padding:0.6rem">Discovering phases…</div>`;
+      try {
+        const data = await api("/api/phases", {
+          method: "POST",
+          body: JSON.stringify({
+            db_id: state.dbId,
+            elements: elems,
+            exclude_gases: true,
+          }),
+        });
+        if (seq !== runtime.phaseSeq) return; // stale response
+        runtime.catalog = data.phases;
+        // default-select newly seen phases
+        runtime.catalog.forEach(p => {
+          if (!(p.name in state.phaseSel)) state.phaseSel[p.name] = true;
+        });
+        renderPhases();
+        persist();
+        setStatus(`Found ${data.count} candidate phases.`, "ok");
+      } catch (e) {
+        if (seq !== runtime.phaseSeq) return;
+        $("phaseBox").innerHTML = `<div class="meta" style="padding:0.6rem;color:var(--err)">${e.message}</div>`;
+      }
+    }
+
+    function renderPhases() {
+      const box = $("phaseBox");
+      const q = ($("phaseSearch").value || "").toLowerCase();
+      const list = runtime.catalog.filter(p => !q || p.name.toLowerCase().includes(q));
+      if (!runtime.catalog.length) {
+        box.innerHTML = `<div class="meta" style="padding:0.6rem">No phases match this system.</div>`;
+      } else {
+        box.innerHTML = list.map(p => {
+          const checked = state.phaseSel[p.name] ? "checked" : "";
+          const safe = p.name.replace(/"/g, "&quot;");
+          return `<label class="phase-item">
+            <input type="checkbox" data-name="${safe}" ${checked} />
+            <span class="swatch" style="background:${colorForPhase(p.name)}"></span>
+            <span><span class="pname">${p.name}</span> <span class="pelem">${p.elements.join(", ")}</span></span>
+          </label>`;
+        }).join("");
+        box.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+          cb.addEventListener("change", () => {
+            state.phaseSel[cb.dataset.name] = cb.checked;
+            updatePhaseCount();
+            persist();
+            if (runtime.hasResult) markStale();
+          });
+        });
+      }
+      updatePhaseCount();
+    }
+    function selectedPhases() {
+      return runtime.catalog
+        .map(p => p.name)
+        .filter(n => state.phaseSel[n] && !/\(g\)$/i.test(n));
+    }
+    function updatePhaseCount() {
+      $("phaseSelCount").textContent = selectedPhases().length;
+    }
+
+    /* ---------------- axes ---------------- */
+    function syncAxisUI() {
+      const isEh = state.y.axis === "eh";
+      $("yMinLabel").textContent = isEh ? "Eh min (V)" : "pe min";
+      $("yMaxLabel").textContent = isEh ? "Eh max (V)" : "pe max";
+      $("yLevelsLabel").innerHTML = (isEh ? "Eh" : "pe") + ` resolution: <span id="yLevelsVal">${state.y.levels}</span>`;
+      document.querySelectorAll("#yAxisSeg button").forEach(b =>
+        b.classList.toggle("active", b.dataset.axis === state.y.axis));
+    }
+    function renderGridMeta() {
+      $("phLevelsVal").textContent = state.ph.levels;
+      $("yLevelsVal") && ($("yLevelsVal").textContent = state.y.levels);
+      const n = state.ph.levels * state.y.levels;
+      $("gridMeta").innerHTML = `${state.ph.levels} × ${state.y.levels} = <b>${n}</b> PHREEQC runs`
+        + (n > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
+    }
+
+    /* ---------------- inputs binding ---------------- */
+    function bindControls() {
+      $("dbSelect").addEventListener("change", async e => {
+        state.dbId = e.target.value;
+        persist();
+        fillDatabaseOptions();
+        await reloadSpeciesSuggestions();
+        reloadElements();
+        refreshPhases();
+        if (runtime.hasResult) markStale();
+      });
+      $("tempC").addEventListener("input", e => {
+        state.tempC = parseFloat(e.target.value) || 25;
+        fillInputs();
+        commit();
+      });
+      $("chargeSpecies").addEventListener("change", e => { state.chargeSpecies = e.target.value; commit(); });
+      $("units").addEventListener("change", e => {
+        const newUnit = e.target.value;
+        const oldUnit = state.units;
+        if (oldUnit !== newUnit) {
+          let anyConverted = false;
+          state.totals = state.totals.map(t => {
+            const v = convertConc(t.value, oldUnit, newUnit);
+            if (v != null) { anyConverted = true; return { ...t, value: v }; }
+            return t;
+          });
+          if (!anyConverted) {
+            setStatus(
+              `Units set to ${newUnit}. Concentrations were not auto-converted (mass/ppm units need manual values).`,
+              "warn"
+            );
+          }
+        }
+        state.units = newUnit;
+        $("unitHead").textContent = `concentration (${state.units})`;
+        renderSpecies();
+        commit();
+      });
+
+      $("phMin").addEventListener("input", e => { state.ph.min = parseFloat(e.target.value); commit(); });
+      $("phMax").addEventListener("input", e => { state.ph.max = parseFloat(e.target.value); commit(); });
+      $("phLevels").addEventListener("input", e => { state.ph.levels = parseInt(e.target.value, 10); renderGridMeta(); commit(); });
+      $("yMin").addEventListener("input", e => {
+        const v = parseFloat(e.target.value);
+        state.y.peMin = state.y.axis === "eh" ? ehToPe(v, state.tempC) : v;
+        commit();
+      });
+      $("yMax").addEventListener("input", e => {
+        const v = parseFloat(e.target.value);
+        state.y.peMax = state.y.axis === "eh" ? ehToPe(v, state.tempC) : v;
+        commit();
+      });
+      $("yLevels").addEventListener("input", e => { state.y.levels = parseInt(e.target.value, 10); renderGridMeta(); commit(); });
+
+      document.querySelectorAll("#yAxisSeg button").forEach(b => {
+        b.addEventListener("click", () => {
+          if (b.dataset.axis === state.y.axis) return;
+          state.y.axis = b.dataset.axis;
+          fillInputs();
+          syncAxisUI();
+          persist();
+          if (runtime.lastResult) drawDiagram(runtime.lastResult);
+        });
+      });
+
+      $("displayMode").addEventListener("change", e => {
+        state.displayMode = e.target.value;
+        syncDisplayControls();
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      $("targetElement").addEventListener("change", e => {
+        state.targetElement = e.target.value;
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+
+      // display-only toggles: re-render last result without recomputing
+      $("labelsOnly").addEventListener("change", e => {
+        state.labelsOnly = e.target.checked; persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      $("showBoundaries").addEventListener("change", e => {
+        state.showBoundaries = e.target.checked; persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+
+      $("addSpeciesBtn").addEventListener("click", () => addSpecies($("speciesPicker").value));
+      $("speciesPicker").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addSpecies(e.target.value); } });
+
+      $("phaseSearch").addEventListener("input", renderPhases);
+      $("selAll").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = true); renderPhases(); persist(); markStale(); });
+      $("selNone").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = false); renderPhases(); persist(); markStale(); });
+
+      $("loadElementsBtn").addEventListener("click", reloadElements);
+      $("computeBtn").addEventListener("click", compute);
+
+      // config tools
+      $("saveServerBtn").addEventListener("click", saveToServer);
+      $("exportBtn").addEventListener("click", exportJson);
+      $("importBtn").addEventListener("click", () => $("importFile").click());
+      $("importFile").addEventListener("change", importJson);
+      $("resetBtn").addEventListener("click", resetState);
+
+      // mobile drawer
+      $("menuBtn").addEventListener("click", () => $("app").classList.toggle("drawer-open"));
+      $("backdrop").addEventListener("click", () => $("app").classList.remove("drawer-open"));
+    }
+
+    function fillInputs() {
+      $("dbSelect").value = state.dbId || "";
+      $("tempC").value = state.tempC;
+      $("phMin").value = state.ph.min;
+      $("phMax").value = state.ph.max;
+      $("phLevels").value = state.ph.levels;
+      $("yMin").value = displayYMin();
+      $("yMax").value = displayYMax();
+      $("yLevels").value = state.y.levels;
+      $("displayMode").value = state.displayMode;
+      syncDisplayControls();
+      $("labelsOnly").checked = state.labelsOnly;
+      $("showBoundaries").checked = state.showBoundaries;
+    }
+
+    function fillSpeciesOptions() {
+      const dl = $("speciesOptions");
+      const sug = runtime.speciesSuggestions || runtime.cfg?.species_suggestions || [];
+      dl.innerHTML = sug.map(s => `<option value="${s}"></option>`).join("");
+    }
+
+    async function reloadSpeciesSuggestions() {
+      if (!state.dbId) return;
+      try {
+        const data = await api(`/api/elements?db_id=${encodeURIComponent(state.dbId)}`);
+        const known = runtime.cfg?.known_totals || [];
+        const merged = [];
+        known.forEach(s => { if (!merged.includes(s)) merged.push(s); });
+        (data.elements || []).forEach(s => { if (!merged.includes(s)) merged.push(s); });
+        runtime.speciesSuggestions = merged;
+        fillSpeciesOptions();
+      } catch (e) {
+        /* keep existing suggestions */
+      }
+    }
+
+    /* ---------------- config tools ---------------- */
+    async function saveToServer() {
+      try {
+        await api("/api/state", { method: "POST", body: JSON.stringify(state) });
+        setStatus("Saved configuration to server.", "ok");
+      } catch (e) { setStatus(e.message, "err"); }
+    }
+    function exportJson() {
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "phase_diagram_config.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+    function importJson(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          applyState(JSON.parse(reader.result));
+          fillDatabaseOptions();
+          afterStateLoad();
+          setStatus("Configuration imported.", "ok");
+        } catch (err) { setStatus("Invalid JSON file.", "err"); }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    }
+    function resetState() {
+      applyState(structuredClone(DEFAULT_STATE));
+      if (runtime.cfg) seedDefaultsFromConfig();
+      fillDatabaseOptions();
+      afterStateLoad();
+      setStatus("Reset to defaults.", "ok");
+    }
+
+    /* ---------------- compute ---------------- */
+    async function compute() {
+      const totals = activeTotals();
+      const sel = selectedPhases();
+      if (!Object.keys(totals).length) { setStatus("Add at least one species with a concentration.", "err"); return; }
+      if (!sel.length) { setStatus("Select at least one phase.", "err"); return; }
+
+      const t = state.tempC;
+
+      const body = {
+        db_id: state.dbId,
+        temp_c: t,
+        ph_min: state.ph.min, ph_max: state.ph.max, ph_levels: state.ph.levels,
+        pe_min: state.y.peMin, pe_max: state.y.peMax, pe_levels: state.y.levels,
+        totals,
+        units: state.units,
+        charge_species: state.chargeSpecies,
+        phases: sel,
+        system_elements: systemElements(),
+        exclude_gases: true,
+      };
+
+      try {
+        $("computeBtn").disabled = true;
+        setStatus("Starting job…");
+        $("app").classList.remove("drawer-open");
+        const { job_id } = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
+        pollJob(job_id);
+      } catch (e) {
+        setStatus(e.message, "err");
+        $("computeBtn").disabled = false;
+      }
+    }
+
+    function pollJob(jobId) {
+      clearInterval(runtime.pollTimer);
+      const bar = $("progressBar");
+      bar.style.display = "block";
+      runtime.pollTimer = setInterval(async () => {
+        try {
+          const st = await api(`/api/job/${jobId}`);
+          bar.value = Math.round((st.progress || 0) * 100);
+          if (st.status === "running") { setStatus(`Computing… ${bar.value}%`); return; }
+          clearInterval(runtime.pollTimer);
+          bar.style.display = "none";
+          $("computeBtn").disabled = false;
+          if (st.status === "error") { setStatus(st.error || "Computation failed", "err"); return; }
+          const result = await api(`/api/job/${jobId}/result`);
+          drawDiagram(result);
+          runtime.hasResult = true;
+          $("stalePill").style.display = "none";
+          setStatus(`Done — ${st.phases_used?.length ?? "?"} phases evaluated.`, "ok");
+        } catch (e) {
+          clearInterval(runtime.pollTimer);
+          bar.style.display = "none";
+          $("computeBtn").disabled = false;
+          setStatus(e.message, "err");
+        }
+      }, 700);
+    }
+
+    /* ---------------- plotting ---------------- */
+    const AQ_GREY = "#eef0f3"; // light white-grey for all aqueous species in solid view
+
+    function buildDiscreteColorscale(names, aqueousSet) {
+      const n = names.length, scale = [];
+      for (let i = 0; i < n; i++) {
+        const c = (aqueousSet && aqueousSet.has(names[i])) ? AQ_GREY : colorForPhase(names[i]);
+        scale.push([i / n, c]); scale.push([(i + 1) / n, c]);
+      }
+      return scale;
+    }
+
+    function cellEdges(values) {
+      if (values.length < 2) return [values[0] - 0.5, values[0] + 0.5];
+      const e = [values[0] - (values[1] - values[0]) / 2];
+      for (let i = 1; i < values.length; i++) e.push((values[i - 1] + values[i]) / 2);
+      e.push(values.at(-1) + (values.at(-1) - values.at(-2)) / 2);
+      return e;
+    }
+
+    // Boundary line segments between differing adjacent cells -> single scatter trace.
+    function boundaryTrace(result) {
+      const { ph: x, y, grid } = result;
+      const xe = cellEdges(x), ye = cellEdges(y);
+      const xs = [], ys = [];
+      const ny = grid.length, nx = grid[0].length;
+      for (let iy = 0; iy < ny; iy++) {
+        for (let ix = 0; ix < nx; ix++) {
+          const idx = grid[iy][ix];
+          if (ix + 1 < nx && grid[iy][ix + 1] !== idx) {
+            xs.push(xe[ix + 1], xe[ix + 1], null);
+            ys.push(ye[iy], ye[iy + 1], null);
+          }
+          if (iy + 1 < ny && grid[iy + 1][ix] !== idx) {
+            xs.push(xe[ix], xe[ix + 1], null);
+            ys.push(ye[iy + 1], ye[iy + 1], null);
+          }
+        }
+      }
+      return {
+        type: "scattergl", mode: "lines", x: xs, y: ys,
+        line: { color: "#222", width: 1 }, hoverinfo: "skip", showlegend: false,
+      };
+    }
+
+    // Connected components (4-connectivity) per phase -> one label per region,
+    // placed at the in-region cell nearest the region centroid (guaranteed inside).
+    function componentAnnotations(result) {
+      const { ph: x, y, grid, phase_names: names } = result;
+      const ny = grid.length, nx = grid[0].length;
+      const total = nx * ny;
+      const minCells = Math.max(4, Math.floor(total * 0.004));
+      const seen = Array.from({ length: ny }, () => new Int8Array(nx));
+      const anns = [];
+
+      for (let sy = 0; sy < ny; sy++) {
+        for (let sx = 0; sx < nx; sx++) {
+          if (seen[sy][sx]) continue;
+          const idx = grid[sy][sx];
+          if (idx < 0) { seen[sy][sx] = 1; continue; }
+          // BFS flood fill
+          const cells = [];
+          const stack = [[sx, sy]];
+          seen[sy][sx] = 1;
+          let cxSum = 0, cySum = 0;
+          while (stack.length) {
+            const [cx, cy] = stack.pop();
+            cells.push([cx, cy]);
+            cxSum += cx; cySum += cy;
+            const nb = [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]];
+            for (const [ax2, ay2] of nb) {
+              if (ax2 < 0 || ay2 < 0 || ax2 >= nx || ay2 >= ny) continue;
+              if (seen[ay2][ax2]) continue;
+              if (grid[ay2][ax2] !== idx) continue;
+              seen[ay2][ax2] = 1;
+              stack.push([ax2, ay2]);
+            }
+          }
+          if (cells.length < minCells) continue;
+          const mcx = cxSum / cells.length, mcy = cySum / cells.length;
+          let best = cells[0], bestD = Infinity;
+          for (const [cx, cy] of cells) {
+            const d = (cx - mcx) ** 2 + (cy - mcy) ** 2;
+            if (d < bestD) { bestD = d; best = [cx, cy]; }
+          }
+          anns.push({
+            x: x[best[0]], y: y[best[1]],
+            text: `<b>${labelForPhase(names[idx])}</b>`,
+            showarrow: false, font: { size: 12, color: "#111" },
+            bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
+          });
+        }
+      }
+      return anns;
+    }
+
+    function drawDiagram(result) {
+      runtime.lastResult = result;
+      $("plotEmpty").style.display = "none";
+      refreshTargetElementOptions(result);
+      renderSolidSubsetBoxes(result);
+      syncDisplayControls();
+
+      const layer = activeLayer(result);
+      const x = result.ph;
+      const y = plotYValues(result);
+      const yLabel = plotYLabel();
+      const grid = layer.grid;
+      const names = layer.names;
+      const aqueousSet = new Set(layer.aqueous || []);
+      const plotResult = { ph: x, y, grid, phase_names: names, y_label: yLabel };
+      const n = names.length;
+      const traces = [];
+
+      if (!state.labelsOnly) {
+        traces.push({
+          type: "heatmap", x, y,
+          z: grid.map(r => r.map(v => (v < 0 ? null : v))),
+          zmin: -0.5, zmax: Math.max(n - 0.5, 0.5),
+          colorscale: buildDiscreteColorscale(names, aqueousSet),
+          showscale: false, xgap: 0, ygap: 0,
+          customdata: grid.map(r => r.map(v => (v < 0 ? "—" : names[v]))),
+          hovertemplate: `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<extra></extra>`,
+        });
+      }
+      if (state.showBoundaries) traces.push(boundaryTrace(plotResult));
+
+      const ax = { showgrid: false, zeroline: false, mirror: true, ticks: "outside", linecolor: "#222" };
+      const layout = {
+        margin: { l: 64, r: 20, t: 16, b: 52 },
+        paper_bgcolor: "#fff", plot_bgcolor: "#fff",
+        showlegend: false,
+        xaxis: Object.assign({ title: { text: "pH" }, range: [x[0], x.at(-1)] }, ax),
+        yaxis: Object.assign({ title: { text: yLabel }, range: [y[0], y.at(-1)] }, ax),
+        annotations: componentAnnotations(plotResult),
+      };
+      if (!traces.length) {
+        traces.push({ type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",
+          marker: { opacity: 0 }, hoverinfo: "skip", showlegend: false });
+      }
+      Plotly.react("plotDiv", traces, layout, {
+        responsive: true, displaylogo: false,
+        toImageButtonOptions: { format: "png", filename: "phase_diagram", scale: 2 },
+      });
+      $("plotMeta").textContent =
+        `${result.n_converged}/${result.n_total} converged · ${layer.label} · T=${result.temp_c} °C`;
+    }
+
+    /* ---------------- init ---------------- */
+    async function reloadElements() {
+      if (!state.dbId) { setStatus("No database selected.", "err"); return; }
+      try {
+        const data = await api(`/api/elements?db_id=${encodeURIComponent(state.dbId)}`);
+        setStatus(`${data.count} elements in ${data.db_name || "database"}.`, "ok");
+      } catch (e) { setStatus(e.message, "err"); }
+    }
+
+    function seedDefaultsFromConfig() {
+      const d = runtime.cfg.defaults;
+      state.dbId = state.dbId || runtime.cfg.default_db_id || "";
+      state.units = state.units || runtime.cfg.default_units || DEFAULT_STATE.units;
+      state.ph = { min: d.ph_min, max: d.ph_max, levels: d.ph_levels };
+      state.y = {
+        axis: "pe",
+        peMin: d.pe_min,
+        peMax: d.pe_max,
+        levels: d.pe_levels,
+      };
+    }
+
+    function afterStateLoad() {
+      fillInputs();
+      fillSpeciesOptions();
+      fillUnitOptions();
+      renderSpecies();
+      syncAxisUI();
+      renderGridMeta();
+      syncDisplayControls();
+      refreshPhases();
+    }
+
+    async function init() {
+      bindControls();
+      try {
+        runtime.cfg = await api("/api/config");
+        const dbList = await api("/api/databases");
+        runtime.databases = dbList.databases || runtime.cfg.databases || [];
+        setHealth(runtime.cfg.db_exists ? "DB ready" : "DB missing", runtime.cfg.db_exists ? "ok" : "err");
+      } catch (e) {
+        setHealth("API offline", "err");
+        setStatus("Cannot reach API: " + e.message, "err");
+        return;
+      }
+
+      const local = loadLocal();
+      if (local) {
+        applyState(local);
+      } else {
+        // try server-saved config, else defaults
+        let serverState = null;
+        try { const r = await api("/api/state"); if (r.found) serverState = r.state; } catch (e) {}
+        if (serverState) applyState(serverState);
+        else { applyState(structuredClone(DEFAULT_STATE)); seedDefaultsFromConfig(); }
+      }
+      if (!state.dbId) state.dbId = runtime.cfg.default_db_id || "";
+      fillDatabaseOptions();
+      await reloadSpeciesSuggestions();
+      afterStateLoad();
+    }
+
+    init();
+  })();
+  </script>
+</body>
+</html>

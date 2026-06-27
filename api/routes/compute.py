@@ -1,0 +1,44 @@
+"""Compute job endpoints."""
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+
+from ... import config
+from ...services.compute import create_job, get_job, get_job_result, run_compute_job
+from ..models import ComputeRequest
+
+router = APIRouter(tags=["compute"])
+
+
+@router.post("/api/compute")
+def start_compute(body: ComputeRequest):
+    if not body.totals:
+        raise HTTPException(400, "At least one total concentration is required.")
+    n_pts = body.ph_levels * body.pe_levels
+    if n_pts > config.MAX_GRID_POINTS:
+        raise HTTPException(400, f"Grid too large ({n_pts} > {config.MAX_GRID_POINTS}).")
+
+    job_id = create_job()
+    run_compute_job(job_id, body)
+    return {"job_id": job_id, "status": "running"}
+
+
+@router.get("/api/job/{job_id}")
+def job_status(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return {k: v for k, v in job.items() if k != "result"}
+
+
+@router.get("/api/job/{job_id}/result")
+def job_result(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if job.get("status") != "done":
+        raise HTTPException(409, f"Job status: {job.get('status')}")
+    result = get_job_result(job_id)
+    if result is None:
+        raise HTTPException(409, f"Job status: {job.get('status')}")
+    return result

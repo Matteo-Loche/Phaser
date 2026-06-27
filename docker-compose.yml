@@ -1,0 +1,28 @@
+services:
+  phaser:
+    build:
+      context: .
+      args:
+        PYTHON_VERSION: "3.13-slim"
+        IPHREEQC_VERSION: "3.8.6-17100"
+    environment:
+      PHASER_HOST: ${PHASER_HOST:-0.0.0.0}
+      PHASER_PORT: ${PHASER_PORT:-8765}
+      PHASER_IPHREEQC_LIB: ${PHASER_IPHREEQC_LIB:-/usr/local/lib/libiphreeqc.so}
+      PHASER_BUILTIN_DB_DIRS: ${PHASER_BUILTIN_DB_DIRS:-/opt/phreeqc/database}
+      PHASER_GENERATED_DB_DIR: ${PHASER_GENERATED_DB_DIR:-/app/PHASER/data/databases/generated}
+      PHASER_DEFAULT_DB_ID: ${PHASER_DEFAULT_DB_ID:-}
+    ports:
+      - "${PHASER_PORT:-8765}:8765"
+    volumes:
+      - ./data/databases/generated:/app/PHASER/data/databases/generated
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on:
+      - phaser
+    restart: unless-stopped
+    profiles:
+      - tunnel

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+env/
+
+# Local runtime state
+saved_state.json
+*.log
+
+# Environment/secrets
+.env
+.env.*
+!.env.example
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Generated PHREEQC databases: keep examples/metadata, not user data files
+data/databases/generated/*.dat
+!data/databases/generated/.gitkeep
+!data/databases/generated/example.meta.json
+
+# Docker/local build cache
+docker-data/
