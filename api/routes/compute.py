@@ -26,7 +26,13 @@ def start_compute(body: ComputeRequest):
 
     job_id = create_job()
     run_compute_job(job_id, body)
-    return {"job_id": job_id, "status": "running"}
+    job = get_job(job_id) or {}
+    return {
+        "job_id": job_id,
+        "status": job.get("status", "queued"),
+        "queue_position": job.get("queue_position"),
+        "queue_size": job.get("queue_size"),
+    }
 
 
 @router.get("/api/job/{job_id}")

@@ -1209,12 +1209,23 @@
           /* Cache failures should not block computation. */
         }
         setStatus("Starting job…");
-        const { job_id } = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
-        pollJob(job_id, cacheKey);
+        const start = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
+        if (start.status === "queued") {
+          setStatus(queueStatusText(start) || "Queued…", "warn");
+        }
+        pollJob(start.job_id, cacheKey);
       } catch (e) {
         setStatus(e.message, "err");
         $("computeBtn").disabled = false;
       }
+    }
+
+    function queueStatusText(st) {
+      const pos = st.queue_position;
+      if (pos == null) return null;
+      const size = st.queue_size ?? pos;
+      if (size <= 1) return "Queued — waiting for a compute slot…";
+      return `Queued — position ${pos} of ${size}`;
     }
 
     function pollJob(jobId, cacheKey) {
@@ -1224,6 +1235,11 @@
       runtime.pollTimer = setInterval(async () => {
         try {
           const st = await api(`/api/job/${jobId}`);
+          if (st.status === "queued") {
+            bar.removeAttribute("value");
+            setStatus(queueStatusText(st) || "Queued…", "warn");
+            return;
+          }
           bar.value = Math.round((st.progress || 0) * 100);
           if (st.status === "running") { setStatus(`Computing… ${bar.value}%`); return; }
           clearInterval(runtime.pollTimer);

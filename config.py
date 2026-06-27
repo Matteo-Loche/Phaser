@@ -95,6 +95,7 @@ GRID_LEVELS = 60  # single resolution for both pH and pe/Eh axes
 MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200
 MAX_WORKERS = 8
+MAX_CONCURRENT_JOBS = int(os.environ.get("PHASER_MAX_CONCURRENT_JOBS", "1"))
 
 # Concentration unit options passed straight to PHREEQC SOLUTION blocks.
 UNIT_OPTIONS = (
