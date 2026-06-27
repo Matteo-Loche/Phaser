@@ -1,13 +1,17 @@
-# PHASER — Phase Diagram Calculator
+<p align="center">
+  <img src="Icon/phaser_logo_v8.png" alt="PHASER — Phase Diagram Calculator" width="420" />
+</p>
+
+<p align="center"><em>pH–pe / pH–Eh predominance diagrams from PHREEQC</em></p>
 
 PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams** from PHREEQC thermodynamic databases. Users define a chemical system (total concentrations), select solid phases, and the server evaluates a grid of PHREEQC solutions in parallel to determine which phase or aqueous species is dominant at each point.
 
 Key behaviours:
 
 - **Server-side PHREEQC** with multiprocessing grid sweeps and a **CPU queue** (one sweep at a time by default).
-- **Browser-side settings** (`localStorage`) and **result cache** (IndexedDB) — no server-side UI state.
-- **Database registry** — users pick databases by `db_id`, not filesystem paths.
-- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, and Eh/pe toggle (Eh conversion is client-side only).
+- **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB.
+- **Database registry** — databases are selected by `db_id` from a server-managed catalog.
+- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, and Eh/pe toggle.
 
 ---
 
@@ -89,8 +93,8 @@ flowchart TB
     end
 
     subgraph solver [phreeqc layer]
-        Engine[engine: single point]
-        Sweep[sweep: parallel grid]
+        Engine["engine - single point"]
+        Sweep["sweep - parallel grid"]
     end
 
     subgraph diagram_layer [diagram layer]
@@ -128,12 +132,12 @@ flowchart TB
 
 ## Database system
 
-Users **never** send raw filesystem paths in normal operation. They select a database by **`db_id`** from a server-managed catalog.
+Users select a database by **`db_id`** from a server-managed catalog. Filesystem paths are resolved on the server only.
 
 ### Sources
 
 1. **builtin** — `.dat` files scanned from the PHREEQC installation directory (`BUILTIN_DB_DIRS` in `config.py`, default: USGS Phreeqc Interactive `database/` folder).
-2. **generated** — `.dat` files in `data/databases/generated/`, intended for output from external tools (e.g. future PyGCC integration).
+2. **generated** — `.dat` files in `data/databases/generated/`, for output from external tools (e.g. PyGCC).
 
 ### Registry flow
 
@@ -187,7 +191,7 @@ For each grid point `(pH, pe)`:
 
 1. **`format_grid_input`** builds a PHREEQC input string:
    - `SOLUTION` with temperature, totals, charge balance species
-   - Fixed `pH` and `pe` (Eh display conversion is handled in the browser UI)
+   - Fixed `pH` and `pe` (Eh is converted in the browser for display)
    - `SELECTED_OUTPUT` requesting saturation indices (`si`) for selected phases
    - `USER_PUNCH` blocks to extract dominant aqueous species per element
 
@@ -218,7 +222,7 @@ Limits (`config.py`):
 
 ### Compute queue (`services/compute.py`)
 
-When several users (or tabs) submit computes at once, extra jobs are **queued** instead of all spawning full worker pools.
+When several users (or tabs) submit computes at once, extra jobs wait in a **FIFO queue** until a compute slot is free.
 
 1. `POST /api/compute` creates a job with status **`queued`**.
 2. A dispatcher starts the job when `running_count < MAX_CONCURRENT_JOBS`.
@@ -266,16 +270,16 @@ The UI (`static/index.html`) renders these layers as colored regions with Plotly
 
 ### Settings persistence
 
-User settings (database, species, axes, phase selection, plot resolution, display options) are stored in the browser only:
+User settings (database, species, axes, phase selection, plot resolution, display options) are stored in the browser:
 
-| Storage | Key | Contents |
-|---------|-----|----------|
-| `localStorage` | `phaseDiagramState.v7` | Full UI state (auto-saved on every edit) |
-| `localStorage` | `phaserLayout.v1` | Sidebar width |
-| `sessionStorage` | `phaserLastResultKey.v1` | Pointer to last cached diagram |
-| IndexedDB | `phaserResultCache.v1` | Packed diagram JSON (large results) |
+| Storage | Contents |
+|---------|----------|
+| `localStorage` | UI settings (auto-saved on every edit) |
+| `localStorage` | Sidebar width |
+| `sessionStorage` | Pointer to the last cached diagram |
+| IndexedDB | Packed diagram JSON (large results) |
 
-There is **no server-side UI state** (`/api/state` was removed). Closing the tab or clearing site data resets settings; cached diagrams persist until TTL or cache eviction.
+Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or cache eviction.
 
 ### Plot resolution
 
@@ -283,16 +287,16 @@ A single **plot resolution** slider in the Configuration panel sets both `ph_lev
 
 ### Result cache
 
-To avoid repeated server compute for identical requests:
+Identical compute requests are served from the browser cache when possible:
 
-1. The browser hashes the compute request body (FNV-style key) and checks **IndexedDB**.
-2. On **cache hit**, the diagram loads instantly — no server job is created.
+1. The browser hashes the compute request and checks **IndexedDB**.
+2. On **cache hit**, the diagram loads from the browser without starting a server job.
 3. On **cache miss**, the job is enqueued; when the result is fetched it is stored in IndexedDB.
-4. The browser calls **`DELETE /api/job/{job_id}`** so the server releases the result from memory.
+4. The browser calls **`DELETE /api/job/{job_id}`** to release the result from server memory.
 
 Cache limits: **12 results max**, **12-hour TTL** per entry.
 
-On page load, if `sessionStorage` still points to a cached result key, the diagram is **restored from IndexedDB** without recomputing (same browser tab session).
+On page load, if the tab session still references a cached result, the diagram is restored from IndexedDB without recomputing.
 
 ### Queue feedback
 
@@ -301,11 +305,11 @@ While a job is queued, the status line shows **"Queued — position N of M"**. O
 ### Display and layout
 
 - **Solid predominance** vs **aqueous species (by element)** display modes.
-- **pe / Eh** axis toggle — Eh is converted for plotting only; the backend always receives `pe`.
+- **pe / Eh** axis toggle — Eh is converted for display; the compute API always uses `pe`.
 - Non-convergent / `none` cells render **white**; aqueous fallback species use light grey in solid view.
 - Resizable left sidebar (desktop); double-click the divider to reset width.
-- Square-ish phase diagram area (`aspect-ratio: 1 / 1`).
-- PHASER logo and favicon from `Icon/` (served at `/icons/` — edit files in `Icon/`, no copy step needed).
+- Square phase diagram area (`aspect-ratio: 1 / 1`).
+- PHASER logo and favicon in `Icon/` (served at `/icons/`).
 
 ---
 
@@ -331,29 +335,28 @@ While a job is queued, the status line shows **"Queued — position N of M"**. O
 ```mermaid
 sequenceDiagram
     participant UI as Browser
-    participant API as api/routes/compute
-    participant Job as services/compute
-    participant Reg as db/registry
-    participant Sw as phreeqc/sweep
-    participant Pack as diagram/packer
+    participant API as Compute API
+    participant Job as Compute service
+    participant Reg as DB registry
+    participant Sw as PHREEQC sweep
+    participant Pack as Diagram packer
 
-    UI->>API: POST /api/compute {db_id, totals, phases, grid}
-    API->>Job: enqueue job (queued if server busy)
-    API-->>UI: {job_id, status, queue_position}
-    Job->>Reg: resolve db_id → path
-    Job->>Sw: run_grid_sweep(params)
-  loop each grid point
-        Sw->>Sw: evaluate_point via IPhreeqc
+    UI->>API: POST /api/compute
+    API->>Job: enqueue job
+    API-->>UI: job_id and queue_position
+    Job->>Reg: resolve db_id to path
+    Job->>Sw: run_grid_sweep
+    loop Each grid point
+        Sw->>Sw: evaluate_point
     end
-    Sw-->>Job: list of GridPointResult
+    Sw-->>Job: grid results
     Job->>Pack: pack_grid_results
     Pack-->>Job: layered grids
-    UI->>API: GET /api/job/{id} (poll)
-    Note over UI,Job: status queued → show position; running → show progress
-    UI->>API: GET /api/job/{id}/result
+    UI->>API: GET job status
+    UI->>API: GET job result
     API-->>UI: diagram JSON
     UI->>UI: store in IndexedDB
-    UI->>API: DELETE /api/job/{id}
+    UI->>API: DELETE job
 ```
 
 ---
@@ -365,7 +368,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Setting | Env override | Default | Notes |
 |---------|--------------|---------|-------|
 | Host / port | `PHASER_HOST`, `PHASER_PORT` | `0.0.0.0:8765` | Used by `run_server.py` and Docker |
-| Grid resolution | — | `GRID_LEVELS = 60` | Single value for both axes; API still accepts `ph_levels` + `pe_levels` |
+| Grid resolution | — | `GRID_LEVELS = 60` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
 | Max workers per sweep | — | `MAX_WORKERS = 8` | Capped by `os.cpu_count()` in `sweep.py` |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Default units | — | `mmol/kgw` | UI and API default |
@@ -375,14 +378,13 @@ See also the database environment variables in the table above.
 
 ---
 
-## Future: PyGCC integration
+## PyGCC integration
 
-PHASER is designed to consume databases produced elsewhere:
+PHASER can consume databases produced by external tools:
 
 1. PyGCC (or another service) generates a `.dat` file.
 2. The file is copied into `data/databases/generated/` or registered via `POST /api/databases/register`.
 3. PHASER exposes it through `/api/databases` like any builtin database.
-4. No changes to the compute pipeline are required.
 
 ---
 
@@ -488,4 +490,4 @@ The main deployment decisions:
 - Built-in PHREEQC databases can live inside the image.
 - User-generated databases should live in a persistent mounted volume.
 - Set `PHASER_MAX_CONCURRENT_JOBS` based on available CPU/RAM (default `1` is safe for shared hosts).
-- A future PyGCC service can copy `.dat` files into that volume or call `/api/databases/register` after generating them.
+- A PyGCC service can copy `.dat` files into that volume or call `/api/databases/register` after generating them.
