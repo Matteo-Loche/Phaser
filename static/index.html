@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="color-scheme" content="dark light" />
-  <title>Phase Diagram Calculator</title>
+  <title>PHASER — Phase Diagram Calculator</title>
+  <link rel="icon" type="image/svg+xml" href="/icons/phaser_favicon.svg?v=2" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
   <style>
     :root {
@@ -63,9 +64,19 @@
       background: var(--panel);
       z-index: 30;
     }
-    header .title { display: flex; flex-direction: column; min-width: 0; }
-    header h1 { margin: 0; font-size: clamp(0.95rem, 0.85rem + 0.4vw, 1.15rem); font-weight: 650; white-space: nowrap; }
-    header .subtitle { color: var(--muted); font-size: 0.72rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    header .brand {
+      display: inline-flex; align-items: center; min-width: 0;
+      text-decoration: none;
+      background: #03040A;
+      padding: 0.28rem 0.6rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    header .brand-logo {
+      height: clamp(26px, 5vw, 40px);
+      width: auto; display: block;
+      object-fit: contain;
+    }
     header .spacer { flex: 1; }
     .icon-btn {
       display: none;
@@ -285,10 +296,9 @@
   <div class="app" id="app">
     <header>
       <button class="icon-btn" id="menuBtn" aria-label="Toggle controls">☰</button>
-      <div class="title">
-        <h1>Phase Diagram Calculator</h1>
-        <span class="subtitle">PHREEQC · Thermoddem · pH / Eh predominance · multiprocessing</span>
-      </div>
+      <a class="brand" href="/" aria-label="PHASER — Phase Diagram Calculator">
+        <img src="/icons/phaser_logo_v8.png" alt="PHASER" class="brand-logo" />
+      </a>
       <div class="spacer"></div>
       <span class="pill" id="healthPill">…</span>
     </header>

@@ -11,9 +11,11 @@ from .routes import router
 
 PACKAGE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PACKAGE_DIR / "static"
+ICON_DIR = PACKAGE_DIR / "Icon"
 
 app = FastAPI(title="Phase Diagram Service", version="1.0.0")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+app.mount("/icons", StaticFiles(directory=str(ICON_DIR)), name="icons")
 app.include_router(router)
 
 
