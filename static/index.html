@@ -351,19 +351,10 @@
             <div><label>pH min</label><input id="phMin" type="number" step="0.1" /></div>
             <div><label>pH max</label><input id="phMax" type="number" step="0.1" /></div>
           </div>
-          <div>
-            <label>pH resolution: <span id="phLevelsVal"></span></label>
-            <input id="phLevels" type="range" min="10" max="200" step="1" />
-          </div>
           <div class="grid2">
             <div><label id="yMinLabel">pe min</label><input id="yMin" type="number" step="0.1" /></div>
             <div><label id="yMaxLabel">pe max</label><input id="yMax" type="number" step="0.1" /></div>
           </div>
-          <div>
-            <label id="yLevelsLabel">pe resolution: <span id="yLevelsVal"></span></label>
-            <input id="yLevels" type="range" min="10" max="200" step="1" />
-          </div>
-          <div class="meta" id="gridMeta"></div>
         </div>
       </details>
 
@@ -382,14 +373,12 @@
       <details class="card">
         <summary>Configuration <span class="chev">›</span></summary>
         <div class="body">
-          <div class="btn-row">
-            <button class="btn secondary" id="saveServerBtn">Save to server</button>
-            <button class="btn secondary" id="exportBtn">Export JSON</button>
-            <button class="btn secondary" id="importBtn">Import JSON</button>
-            <button class="btn secondary" id="resetBtn">Reset</button>
+          <div>
+            <label>Plot resolution: <span id="gridLevelsVal"></span></label>
+            <input id="gridLevels" type="range" min="10" max="200" step="1" />
           </div>
-          <input type="file" id="importFile" accept="application/json" style="display:none" />
-          <div class="meta">Live config auto-saves to this browser. Use Save to server to persist a shared default.</div>
+          <div class="meta" id="gridMeta"></div>
+          <div class="meta">Settings are kept in this browser only until you clear site data.</div>
         </div>
       </details>
 
@@ -447,7 +436,7 @@
       "#e67e22","#34495e","#16a085","#c0392b","#8e44ad","#27ae60",
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
-    const LS_KEY = "phaseDiagramState.v6";
+    const LS_KEY = "phaseDiagramState.v7";
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
     const MOL_SCALE = {
       "mol/kgw": 1, "mmol/kgw": 1e-3, "umol/kgw": 1e-6,
@@ -460,8 +449,9 @@
       units: "mmol/kgw",
       tempC: 25,
       chargeSpecies: "Na",
-      ph: { min: 2, max: 12, levels: 60 },
-      y: { axis: "pe", peMin: -10, peMax: 14, levels: 60 },
+      ph: { min: 2, max: 12 },
+      y: { axis: "pe", peMin: -10, peMax: 14 },
+      gridLevels: 60,
       displayMode: "solid",
       solidSubsetElements: [],
       targetElement: "Fe",
@@ -646,6 +636,9 @@
       state.y = Object.assign({}, DEFAULT_STATE.y, state.y);
       state.phaseSel = state.phaseSel || {};
       state.totals = Array.isArray(state.totals) ? state.totals : structuredClone(DEFAULT_STATE.totals);
+      if (state.gridLevels == null) {
+        state.gridLevels = state.ph?.levels ?? state.y?.levels ?? DEFAULT_STATE.gridLevels;
+      }
       // Migrate legacy y-axis bounds (always stored as pe internally now).
       if (state.y) {
         if (state.y.peMin == null && state.y.min != null) {
@@ -661,9 +654,10 @@
         }
         state.y.peMin ??= DEFAULT_STATE.y.peMin;
         state.y.peMax ??= DEFAULT_STATE.y.peMax;
-        state.y.levels ??= DEFAULT_STATE.y.levels;
         state.y.axis ??= "pe";
+        delete state.y.levels;
       }
+      if (state.ph) delete state.ph.levels;
       if (!state.units) state.units = runtime.cfg?.default_units || DEFAULT_STATE.units;
       if (!state.dbId && state.dbPath) {
         const legacy = runtime.databases.find(d => d.filename && state.dbPath.endsWith(d.filename));
@@ -849,16 +843,15 @@
       const isEh = state.y.axis === "eh";
       $("yMinLabel").textContent = isEh ? "Eh min (V)" : "pe min";
       $("yMaxLabel").textContent = isEh ? "Eh max (V)" : "pe max";
-      $("yLevelsLabel").innerHTML = (isEh ? "Eh" : "pe") + ` resolution: <span id="yLevelsVal">${state.y.levels}</span>`;
       document.querySelectorAll("#yAxisSeg button").forEach(b =>
         b.classList.toggle("active", b.dataset.axis === state.y.axis));
     }
     function renderGridMeta() {
-      $("phLevelsVal").textContent = state.ph.levels;
-      $("yLevelsVal") && ($("yLevelsVal").textContent = state.y.levels);
-      const n = state.ph.levels * state.y.levels;
-      $("gridMeta").innerHTML = `${state.ph.levels} × ${state.y.levels} = <b>${n}</b> PHREEQC runs`
-        + (n > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
+      const n = state.gridLevels;
+      $("gridLevelsVal").textContent = n;
+      const total = n * n;
+      $("gridMeta").innerHTML = `${n} × ${n} = <b>${total}</b> PHREEQC runs`
+        + (total > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
     }
 
     /* ---------------- inputs binding ---------------- */
@@ -969,7 +962,6 @@
 
       $("phMin").addEventListener("input", e => { state.ph.min = parseFloat(e.target.value); commit(); });
       $("phMax").addEventListener("input", e => { state.ph.max = parseFloat(e.target.value); commit(); });
-      $("phLevels").addEventListener("input", e => { state.ph.levels = parseInt(e.target.value, 10); renderGridMeta(); commit(); });
       $("yMin").addEventListener("input", e => {
         const v = parseFloat(e.target.value);
         state.y.peMin = state.y.axis === "eh" ? ehToPe(v, state.tempC) : v;
@@ -980,7 +972,11 @@
         state.y.peMax = state.y.axis === "eh" ? ehToPe(v, state.tempC) : v;
         commit();
       });
-      $("yLevels").addEventListener("input", e => { state.y.levels = parseInt(e.target.value, 10); renderGridMeta(); commit(); });
+      $("gridLevels").addEventListener("input", e => {
+        state.gridLevels = parseInt(e.target.value, 10);
+        renderGridMeta();
+        commit();
+      });
 
       document.querySelectorAll("#yAxisSeg button").forEach(b => {
         b.addEventListener("click", () => {
@@ -1025,13 +1021,6 @@
       $("loadElementsBtn").addEventListener("click", reloadElements);
       $("computeBtn").addEventListener("click", compute);
 
-      // config tools
-      $("saveServerBtn").addEventListener("click", saveToServer);
-      $("exportBtn").addEventListener("click", exportJson);
-      $("importBtn").addEventListener("click", () => $("importFile").click());
-      $("importFile").addEventListener("change", importJson);
-      $("resetBtn").addEventListener("click", resetState);
-
       // mobile drawer
       $("menuBtn").addEventListener("click", () => $("app").classList.toggle("drawer-open"));
       $("backdrop").addEventListener("click", () => $("app").classList.remove("drawer-open"));
@@ -1042,10 +1031,9 @@
       $("tempC").value = state.tempC;
       $("phMin").value = state.ph.min;
       $("phMax").value = state.ph.max;
-      $("phLevels").value = state.ph.levels;
+      $("gridLevels").value = state.gridLevels;
       $("yMin").value = displayYMin();
       $("yMax").value = displayYMax();
-      $("yLevels").value = state.y.levels;
       $("displayMode").value = state.displayMode;
       syncDisplayControls();
       $("labelsOnly").checked = state.labelsOnly;
@@ -1073,44 +1061,6 @@
       }
     }
 
-    /* ---------------- config tools ---------------- */
-    async function saveToServer() {
-      try {
-        await api("/api/state", { method: "POST", body: JSON.stringify(state) });
-        setStatus("Saved configuration to server.", "ok");
-      } catch (e) { setStatus(e.message, "err"); }
-    }
-    function exportJson() {
-      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "phase_diagram_config.json";
-      a.click();
-      URL.revokeObjectURL(a.href);
-    }
-    function importJson(e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          applyState(JSON.parse(reader.result));
-          fillDatabaseOptions();
-          afterStateLoad();
-          setStatus("Configuration imported.", "ok");
-        } catch (err) { setStatus("Invalid JSON file.", "err"); }
-      };
-      reader.readAsText(file);
-      e.target.value = "";
-    }
-    function resetState() {
-      applyState(structuredClone(DEFAULT_STATE));
-      if (runtime.cfg) seedDefaultsFromConfig();
-      fillDatabaseOptions();
-      afterStateLoad();
-      setStatus("Reset to defaults.", "ok");
-    }
-
     /* ---------------- compute ---------------- */
     async function compute() {
       const totals = activeTotals();
@@ -1123,8 +1073,8 @@
       const body = {
         db_id: state.dbId,
         temp_c: t,
-        ph_min: state.ph.min, ph_max: state.ph.max, ph_levels: state.ph.levels,
-        pe_min: state.y.peMin, pe_max: state.y.peMax, pe_levels: state.y.levels,
+        ph_min: state.ph.min, ph_max: state.ph.max, ph_levels: state.gridLevels,
+        pe_min: state.y.peMin, pe_max: state.y.peMax, pe_levels: state.gridLevels,
         totals,
         units: state.units,
         charge_species: state.chargeSpecies,
@@ -1340,13 +1290,13 @@
       const d = runtime.cfg.defaults;
       state.dbId = state.dbId || runtime.cfg.default_db_id || "";
       state.units = state.units || runtime.cfg.default_units || DEFAULT_STATE.units;
-      state.ph = { min: d.ph_min, max: d.ph_max, levels: d.ph_levels };
+      state.ph = { min: d.ph_min, max: d.ph_max };
       state.y = {
         axis: "pe",
         peMin: d.pe_min,
         peMax: d.pe_max,
-        levels: d.pe_levels,
       };
+      state.gridLevels = d.ph_levels;
     }
 
     function afterStateLoad() {
@@ -1378,11 +1328,8 @@
       if (local) {
         applyState(local);
       } else {
-        // try server-saved config, else defaults
-        let serverState = null;
-        try { const r = await api("/api/state"); if (r.found) serverState = r.state; } catch (e) {}
-        if (serverState) applyState(serverState);
-        else { applyState(structuredClone(DEFAULT_STATE)); seedDefaultsFromConfig(); }
+        applyState(structuredClone(DEFAULT_STATE));
+        seedDefaultsFromConfig();
       }
       if (!state.dbId) state.dbId = runtime.cfg.default_db_id || "";
       fillDatabaseOptions();
