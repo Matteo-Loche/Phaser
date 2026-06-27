@@ -33,7 +33,7 @@ PHASER/
 ├── run_server.py          # CLI entry point (uvicorn)
 ├── config.py              # Paths, limits, defaults (env-overridable)
 ├── api/                   # HTTP layer (FastAPI)
-│   ├── app.py             # Application factory, static files
+│   ├── app.py             # Application factory, static files, /icons mount
 │   ├── models.py          # Pydantic request bodies
 │   ├── dependencies.py    # DB / DLL resolution for routes
 │   └── routes/            # One module per API concern
@@ -48,8 +48,8 @@ PHASER/
 │   └── packer.py          # Pack raw results into layered grids for the UI
 ├── services/              # Orchestration logic
 │   ├── compute.py         # Background compute jobs
-│   ├── state.py           # Persisted UI configuration
 │   └── species.py         # Species picker suggestions
+├── Icon/                  # Logo and favicon (served at /icons/)
 ├── static/
 │   └── index.html         # Single-page web UI
 └── data/
@@ -74,7 +74,6 @@ flowchart TB
 
     subgraph services [services layer]
         Compute[compute jobs]
-        State[saved UI state]
     end
 
     subgraph db_layer [db layer]
@@ -112,11 +111,11 @@ flowchart TB
 | Layer | Role |
 |-------|------|
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
-| **services** | Long-running jobs, persisted state, cross-cutting helpers. No PHREEQC math here. |
+| **services** | Long-running compute jobs and cross-cutting helpers. No PHREEQC math here. |
 | **db** | Discover and register `.dat` files; parse phase catalogs for the UI. |
 | **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps. |
 | **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers. |
-| **static** | Client UI: species editor, phase picker, plot canvas, job polling. |
+| **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
 
 ---
 
@@ -178,7 +177,7 @@ For each grid point `(pH, pe)`:
 
 1. **`format_grid_input`** builds a PHREEQC input string:
    - `SOLUTION` with temperature, totals, charge balance species
-   - Fixed `pH` and `pe` (Eh diagrams convert pe in the API layer)
+   - Fixed `pH` and `pe` (Eh display conversion is handled in the browser UI)
    - `SELECTED_OUTPUT` requesting saturation indices (`si`) for selected phases
    - `USER_PUNCH` blocks to extract dominant aqueous species per element
 
@@ -222,7 +221,43 @@ After the sweep, each grid point has SI values and aqueous dominance data. The p
    - `solid_subsets` — predominance among solids + aqueous fallback per subset
    - `elements` — per-element aqueous species maps
 
-The UI (`static/index.html`) renders these layers as colored regions on a canvas.
+The UI (`static/index.html`) renders these layers as colored regions with Plotly. Display options (solid vs aqueous-by-element, Eh vs pe, boundaries, labels) are handled client-side.
+
+---
+
+## Web UI (`static/index.html`)
+
+### Settings persistence
+
+User settings (database, species, axes, phase selection, plot resolution) are stored in the browser only:
+
+- **`localStorage`** (`phaseDiagramState.v7`) — auto-saved on every edit
+- **`localStorage`** (`phaserLayout.v1`) — sidebar width preference
+
+There is no server-side UI state. Closing the tab or clearing site data resets settings.
+
+### Plot resolution
+
+A single **plot resolution** slider sets both `ph_levels` and `pe_levels` sent to the compute API (e.g. 60 → 60×60 = 3,600 PHREEQC runs). The server default is `GRID_LEVELS` in `config.py`, exposed to the UI as `defaults.grid_levels` from `/api/config`.
+
+### Result cache
+
+To avoid repeated server compute for identical requests:
+
+1. The browser hashes the compute request body and checks **IndexedDB** (`phaserResultCache.v1`).
+2. On cache hit, the diagram loads instantly from the browser.
+3. On cache miss, the server runs the job; when the result is fetched, it is stored in IndexedDB.
+4. The browser then calls **`DELETE /api/job/{job_id}`** so the server releases the result from memory.
+
+Cache limits: 12 results max, 12-hour TTL per entry.
+
+On page load, if the tab still has a `sessionStorage` pointer to the last cached result, the diagram is restored from IndexedDB without recomputing.
+
+### Layout
+
+- Resizable left sidebar (desktop); double-click the divider to reset width
+- Square-ish phase diagram area (`aspect-ratio: 1 / 1`)
+- PHASER logo and favicon from `Icon/` (served at `/icons/`)
 
 ---
 
@@ -241,7 +276,7 @@ The UI (`static/index.html`) renders these layers as colored regions on a canvas
 | `POST` | `/api/compute` | Start background grid job → `{job_id}` |
 | `GET` | `/api/job/{job_id}` | Job status + progress |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
-| `GET/POST` | `/api/state` | Load/save UI configuration |
+| `DELETE` | `/api/job/{job_id}` | Release job/result from server memory (called by UI after fetch) |
 
 ### Compute flow
 
@@ -268,13 +303,15 @@ sequenceDiagram
     UI->>API: GET /api/job/{id} (poll)
     UI->>API: GET /api/job/{id}/result
     API-->>UI: diagram JSON
+    UI->>UI: store in IndexedDB
+    UI->>API: DELETE /api/job/{id}
 ```
 
 ---
 
 ## Configuration (`config.py`)
 
-Central defaults for grid bounds, worker count, IPhreeqc library path, and database directories. Override via environment variables for deployment (WSL vs Windows, custom DB locations).
+Central defaults for grid bounds, worker count, IPhreeqc library path, and database directories. Grid resolution uses a single `GRID_LEVELS` value (applied to both pH and pe/Eh axes). Override via environment variables for deployment (WSL vs Windows, custom DB locations).
 
 ---
 
@@ -292,43 +329,11 @@ PHASER is designed to consume databases produced elsewhere:
 ## Development notes
 
 - **Package name** = folder name (`PHASER`). `run_server.py` adds the parent directory to `sys.path` so `import PHASER` works when run from inside the folder.
-- **WSL + Windows**: run the server in WSL; access from Windows at `localhost:8765`. Edit files on the Windows side; paths in `config.py` use `/mnt/c/...` when running under Linux.
+- **WSL + Windows**: run the server in WSL; access from Windows at `localhost:8765` (or the WSL IP if localhost forwarding is unavailable). Edit files on the Windows side; paths in `config.py` use `/mnt/c/...` when running under Linux.
 - **Tests**: import smoke test:
   ```bash
   python scripts/smoke_check.py
   ```
-
----
-
-## Git And GitHub
-
-This project is ready to track in git. The `.gitignore` keeps local virtual environments, runtime state, generated `.dat` files, and secrets out of version control.
-
-Recommended first commit:
-
-```bash
-git init
-git add .
-git status
-git commit -m "Initial PHASER service"
-```
-
-Create an empty GitHub repository, then push:
-
-```bash
-git remote add origin https://github.com/<your-user>/<your-repo>.git
-git branch -M main
-git push -u origin main
-```
-
-Do not commit:
-
-- `.env` or other secret files
-- `.venv-linux/` or `venv/`
-- `saved_state.json`
-- user-generated `.dat` files in `data/databases/generated/`
-
-Use `.env.example` as the template for local configuration.
 
 ---
 
@@ -411,10 +416,9 @@ Never commit the real tunnel token.
 
 The Docker image is the deployment unit. A typical deployment path is:
 
-1. Push code to GitHub.
-2. Build the Docker image on a VPS or container platform.
-3. Mount persistent storage for `data/databases/generated`.
-4. Expose the app through Cloudflare Tunnel or a reverse proxy.
+1. Build the Docker image on a VPS or container platform.
+2. Mount persistent storage for `data/databases/generated`.
+3. Expose the app through Cloudflare Tunnel or a reverse proxy.
 
 The main deployment decision is database storage:
 

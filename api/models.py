@@ -29,10 +29,10 @@ class ComputeRequest(BaseModel):
     temp_c: float = config.TEMP_C
     ph_min: float = config.PH_MIN
     ph_max: float = config.PH_MAX
-    ph_levels: int = config.PH_LEVELS
+    ph_levels: int = config.GRID_LEVELS
     pe_min: float = config.PE_MIN
     pe_max: float = config.PE_MAX
-    pe_levels: int = config.PE_LEVELS
+    pe_levels: int = config.GRID_LEVELS
     totals: dict[str, float]
     charge_species: str = "Na"
     units: str = config.DEFAULT_UNITS

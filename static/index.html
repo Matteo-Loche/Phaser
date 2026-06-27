@@ -484,7 +484,6 @@
       pollTimer: null,
       phaseSeq: 0,
       phaseDebounce: null,
-      persistDebounce: null,
       hasResult: false,
     };
 
@@ -1406,6 +1405,21 @@
         `${result.n_converged}/${result.n_total} converged · ${layer.label} · T=${result.temp_c} °C`;
     }
 
+    async function restoreSessionResult() {
+      try {
+        const key = sessionStorage.getItem(RESULT_SESSION_KEY);
+        if (!key) return;
+        const result = await getCachedResult(key);
+        if (!result) return;
+        drawDiagram(result);
+        runtime.hasResult = true;
+        $("stalePill").style.display = "none";
+        setStatus("Restored last diagram from this browser session.", "ok");
+      } catch (e) {
+        /* IndexedDB unavailable or cache miss — ignore */
+      }
+    }
+
     /* ---------------- init ---------------- */
     async function reloadElements() {
       if (!state.dbId) { setStatus("No database selected.", "err"); return; }
@@ -1425,7 +1439,7 @@
         peMin: d.pe_min,
         peMax: d.pe_max,
       };
-      state.gridLevels = d.ph_levels;
+      state.gridLevels = d.grid_levels ?? DEFAULT_STATE.gridLevels;
     }
 
     function afterStateLoad() {
@@ -1464,6 +1478,7 @@
       fillDatabaseOptions();
       await reloadSpeciesSuggestions();
       afterStateLoad();
+      await restoreSessionResult();
     }
 
     init();

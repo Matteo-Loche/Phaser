@@ -14,8 +14,7 @@ htmlcov/
 venv/
 env/
 
-# Local runtime state
-saved_state.json
+# Local runtime
 *.log
 
 # Environment/secrets

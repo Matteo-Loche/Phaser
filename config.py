@@ -88,11 +88,9 @@ DEFAULT_SPECIES_CONC = 1.0
 # Default grid if client omits values.
 PH_MIN = 2.0
 PH_MAX = 12.0
-PH_LEVELS = 60
-
 PE_MIN = -10.0
 PE_MAX = 14.0
-PE_LEVELS = 60
+GRID_LEVELS = 60  # single resolution for both pH and pe/Eh axes
 
 MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200
