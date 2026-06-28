@@ -30,6 +30,53 @@ def build_grid(params: GridJobParams) -> tuple[np.ndarray, np.ndarray]:
     return ph, pe
 
 
+def _point_key(ph: float, pe: float) -> tuple[float, float]:
+    return round(float(ph), 12), round(float(pe), 12)
+
+
+def run_point_sweep(
+    params: GridJobParams,
+    points: list[tuple[float, float]],
+    *,
+    max_workers: int | None = None,
+    progress_cb=None,
+    progress_offset: int = 0,
+    progress_total: int | None = None,
+) -> list[GridPointResult]:
+    """Evaluate an explicit list of (pH, pe) points."""
+    unique: dict[tuple[float, float], tuple[float, float]] = {}
+    for ph, pe in points:
+        unique[_point_key(ph, pe)] = (float(ph), float(pe))
+    tasks_list = list(unique.values())
+    total = progress_total if progress_total is not None else len(tasks_list)
+    if not tasks_list:
+        return []
+
+    if len(params.phases) > config.MAX_PHASES_PER_JOB:
+        raise ValueError(
+            f"{len(params.phases)} phases selected; limit is {config.MAX_PHASES_PER_JOB}."
+        )
+
+    workers = max_workers or min(config.MAX_WORKERS, os.cpu_count() or 4)
+    params_dict = asdict(params)
+    tasks = [(ph, pe, params_dict) for ph, pe in tasks_list]
+
+    results: list[GridPointResult] = []
+    done = progress_offset
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        initializer=_worker_init,
+        initargs=(params.dll_path, params.db_path),
+    ) as pool:
+        for row in pool.map(_worker_eval, tasks):
+            results.append(GridPointResult(**row))
+            done += 1
+            if progress_cb:
+                progress_cb(done, total)
+
+    return results
+
+
 def run_grid_sweep(
     params: GridJobParams,
     *,
@@ -43,26 +90,5 @@ def run_grid_sweep(
             f"Grid has {total} points; limit is {config.MAX_GRID_POINTS}. "
             "Reduce ph_levels or pe_levels."
         )
-    if len(params.phases) > config.MAX_PHASES_PER_JOB:
-        raise ValueError(
-            f"{len(params.phases)} phases selected; limit is {config.MAX_PHASES_PER_JOB}."
-        )
-
-    workers = max_workers or min(config.MAX_WORKERS, os.cpu_count() or 4)
-    params_dict = asdict(params)
-    tasks = [(float(p), float(e), params_dict) for p, e in product(ph_axis, pe_axis)]
-
-    results: list[GridPointResult] = []
-    done = 0
-    with ProcessPoolExecutor(
-        max_workers=workers,
-        initializer=_worker_init,
-        initargs=(params.dll_path, params.db_path),
-    ) as pool:
-        for row in pool.map(_worker_eval, tasks):
-            results.append(GridPointResult(**row))
-            done += 1
-            if progress_cb:
-                progress_cb(done, total)
-
-    return results
+    points = [(float(p), float(e)) for p, e in product(ph_axis, pe_axis)]
+    return run_point_sweep(params, points, max_workers=max_workers, progress_cb=progress_cb)

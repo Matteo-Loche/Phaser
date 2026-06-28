@@ -46,6 +46,9 @@ def get_config():
         "max_phases": config.MAX_PHASES_PER_JOB,
         "max_grid_points": config.MAX_GRID_POINTS,
         "max_concurrent_jobs": config.MAX_CONCURRENT_JOBS,
+        "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
+        "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,
+        "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
         "db_exists": bool(default_db and default_db.exists),
         "dll_exists": Path(config.IPHREEQC_DLL).is_file(),
     }

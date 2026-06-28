@@ -90,12 +90,23 @@ PH_MIN = 2.0
 PH_MAX = 12.0
 PE_MIN = -10.0
 PE_MAX = 14.0
-GRID_LEVELS = 60  # single resolution for both pH and pe/Eh axes
+GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
 
 MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200
 MAX_WORKERS = 8
 MAX_CONCURRENT_JOBS = int(os.environ.get("PHASER_MAX_CONCURRENT_JOBS", "1"))
+
+# When enabled, compute evaluates the full selected grid first, then subdivides
+# only the cells that straddle a phase boundary and evaluates those sub-cells.
+# The diagram is rendered at the finer (subdivided) resolution.
+ADAPTIVE_BOUNDARIES_DEFAULT = False
+# How many times each boundary cell edge is subdivided during refinement.
+ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"))
+# Max total PHREEQC evaluations allowed in adaptive mode (base grid + boundary
+# sub-cells). Decoupled from MAX_GRID_POINTS so the requested refine factor is
+# honored; the factor is only downgraded if a diagram would exceed this.
+MAX_ADAPTIVE_POINTS = int(os.environ.get("PHASER_MAX_ADAPTIVE_POINTS", "120000"))
 
 # Concentration unit options passed straight to PHREEQC SOLUTION blocks.
 UNIT_OPTIONS = (

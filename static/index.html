@@ -387,6 +387,10 @@
             <label>Plot resolution: <span id="gridLevelsVal"></span></label>
             <input id="gridLevels" type="range" min="10" max="200" step="1" />
           </div>
+          <label class="toggle" style="margin-top:0.55rem;font-size:0.82rem">
+            <input type="checkbox" id="adaptiveBoundaries" />
+            Adaptive boundaries <span class="meta">(subdivide cells on phase edges)</span>
+          </label>
           <div class="meta" id="gridMeta"></div>
           <div class="meta">Settings are kept in this browser only until you clear site data.</div>
         </div>
@@ -447,7 +451,7 @@
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
     const LS_KEY = "phaseDiagramState.v7";
-    const RESULT_DB = "phaserResultCache.v1";
+    const RESULT_DB = "phaserResultCache.v2";
     const RESULT_STORE = "results";
     const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
@@ -466,20 +470,21 @@
       chargeSpecies: "Na",
       ph: { min: 2, max: 12 },
       y: { axis: "pe", peMin: -10, peMax: 14 },
-      gridLevels: 60,
+      gridLevels: 100,
+      adaptiveBoundaries: false,
       displayMode: "solid",
       solidSubsetElements: [],
       targetElement: "Fe",
       labelsOnly: false,
       showBoundaries: true,
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
+      colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
     };
 
     const runtime = {
       cfg: null,
       databases: [],
       catalog: [],          // discovered phases [{name, elements}]
-      colorByName: {},      // stable color assignment
       lastResult: null,
       pollTimer: null,
       phaseSeq: 0,
@@ -533,13 +538,21 @@
       state.totals.forEach(t => { if (t.value > 0) out[t.species] = t.value; });
       return out;
     }
+    function stablePaletteColor(name) {
+      let h = 2166136261;
+      for (let i = 0; i < name.length; i++) {
+        h ^= name.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return FALLBACK_PALETTE[(h >>> 0) % FALLBACK_PALETTE.length];
+    }
     function colorForPhase(name) {
       if (PHASE_COLORS[name]) return PHASE_COLORS[name];
-      if (!(name in runtime.colorByName)) {
-        const idx = Object.keys(runtime.colorByName).length;
-        runtime.colorByName[name] = FALLBACK_PALETTE[idx % FALLBACK_PALETTE.length];
+      if (!(name in state.colorByName)) {
+        state.colorByName[name] = stablePaletteColor(name);
+        persist();
       }
-      return runtime.colorByName[name];
+      return state.colorByName[name];
     }
     function labelForPhase(name) {
       if (name === "none") return "—";
@@ -628,6 +641,37 @@
       if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
       return data;
     }
+    async function apiJsonWithProgress(path, onProgress) {
+      const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || data.error || res.statusText);
+      }
+      const total = Number(res.headers.get("Content-Length")) || 0;
+      if (!res.body || !total) {
+        onProgress?.(null);
+        return await res.json();
+      }
+
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        onProgress?.(Math.min(100, Math.round((received / total) * 100)));
+      }
+
+      const bytes = new Uint8Array(received);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.length;
+      }
+      return JSON.parse(new TextDecoder().decode(bytes));
+    }
     function debounce(fnRef, key, ms) {
       clearTimeout(runtime[key]);
       runtime[key] = setTimeout(fnRef, ms);
@@ -649,6 +693,9 @@
       state.ph = Object.assign({}, DEFAULT_STATE.ph, state.ph);
       state.y = Object.assign({}, DEFAULT_STATE.y, state.y);
       state.phaseSel = state.phaseSel || {};
+      state.colorByName = state.colorByName && typeof state.colorByName === "object"
+        ? state.colorByName
+        : {};
       state.totals = Array.isArray(state.totals) ? state.totals : structuredClone(DEFAULT_STATE.totals);
       if (state.gridLevels == null) {
         state.gridLevels = state.ph?.levels ?? state.y?.levels ?? DEFAULT_STATE.gridLevels;
@@ -860,12 +907,35 @@
       document.querySelectorAll("#yAxisSeg button").forEach(b =>
         b.classList.toggle("active", b.dataset.axis === state.y.axis));
     }
+    function adaptiveFactor() {
+      return (runtime.cfg && runtime.cfg.adaptive_refine_factor) || 5;
+    }
+    function estimateAdaptiveRuns(n) {
+      const factor = adaptiveFactor();
+      const cap = (runtime.cfg && runtime.cfg.max_adaptive_points) || 120000;
+      const base = n * n;
+      const baseCells = Math.max(0, (n - 1) * (n - 1));
+      const boundaryCells = Math.round(baseCells * 0.12); // typical ~12% on a boundary
+      const newPerCell = (factor + 1) * (factor + 1) - 4;
+      return Math.min(cap, base + boundaryCells * Math.max(0, newPerCell));
+    }
     function renderGridMeta() {
       const n = state.gridLevels;
       $("gridLevelsVal").textContent = n;
       const total = n * n;
-      $("gridMeta").innerHTML = `${n} × ${n} = <b>${total}</b> PHREEQC runs`
-        + (total > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
+      if (state.adaptiveBoundaries) {
+        const factor = adaptiveFactor();
+        const fine = (n - 1) * factor + 1;
+        const est = estimateAdaptiveRuns(n);
+        $("gridMeta").innerHTML =
+          `Base ${n} × ${n}, boundaries refined ${factor}× → up to ${fine} × ${fine} output`
+          + ` · ~<b>${est.toLocaleString()}</b> PHREEQC runs`
+          + ` <span style="color:var(--muted)">(vs ${(fine * fine).toLocaleString()} for a uniform fine grid)</span>`
+          + (est > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
+      } else {
+        $("gridMeta").innerHTML = `${n} × ${n} = <b>${total.toLocaleString()}</b> PHREEQC runs`
+          + (total > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
+      }
     }
 
     /* ---------------- inputs binding ---------------- */
@@ -991,6 +1061,11 @@
         renderGridMeta();
         commit();
       });
+      $("adaptiveBoundaries").addEventListener("change", e => {
+        state.adaptiveBoundaries = e.target.checked;
+        renderGridMeta();
+        commit();
+      });
 
       document.querySelectorAll("#yAxisSeg button").forEach(b => {
         b.addEventListener("click", () => {
@@ -1046,6 +1121,7 @@
       $("phMin").value = state.ph.min;
       $("phMax").value = state.ph.max;
       $("gridLevels").value = state.gridLevels;
+      $("adaptiveBoundaries").checked = !!state.adaptiveBoundaries;
       $("yMin").value = displayYMin();
       $("yMax").value = displayYMax();
       $("displayMode").value = state.displayMode;
@@ -1189,7 +1265,13 @@
         phases: sel,
         system_elements: systemElements(),
         exclude_gases: true,
+        adaptive_boundaries: !!state.adaptiveBoundaries,
       };
+      if (state.adaptiveBoundaries) {
+        // Include the factor so the cache key reflects it (changing the factor
+        // recomputes instead of serving a stale diagram).
+        body.adaptive_refine_factor = adaptiveFactor();
+      }
 
       try {
         $("computeBtn").disabled = true;
@@ -1240,23 +1322,59 @@
             setStatus(queueStatusText(st) || "Queued…", "warn");
             return;
           }
-          bar.value = Math.round((st.progress || 0) * 100);
-          if (st.status === "running") { setStatus(`Computing… ${bar.value}%`); return; }
+          if (st.status === "running") {
+            if (st.phase === "packing") {
+              bar.removeAttribute("value");
+              setStatus("Packing diagram…");
+              return;
+            }
+            bar.value = Math.round((st.progress || 0) * 100);
+            const phaseLabel = {
+              grid: "Computing grid",
+              boundaries: "Refining boundaries",
+            }[st.phase] || "Computing";
+            setStatus(`${phaseLabel}… ${bar.value}%`);
+            return;
+          }
           clearInterval(runtime.pollTimer);
-          bar.style.display = "none";
-          $("computeBtn").disabled = false;
           if (st.status === "error") {
+            bar.style.display = "none";
+            $("computeBtn").disabled = false;
             forgetServerJob(jobId);
             setStatus(st.error || "Computation failed", "err");
             return;
           }
-          const result = await api(`/api/job/${jobId}/result`);
+          bar.removeAttribute("value");
+          bar.style.display = "block";
+          setStatus("Downloading diagram result…");
+          const result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
+            if (pct == null) {
+              bar.removeAttribute("value");
+              setStatus("Downloading diagram result…");
+            } else {
+              bar.value = pct;
+              setStatus(`Downloading diagram result… ${pct}%`);
+            }
+          });
+          bar.removeAttribute("value");
+          setStatus("Caching diagram in this browser…");
           try { await putCachedResult(cacheKey, result); } catch (cacheErr) {}
           forgetServerJob(jobId);
+          setStatus("Rendering diagram…");
           drawDiagram(result);
           runtime.hasResult = true;
           $("stalePill").style.display = "none";
-          setStatus(`Done — ${st.phases_used?.length ?? "?"} phases evaluated and cached in this browser.`, "ok");
+          bar.style.display = "none";
+          $("computeBtn").disabled = false;
+          setStatus(
+            result.compute_mode === "adaptive" && result.adaptive_stats
+              ? `Done — ${result.adaptive_stats.n_evaluated.toLocaleString()} PHREEQC runs`
+                + `, boundaries refined ${result.adaptive_stats.refine_factor}×`
+                + ` (${result.adaptive_stats.fine_levels_ph}×${result.adaptive_stats.fine_levels_pe} output)`
+                + ` · cached in this browser.`
+              : `Done — ${st.phases_used?.length ?? "?"} phases evaluated and cached in this browser.`,
+            "ok"
+          );
         } catch (e) {
           clearInterval(runtime.pollTimer);
           bar.style.display = "none";
@@ -1417,8 +1535,11 @@
         responsive: true, displaylogo: false,
         toImageButtonOptions: { format: "png", filename: "phase_diagram", scale: 2 },
       });
+      const mode = result.compute_mode === "adaptive" && result.adaptive_stats
+        ? ` · adaptive ${result.adaptive_stats.n_evaluated.toLocaleString()} runs (${result.adaptive_stats.refine_factor}× boundaries)`
+        : "";
       $("plotMeta").textContent =
-        `${result.n_converged}/${result.n_total} converged · ${layer.label} · T=${result.temp_c} °C`;
+        `${result.n_converged}/${result.n_total} converged · ${layer.label} · T=${result.temp_c} °C${mode}`;
     }
 
     async function restoreSessionResult() {
@@ -1456,6 +1577,9 @@
         peMax: d.pe_max,
       };
       state.gridLevels = d.grid_levels ?? DEFAULT_STATE.gridLevels;
+      if (runtime.cfg.adaptive_boundaries_default != null) {
+        state.adaptiveBoundaries = runtime.cfg.adaptive_boundaries_default;
+      }
     }
 
     function afterStateLoad() {

@@ -14,6 +14,7 @@ from ..api.models import ComputeRequest
 from ..diagram.packer import pack_grid_results
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
 from ..phreeqc.engine import GridJobParams, validate_phreeqc_setup
+from ..phreeqc.adaptive import run_adaptive_boundary_sweep
 from ..phreeqc.sweep import run_grid_sweep
 
 _jobs: dict[str, dict[str, Any]] = {}
@@ -152,14 +153,33 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
             units=body.units,
         )
 
-        def progress(done: int, total: int):
+        def progress(done: int, total: int, phase: str = "compute"):
             with _jobs_lock:
                 if job_id in _jobs:
-                    _jobs[job_id]["progress"] = done / total
+                    _jobs[job_id]["progress"] = done / total if total else 0.0
+                    _jobs[job_id]["phase"] = phase
 
-        results = run_grid_sweep(params, max_workers=body.max_workers, progress_cb=progress)
+        if body.adaptive_boundaries:
+            results, pack_params, adapt_stats = run_adaptive_boundary_sweep(
+                params,
+                max_workers=body.max_workers,
+                progress_cb=progress,
+                refine_factor=body.adaptive_refine_factor,
+            )
+            compute_mode = "adaptive"
+        else:
+            results = run_grid_sweep(params, max_workers=body.max_workers, progress_cb=progress)
+            pack_params = params
+            adapt_stats = {}
+            compute_mode = "uniform"
+
+        progress(0, 1, "packing")
         rows = [asdict(r) for r in results]
-        packed = pack_grid_results(params, rows, db_path=db)
+        packed = pack_grid_results(pack_params, rows, db_path=db)
+        packed["compute_mode"] = compute_mode
+        if adapt_stats:
+            packed["adaptive_stats"] = adapt_stats
+        progress(1, 1, "packing")
 
         with _jobs_lock:
             if job_id not in _jobs:

@@ -9,9 +9,10 @@ PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams**
 Key behaviours:
 
 - **Server-side PHREEQC** with multiprocessing grid sweeps and a **CPU queue** (one sweep at a time by default).
+- **Adaptive boundary refinement** — optional mode that evaluates the full selected grid, then subdivides only cells on a phase boundary for a sharper diagram at lower cost than a uniform fine grid.
 - **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, and Eh/pe toggle.
+- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, Eh/pe toggle, and **phase color persistence** across refreshes.
 
 ---
 
@@ -53,7 +54,8 @@ PHASER/
 │   └── parser.py          # Parse PHASES block from .dat files
 ├── phreeqc/               # PHREEQC solver integration
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
-│   └── sweep.py           # Multiprocessing grid sweep
+│   ├── sweep.py           # Multiprocessing grid sweep
+│   └── adaptive.py        # Adaptive boundary refinement (optional)
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
 │   └── packer.py          # Pack raw results into layered grids for the UI
@@ -63,6 +65,8 @@ PHASER/
 ├── Icon/                  # Logo and favicon (served at /icons/)
 ├── static/
 │   └── index.html         # Single-page web UI
+├── tests/
+│   └── test_adaptive.py   # Adaptive boundary logic unit tests
 └── data/
     └── databases/
         └── generated/     # User-generated .dat files (+ optional .meta.json)
@@ -95,6 +99,7 @@ flowchart TB
     subgraph solver [phreeqc layer]
         Engine["engine - single point"]
         Sweep["sweep - parallel grid"]
+        Adaptive["adaptive - boundary refine"]
     end
 
     subgraph diagram_layer [diagram layer]
@@ -111,6 +116,7 @@ flowchart TB
     Compute --> Phases
     Compute --> Engine
     Compute --> Sweep
+    Compute --> Adaptive
     Compute --> Packer
     Parser --> Registry
     Engine -->|phreeqpy| IPhreeqc[IPhreeqc library]
@@ -124,7 +130,7 @@ flowchart TB
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
 | **services** | FIFO compute queue, job lifecycle, and species helpers. No PHREEQC math here. |
 | **db** | Discover and register `.dat` files; parse phase catalogs for the UI. |
-| **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps. |
+| **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps, optional adaptive boundary refinement. |
 | **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers. |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
 
@@ -180,6 +186,8 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_HOST` | Bind address (default `0.0.0.0`) |
 | `PHASER_PORT` | Listen port (default `8765`) |
 | `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
+| `PHASER_ADAPTIVE_REFINE_FACTOR` | Boundary subdivision factor in adaptive mode (default `5`) |
+| `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
 
 ---
 
@@ -203,19 +211,45 @@ For each grid point `(pH, pe)`:
 
 ### Parallel grid sweep (`sweep.py`)
 
-A phase diagram with 60×60 resolution = **3,600 independent PHREEQC runs**.
+A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
 
 - `ProcessPoolExecutor` spawns worker processes (default up to `MAX_WORKERS`).
 - Each worker initializes its own IPhreeqc instance (`_worker_init`).
 - `pool.map` evaluates all `(pH, pe)` pairs, preserving order.
 - Progress callback updates job status for the UI poll loop.
 
+### Adaptive boundary refinement (`adaptive.py`)
+
+The optional **Adaptive boundaries** mode hunts and tracks phase boundaries so they render much sharper for far less compute than a uniform fine grid.
+
+**Algorithm:**
+
+1. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). Nothing is downsampled, so no phase region is missed.
+2. **Boundary detection (all layers)** — for each base point a composite signature is built across *every* plottable layer: each solid-element subset (e.g. Fe-only, Cu-only, Fe-Cu, …) and each aqueous-element map. A base cell is flagged when this signature differs across its four corners, so boundaries are refined even when only a sub-system layer (not the full-system solid predominance) changes there.
+3. **Subdivision** — only those boundary cells are subdivided by `ADAPTIVE_REFINE_FACTOR` (default 5). New sub-grid points are evaluated with **real PHREEQC runs** (not interpolation).
+4. **Upscale fill** — homogeneous interior cells are block-filled from the nearest base node (no extra compute).
+
+The diagram is packed at the finer resolution. For a 100×100 base with factor 5, the output grid is up to **496×496** (≈246k cells) but typically only ~15–25k of those are real PHREEQC runs, versus ~246k for a uniform fine grid.
+
+**Result metadata** (`adaptive_stats` in the packed JSON):
+
+| Field | Meaning |
+|-------|---------|
+| `refine_factor` | Subdivision factor actually used (may be downgraded if `MAX_ADAPTIVE_POINTS` would be exceeded) |
+| `fine_levels_ph`, `fine_levels_pe` | Output grid dimensions |
+| `base_levels_ph`, `base_levels_pe` | Scout grid dimensions (same as the user's plot resolution) |
+| `boundary_cells` | Number of base cells flagged as straddling a boundary |
+| `n_evaluated` | Total PHREEQC runs (base + boundary sub-cells) |
+| `n_filled` | Fine-grid nodes filled from the base grid without PHREEQC |
+
 Limits (`config.py`):
 
 | Constant | Default | Purpose |
 |----------|---------|---------|
-| `GRID_LEVELS` | 60 | Default resolution for both pH and pe/Eh axes |
-| `MAX_GRID_POINTS` | 40,000 | Hard cap on `ph_levels × pe_levels` |
+| `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
+| `MAX_GRID_POINTS` | 40,000 | Hard cap on `ph_levels × pe_levels` for the **base** grid |
+| `ADAPTIVE_REFINE_FACTOR` | 5 | Boundary-cell subdivision factor (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
+| `MAX_ADAPTIVE_POINTS` | 120,000 | Max total PHREEQC evaluations in adaptive mode; refine factor is downgraded only if exceeded (env `PHASER_MAX_ADAPTIVE_POINTS`) |
 | `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
 | `MAX_WORKERS` | 8 | Worker processes per sweep (capped by CPU count) |
 | `MAX_CONCURRENT_JOBS` | 1 | Max simultaneous sweeps server-wide |
@@ -227,6 +261,7 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 1. `POST /api/compute` creates a job with status **`queued`**.
 2. A dispatcher starts the job when `running_count < MAX_CONCURRENT_JOBS`.
 3. Status becomes **`running`** while the sweep executes; progress is polled via `GET /api/job/{id}`.
+   - Job payload includes **`progress`** (0–1) and **`phase`** (`grid`, `boundaries`, `packing`, or `compute` for uniform mode).
 4. On completion: **`done`** or **`error`**.
 5. Queued jobs expose **`queue_position`** (1-based) and **`queue_size`** so the UI can show *"Queued — position 2 of 3"*.
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
@@ -270,24 +305,28 @@ The UI (`static/index.html`) renders these layers as colored regions with Plotly
 
 ### Settings persistence
 
-User settings (database, species, axes, phase selection, plot resolution, display options) are stored in the browser:
+User settings (database, species, axes, phase selection, plot resolution, adaptive boundaries, display options, **phase colors**) are stored in the browser:
 
-| Storage | Contents |
-|---------|----------|
-| `localStorage` | UI settings (auto-saved on every edit) |
-| `localStorage` | Sidebar width |
-| `sessionStorage` | Pointer to the last cached diagram |
-| IndexedDB | Packed diagram JSON (large results) |
+| Storage | Key / store | Contents |
+|---------|-------------|----------|
+| `localStorage` | `phaseDiagramState.v7` | UI settings (auto-saved on every edit) |
+| `localStorage` | `phaserLayout.v1` | Sidebar width |
+| `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
+| IndexedDB | `phaserResultCache.v2` / `results` | Packed diagram JSON (large results) |
 
 Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or cache eviction.
 
 ### Plot resolution
 
-A single **plot resolution** slider in the Configuration panel sets both `ph_levels` and `pe_levels` sent to the compute API (e.g. 60 → 60×60 = 3,600 PHREEQC runs). The server default is `GRID_LEVELS` in `config.py`, exposed as `defaults.grid_levels` from `/api/config`.
+A single **plot resolution** slider in the Configuration panel sets both `ph_levels` and `pe_levels` sent to the compute API (e.g. 100 → 100×100 = 10,000 PHREEQC runs). The server default is `GRID_LEVELS` in `config.py`, exposed as `defaults.grid_levels` from `/api/config`.
+
+The **Adaptive boundaries** toggle evaluates that same selected grid in full, then subdivides only the cells on a phase boundary (by `ADAPTIVE_REFINE_FACTOR`, default 5×) so the rendered diagram has much sharper boundaries for a fraction of the runs a uniform fine grid would need. The Configuration panel shows an estimated run count and output resolution (e.g. *Base 100 × 100, boundaries refined 5× → up to 496 × 496 output*).
+
+Phase/species **colors are persisted** in `colorByName` (localStorage). New phases get a stable hash-based palette color on first encounter.
 
 ### Result cache
 
-Identical compute requests are served from the browser cache when possible:
+Identical compute requests are served from the browser cache when possible. The cache key includes `adaptive_boundaries` and `adaptive_refine_factor`, so toggling adaptive mode or changing the refine factor forces a fresh compute.
 
 1. The browser hashes the compute request and checks **IndexedDB**.
 2. On **cache hit**, the diagram loads from the browser without starting a server job.
@@ -298,9 +337,22 @@ Cache limits: **12 results max**, **12-hour TTL** per entry.
 
 On page load, if the tab session still references a cached result, the diagram is restored from IndexedDB without recomputing.
 
-### Queue feedback
+### Progress and queue feedback
 
-While a job is queued, the status line shows **"Queued — position N of M"**. Once running, it shows **"Computing… X%"** with the progress bar.
+While a job is **queued**, the status line shows **"Queued — position N of M"**.
+
+While **running**, the progress bar and status text reflect the active phase:
+
+| Phase | Status text | Progress bar |
+|-------|-------------|--------------|
+| `grid` | Computing grid… X% | Determinate (base PHREEQC sweep) |
+| `boundaries` | Refining boundaries… X% | Determinate (adaptive boundary sub-cells only) |
+| `packing` | Packing diagram… | Indeterminate (server-side grid packing) |
+| *(after `done`)* | Downloading diagram result… X% | Determinate when `Content-Length` is available |
+| *(client)* | Caching diagram in this browser… | Indeterminate |
+| *(client)* | Rendering diagram… | Indeterminate (Plotly) |
+
+Adaptive mode deliberately **resets** the bar between the grid and boundaries phases so each PHREEQC pass reports 0→100% accurately. Post-compute stages (packing, download, cache, render) are tracked separately so a large JSON transfer or slow render does not look like a stuck compute.
 
 ### Display and layout
 
@@ -319,16 +371,31 @@ While a job is queued, the status line shows **"Queued — position N of M"**. O
 |--------|------|-------------|
 | `GET` | `/` | Web UI |
 | `GET` | `/api/health` | Liveness check |
-| `GET` | `/api/config` | Defaults, limits (`max_concurrent_jobs`, `grid_levels`, …), default `db_id` |
+| `GET` | `/api/config` | Defaults, limits (`max_concurrent_jobs`, `grid_levels`, `adaptive_refine_factor`, `max_adaptive_points`, …), default `db_id` |
 | `GET` | `/api/databases` | List available databases |
 | `GET` | `/api/databases/{db_id}` | Database details |
 | `POST` | `/api/databases/register` | Register generated database metadata |
 | `GET` | `/api/elements?db_id=` | Elements in a database |
 | `POST` | `/api/phases` | Discover phases for a chemical system |
 | `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}` |
-| `GET` | `/api/job/{job_id}` | Job status (`queued` \| `running` \| `done` \| `error`), progress, queue position |
+| `GET` | `/api/job/{job_id}` | Job status (`queued` \| `running` \| `done` \| `error`), `progress`, `phase`, queue position |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
 | `DELETE` | `/api/job/{job_id}` | Release job/result from server memory (called by UI after fetch) |
+
+### Compute request (`POST /api/compute`)
+
+Key fields in the JSON body:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C(4)": 1.0}` |
+| `ph_levels`, `pe_levels` | `GRID_LEVELS` | Grid resolution (both axes) |
+| `ph_min`, `ph_max`, `pe_min`, `pe_max` | config defaults | Axis bounds |
+| `phases` | auto-discover | Selected solid phase names |
+| `system_elements` | from totals | Explicit element list for layers |
+| `db_id` | server default | Database from registry |
+| `adaptive_boundaries` | `false` | Enable adaptive boundary refinement |
+| `adaptive_refine_factor` | server default (5) | Subdivision factor (optional; included in browser cache key) |
 
 ### Compute flow
 
@@ -339,23 +406,28 @@ sequenceDiagram
     participant Job as Compute service
     participant Reg as DB registry
     participant Sw as PHREEQC sweep
+    participant Ad as Adaptive refine
     participant Pack as Diagram packer
 
     UI->>API: POST /api/compute
     API->>Job: enqueue job
     API-->>UI: job_id and queue_position
     Job->>Reg: resolve db_id to path
-    Job->>Sw: run_grid_sweep
-    loop Each grid point
-        Sw->>Sw: evaluate_point
+    alt adaptive_boundaries
+        Job->>Sw: base grid sweep
+        Job->>Ad: boundary sub-cell sweep
+    else uniform
+        Job->>Sw: run_grid_sweep
     end
-    Sw-->>Job: grid results
     Job->>Pack: pack_grid_results
     Pack-->>Job: layered grids
-    UI->>API: GET job status
+    loop Poll while running
+        UI->>API: GET job status
+        API-->>UI: progress and phase
+    end
     UI->>API: GET job result
     API-->>UI: diagram JSON
-    UI->>UI: store in IndexedDB
+    UI->>UI: IndexedDB cache and Plotly render
     UI->>API: DELETE job
 ```
 
@@ -368,7 +440,10 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Setting | Env override | Default | Notes |
 |---------|--------------|---------|-------|
 | Host / port | `PHASER_HOST`, `PHASER_PORT` | `0.0.0.0:8765` | Used by `run_server.py` and Docker |
-| Grid resolution | — | `GRID_LEVELS = 60` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
+| Grid resolution | — | `GRID_LEVELS = 100` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
+| Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
+| Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Boundary subdivision in adaptive mode |
+| Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Total PHREEQC runs allowed in adaptive mode |
 | Max workers per sweep | — | `MAX_WORKERS = 8` | Capped by `os.cpu_count()` in `sweep.py` |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Default units | — | `mmol/kgw` | UI and API default |
@@ -394,9 +469,11 @@ PHASER can consume databases produced by external tools:
 - **WSL + Windows**: run the server in WSL; edit files on the Windows side; paths in `config.py` use `/mnt/c/...` when running under Linux.
 - **Networking**: with WSL2 **mirrored networking** (`networkingMode=mirrored` in `%UserProfile%\.wslconfig`), the app is reachable on your LAN at the machine's IP (e.g. `http://192.168.x.x:8765`). You may need a Windows Firewall inbound rule for TCP port 8765.
 - **Multi-user**: each browser session is isolated (local settings + IndexedDB cache). Compute jobs are independent but share the server queue and CPU pool.
-- **Tests**: import smoke test:
+- **Tests**:
   ```bash
   python scripts/smoke_check.py
+  # Adaptive boundary logic (no PHREEQC required):
+  python -m pytest tests/test_adaptive.py -q
   ```
 
 ---
@@ -431,6 +508,8 @@ PHASER_IPHREEQC_LIB=/usr/local/lib/libiphreeqc.so
 PHASER_BUILTIN_DB_DIRS=/opt/phreeqc/database
 PHASER_GENERATED_DB_DIR=/app/PHASER/data/databases/generated
 PHASER_MAX_CONCURRENT_JOBS=1
+PHASER_ADAPTIVE_REFINE_FACTOR=5
+PHASER_MAX_ADAPTIVE_POINTS=120000
 ```
 
 Run a smoke check inside the image:
