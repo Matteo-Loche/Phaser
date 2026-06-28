@@ -6,6 +6,9 @@
   <meta name="color-scheme" content="dark light" />
   <title>PHASER — Phase Diagram Calculator</title>
   <link rel="icon" type="image/svg+xml" href="/icons/phaser_favicon.svg?v=2" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@900&display=swap" rel="stylesheet" />
   <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
   <style>
     :root {
@@ -24,7 +27,8 @@
       --space: clamp(0.6rem, 0.4rem + 0.6vw, 1rem);
       --radius: 10px;
       --sidebar-w: clamp(320px, 30vw, 420px);
-      --header-h: 56px;
+      --header-h: 64px;
+      --logo-anim-speed: 1.6s;
       --tap: 40px;
       --fs-base: clamp(0.85rem, 0.8rem + 0.2vw, 0.95rem);
     }
@@ -68,15 +72,54 @@
       display: inline-flex; align-items: center; min-width: 0;
       text-decoration: none;
       background: #03040A;
-      padding: 0.28rem 0.6rem;
+      padding: 0.2rem 0.45rem;
       border-radius: 8px;
       border: 1px solid var(--border);
     }
-    header .brand-logo {
-      height: clamp(26px, 5vw, 40px);
-      width: auto; display: block;
-      object-fit: contain;
+    header .brand.is-computing {
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent);
     }
+    header .brand-logo-wrap {
+      height: clamp(34px, 6vw, 52px);
+      width: auto;
+      display: block;
+      line-height: 0;
+    }
+    header .brand-logo-wrap svg {
+      height: 100%;
+      width: auto;
+      display: block;
+    }
+    @keyframes phaserBarOn {
+      0%   { opacity: 0; filter: blur(0px) brightness(1); }
+      5%   { opacity: 1; filter: blur(4px) brightness(3); }
+      18%  { opacity: 1; filter: blur(1px) brightness(2); }
+      65%  { opacity: 1; filter: blur(0px) brightness(1); }
+      80%  { opacity: 1; filter: blur(0px) brightness(1); }
+      95%  { opacity: 0; }
+      100% { opacity: 0; }
+    }
+    /* Idle: colored bars at full glow, no animation. */
+    #phaser-logo [class^="b"] {
+      opacity: 1;
+    }
+    /* Computing: run the rainbow scan. Tune speed via --logo-anim-speed. */
+    header .brand.is-computing #phaser-logo [class^="b"] {
+      animation: phaserBarOn var(--logo-anim-speed) ease-in-out infinite;
+    }
+    header .brand.is-computing #phaser-logo .b12 { animation-delay: 0.00s; }
+    header .brand.is-computing #phaser-logo .b11 { animation-delay: 0.10s; }
+    header .brand.is-computing #phaser-logo .b10 { animation-delay: 0.20s; }
+    header .brand.is-computing #phaser-logo .b9  { animation-delay: 0.30s; }
+    header .brand.is-computing #phaser-logo .b8  { animation-delay: 0.40s; }
+    header .brand.is-computing #phaser-logo .b7  { animation-delay: 0.50s; }
+    header .brand.is-computing #phaser-logo .b6  { animation-delay: 0.60s; }
+    header .brand.is-computing #phaser-logo .b5  { animation-delay: 0.70s; }
+    header .brand.is-computing #phaser-logo .b4  { animation-delay: 0.80s; }
+    header .brand.is-computing #phaser-logo .b3  { animation-delay: 0.90s; }
+    header .brand.is-computing #phaser-logo .b2  { animation-delay: 1.00s; }
+    header .brand.is-computing #phaser-logo .b1  { animation-delay: 1.10s; }
     header .spacer { flex: 1; }
     .icon-btn {
       display: none;
@@ -296,8 +339,50 @@
   <div class="app" id="app">
     <header>
       <button class="icon-btn" id="menuBtn" aria-label="Toggle controls">☰</button>
-      <a class="brand" href="/" aria-label="PHASER — Phase Diagram Calculator">
-        <img src="/icons/phaser_logo_v8.png" alt="PHASER" class="brand-logo" />
+      <a class="brand" id="phaserBrand" href="/" aria-label="PHASER — Phase Diagram Calculator">
+        <div id="phaser-logo" class="brand-logo-wrap" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="76 48 648 122" role="img" aria-label="PHASER">
+            <defs>
+              <mask id="phaserLogoTxt">
+                <rect x="0" y="0" width="800" height="200" fill="black"/>
+                <text x="400" y="162"
+                  font-family="'Orbitron','Arial Black',monospace"
+                  font-size="128" font-weight="900"
+                  text-anchor="middle" letter-spacing="4"
+                  fill="white" transform="skewX(-12) translate(30,0)">PHASER</text>
+              </mask>
+              <filter id="phaserLogoGlow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="3" result="blur"/>
+                <feMerge>
+                  <feMergeNode in="blur"/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+            </defs>
+            <rect width="800" height="200" fill="#03040A"/>
+            <text x="400" y="162"
+              font-family="'Orbitron','Arial Black',monospace"
+              font-size="128" font-weight="900"
+              text-anchor="middle" letter-spacing="4"
+              fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.06"
+              transform="skewX(-12) translate(30,0)">PHASER</text>
+            <g mask="url(#phaserLogoTxt)" filter="url(#phaserLogoGlow)">
+              <rect x="0" y="0" width="800" height="200" fill="#03040A"/>
+              <polygon class="b1"  points="0,2   800,2   760,13  0,13"  fill="#F0E6FF"/>
+              <polygon class="b2"  points="0,19  800,19  760,30  0,30"  fill="#BF00FF"/>
+              <polygon class="b3"  points="0,36  800,36  760,47  0,47"  fill="#4B0FFF"/>
+              <polygon class="b4"  points="0,53  800,53  760,64  0,64"  fill="#0066FF"/>
+              <polygon class="b5"  points="0,70  800,70  760,81  0,81"  fill="#00DDFF"/>
+              <polygon class="b6"  points="0,87  800,87  760,98  0,98"  fill="#00FFB2"/>
+              <polygon class="b7"  points="0,104 800,104 760,115 0,115" fill="#39FF14"/>
+              <polygon class="b8"  points="0,121 800,121 760,132 0,132" fill="#FFE600"/>
+              <polygon class="b9"  points="0,138 800,138 760,149 0,149" fill="#FF9900"/>
+              <polygon class="b10" points="0,155 800,155 760,166 0,166" fill="#FF4D00"/>
+              <polygon class="b11" points="0,172 800,172 760,183 0,183" fill="#FF0033"/>
+              <polygon class="b12" points="0,189 800,189 760,200 0,200" fill="#CC0077"/>
+            </g>
+          </svg>
+        </div>
       </a>
       <div class="spacer"></div>
       <span class="pill" id="healthPill">…</span>
@@ -1246,6 +1331,10 @@
     }
 
     /* ---------------- compute ---------------- */
+    function setLogoComputing(on) {
+      $("phaserBrand")?.classList.toggle("is-computing", !!on);
+    }
+
     async function compute() {
       const totals = activeTotals();
       const sel = selectedPhases();
@@ -1291,13 +1380,17 @@
           /* Cache failures should not block computation. */
         }
         setStatus("Starting job…");
+        setLogoComputing(true, "Starting job…");
         const start = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
         if (start.status === "queued") {
-          setStatus(queueStatusText(start) || "Queued…", "warn");
+          const q = queueStatusText(start) || "Queued…";
+          setStatus(q, "warn");
+          setLogoComputing(true, q);
         }
         pollJob(start.job_id, cacheKey);
       } catch (e) {
         setStatus(e.message, "err");
+        setLogoComputing(false);
         $("computeBtn").disabled = false;
       }
     }
@@ -1314,18 +1407,22 @@
       clearInterval(runtime.pollTimer);
       const bar = $("progressBar");
       bar.style.display = "block";
+      setLogoComputing(true, "Computing…");
       runtime.pollTimer = setInterval(async () => {
         try {
           const st = await api(`/api/job/${jobId}`);
           if (st.status === "queued") {
             bar.removeAttribute("value");
-            setStatus(queueStatusText(st) || "Queued…", "warn");
+            const q = queueStatusText(st) || "Queued…";
+            setStatus(q, "warn");
+            setLogoComputing(true, q);
             return;
           }
           if (st.status === "running") {
             if (st.phase === "packing") {
               bar.removeAttribute("value");
               setStatus("Packing diagram…");
+              setLogoComputing(true, "Packing diagram…");
               return;
             }
             bar.value = Math.round((st.progress || 0) * 100);
@@ -1333,12 +1430,15 @@
               grid: "Computing grid",
               boundaries: "Refining boundaries",
             }[st.phase] || "Computing";
-            setStatus(`${phaseLabel}… ${bar.value}%`);
+            const msg = `${phaseLabel}… ${bar.value}%`;
+            setStatus(msg);
+            setLogoComputing(true, msg);
             return;
           }
           clearInterval(runtime.pollTimer);
           if (st.status === "error") {
             bar.style.display = "none";
+            setLogoComputing(false);
             $("computeBtn").disabled = false;
             forgetServerJob(jobId);
             setStatus(st.error || "Computation failed", "err");
@@ -1347,24 +1447,31 @@
           bar.removeAttribute("value");
           bar.style.display = "block";
           setStatus("Downloading diagram result…");
+          setLogoComputing(true, "Downloading diagram result…");
           const result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
             if (pct == null) {
               bar.removeAttribute("value");
               setStatus("Downloading diagram result…");
+              setLogoComputing(true, "Downloading diagram result…");
             } else {
               bar.value = pct;
-              setStatus(`Downloading diagram result… ${pct}%`);
+              const msg = `Downloading diagram result… ${pct}%`;
+              setStatus(msg);
+              setLogoComputing(true, msg);
             }
           });
           bar.removeAttribute("value");
           setStatus("Caching diagram in this browser…");
+          setLogoComputing(true, "Caching diagram in this browser…");
           try { await putCachedResult(cacheKey, result); } catch (cacheErr) {}
           forgetServerJob(jobId);
           setStatus("Rendering diagram…");
+          setLogoComputing(true, "Rendering diagram…");
           drawDiagram(result);
           runtime.hasResult = true;
           $("stalePill").style.display = "none";
           bar.style.display = "none";
+          setLogoComputing(false);
           $("computeBtn").disabled = false;
           setStatus(
             result.compute_mode === "adaptive" && result.adaptive_stats
@@ -1378,6 +1485,7 @@
         } catch (e) {
           clearInterval(runtime.pollTimer);
           bar.style.display = "none";
+          setLogoComputing(false);
           $("computeBtn").disabled = false;
           setStatus(e.message, "err");
         }

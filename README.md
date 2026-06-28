@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Icon/phaser_logo_v8.png" alt="PHASER — Phase Diagram Calculator" width="420" />
+  <img src="Icon/phaser_logo.svg" alt="PHASER — Phase Diagram Calculator" width="420" />
 </p>
 
 <p align="center"><em>pH–pe / pH–Eh predominance diagrams from PHREEQC</em></p>
@@ -361,7 +361,7 @@ Adaptive mode deliberately **resets** the bar between the grid and boundaries ph
 - Non-convergent / `none` cells render **white**; aqueous fallback species use light grey in solid view.
 - Resizable left sidebar (desktop); double-click the divider to reset width.
 - Square phase diagram area (`aspect-ratio: 1 / 1`).
-- PHASER logo and favicon in `Icon/` (served at `/icons/`).
+- PHASER animated SVG logo in the header and beside the progress bar during compute (rainbow scan via `animation-play-state`); favicon in `Icon/` (served at `/icons/`).
 
 ---
 
