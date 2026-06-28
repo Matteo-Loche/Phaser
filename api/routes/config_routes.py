@@ -49,6 +49,8 @@ def get_config():
         "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
         "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,
         "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
+        "job_result_ttl_sec": config.JOB_RESULT_TTL_SEC,
+        "job_queue_ttl_sec": config.JOB_QUEUE_TTL_SEC,
         "db_exists": bool(default_db and default_db.exists),
         "dll_exists": Path(config.IPHREEQC_DLL).is_file(),
     }

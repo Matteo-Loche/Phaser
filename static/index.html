@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="color-scheme" content="dark light" />
   <title>PHASER — Phase Diagram Calculator</title>
-  <link rel="icon" type="image/svg+xml" href="/icons/phaser_favicon.svg?v=2" />
+  <link rel="icon" type="image/svg+xml" href="/icons/phaser_favicon.svg?v=3" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@900&display=swap" rel="stylesheet" />
@@ -539,6 +539,7 @@
     const RESULT_DB = "phaserResultCache.v2";
     const RESULT_STORE = "results";
     const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
+    const ACTIVE_JOB_KEY = "phaserActiveJob.v1";
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
     const RESULT_CACHE_MAX = 12;
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
@@ -1330,6 +1331,68 @@
       try { await api(`/api/job/${jobId}`, { method: "DELETE" }); } catch (e) {}
     }
 
+    function saveActiveJob(jobId, cacheKey) {
+      try {
+        sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ jobId, cacheKey, startedAt: Date.now() }));
+      } catch (e) {}
+    }
+
+    function clearActiveJob() {
+      try { sessionStorage.removeItem(ACTIVE_JOB_KEY); } catch (e) {}
+    }
+
+    function loadActiveJob() {
+      try {
+        const raw = sessionStorage.getItem(ACTIVE_JOB_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    async function fetchAndRenderJobResult(jobId, cacheKey, st) {
+      const bar = $("progressBar");
+      bar.removeAttribute("value");
+      bar.style.display = "block";
+      setStatus("Downloading diagram result…");
+      setLogoComputing(true, "Downloading diagram result…");
+      const result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
+        if (pct == null) {
+          bar.removeAttribute("value");
+          setStatus("Downloading diagram result…");
+          setLogoComputing(true, "Downloading diagram result…");
+        } else {
+          bar.value = pct;
+          const msg = `Downloading diagram result… ${pct}%`;
+          setStatus(msg);
+          setLogoComputing(true, msg);
+        }
+      });
+      bar.removeAttribute("value");
+      setStatus("Caching diagram in this browser…");
+      setLogoComputing(true, "Caching diagram in this browser…");
+      try { await putCachedResult(cacheKey, result); } catch (cacheErr) {}
+      clearActiveJob();
+      forgetServerJob(jobId);
+      setStatus("Rendering diagram…");
+      setLogoComputing(true, "Rendering diagram…");
+      drawDiagram(result);
+      runtime.hasResult = true;
+      $("stalePill").style.display = "none";
+      bar.style.display = "none";
+      setLogoComputing(false);
+      $("computeBtn").disabled = false;
+      setStatus(
+        result.compute_mode === "adaptive" && result.adaptive_stats
+          ? `Done — ${result.adaptive_stats.n_evaluated.toLocaleString()} PHREEQC runs`
+            + `, boundaries refined ${result.adaptive_stats.refine_factor}×`
+            + ` (${result.adaptive_stats.fine_levels_ph}×${result.adaptive_stats.fine_levels_pe} output)`
+            + ` · cached in this browser.`
+          : `Done — ${st.phases_used?.length ?? "?"} phases evaluated and cached in this browser.`,
+        "ok"
+      );
+    }
+
     /* ---------------- compute ---------------- */
     function setLogoComputing(on) {
       $("phaserBrand")?.classList.toggle("is-computing", !!on);
@@ -1381,7 +1444,13 @@
         }
         setStatus("Starting job…");
         setLogoComputing(true, "Starting job…");
+        const prev = loadActiveJob();
+        if (prev?.jobId) {
+          clearActiveJob();
+          forgetServerJob(prev.jobId);
+        }
         const start = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
+        saveActiveJob(start.job_id, cacheKey);
         if (start.status === "queued") {
           const q = queueStatusText(start) || "Queued…";
           setStatus(q, "warn");
@@ -1405,6 +1474,7 @@
 
     function pollJob(jobId, cacheKey) {
       clearInterval(runtime.pollTimer);
+      saveActiveJob(jobId, cacheKey);
       const bar = $("progressBar");
       bar.style.display = "block";
       setLogoComputing(true, "Computing…");
@@ -1440,56 +1510,54 @@
             bar.style.display = "none";
             setLogoComputing(false);
             $("computeBtn").disabled = false;
+            clearActiveJob();
             forgetServerJob(jobId);
             setStatus(st.error || "Computation failed", "err");
             return;
           }
-          bar.removeAttribute("value");
-          bar.style.display = "block";
-          setStatus("Downloading diagram result…");
-          setLogoComputing(true, "Downloading diagram result…");
-          const result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
-            if (pct == null) {
-              bar.removeAttribute("value");
-              setStatus("Downloading diagram result…");
-              setLogoComputing(true, "Downloading diagram result…");
-            } else {
-              bar.value = pct;
-              const msg = `Downloading diagram result… ${pct}%`;
-              setStatus(msg);
-              setLogoComputing(true, msg);
-            }
-          });
-          bar.removeAttribute("value");
-          setStatus("Caching diagram in this browser…");
-          setLogoComputing(true, "Caching diagram in this browser…");
-          try { await putCachedResult(cacheKey, result); } catch (cacheErr) {}
-          forgetServerJob(jobId);
-          setStatus("Rendering diagram…");
-          setLogoComputing(true, "Rendering diagram…");
-          drawDiagram(result);
-          runtime.hasResult = true;
-          $("stalePill").style.display = "none";
-          bar.style.display = "none";
-          setLogoComputing(false);
-          $("computeBtn").disabled = false;
-          setStatus(
-            result.compute_mode === "adaptive" && result.adaptive_stats
-              ? `Done — ${result.adaptive_stats.n_evaluated.toLocaleString()} PHREEQC runs`
-                + `, boundaries refined ${result.adaptive_stats.refine_factor}×`
-                + ` (${result.adaptive_stats.fine_levels_ph}×${result.adaptive_stats.fine_levels_pe} output)`
-                + ` · cached in this browser.`
-              : `Done — ${st.phases_used?.length ?? "?"} phases evaluated and cached in this browser.`,
-            "ok"
-          );
+          await fetchAndRenderJobResult(jobId, cacheKey, st);
         } catch (e) {
           clearInterval(runtime.pollTimer);
           bar.style.display = "none";
           setLogoComputing(false);
           $("computeBtn").disabled = false;
+          if (e.message && /not found|404/i.test(e.message)) {
+            clearActiveJob();
+          }
           setStatus(e.message, "err");
         }
       }, 700);
+    }
+
+    async function resumeActiveJob() {
+      const rec = loadActiveJob();
+      if (!rec?.jobId) return false;
+      try {
+        const st = await api(`/api/job/${rec.jobId}`);
+        if (st.status === "queued" || st.status === "running") {
+          const msg = st.status === "queued"
+            ? (queueStatusText(st) || "Resuming queued job…")
+            : "Resuming compute after page reload…";
+          setStatus(msg, "warn");
+          $("computeBtn").disabled = true;
+          pollJob(rec.jobId, rec.cacheKey);
+          return true;
+        }
+        if (st.status === "done") {
+          setStatus("Compute finished while you were away — loading result…", "warn");
+          $("computeBtn").disabled = true;
+          await fetchAndRenderJobResult(rec.jobId, rec.cacheKey, st);
+          return true;
+        }
+        if (st.status === "error") {
+          clearActiveJob();
+          forgetServerJob(rec.jobId);
+          setStatus(st.error || "Computation failed", "err");
+        }
+      } catch (e) {
+        clearActiveJob();
+      }
+      return false;
     }
 
     /* ---------------- plotting ---------------- */
@@ -1726,7 +1794,8 @@
       fillDatabaseOptions();
       await reloadSpeciesSuggestions();
       afterStateLoad();
-      await restoreSessionResult();
+      const resumed = await resumeActiveJob();
+      if (!resumed) await restoreSessionResult();
     }
 
     init();

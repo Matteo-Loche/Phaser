@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Icon/phaser_logo.svg" alt="PHASER — Phase Diagram Calculator" width="420" />
+  <img src="Icon/phaser_logo_v8.png" alt="PHASER — Phase Diagram Calculator" width="420" />
 </p>
 
 <p align="center"><em>pH–pe / pH–Eh predominance diagrams from PHREEQC</em></p>
@@ -11,8 +11,10 @@ Key behaviours:
 - **Server-side PHREEQC** with multiprocessing grid sweeps and a **CPU queue** (one sweep at a time by default).
 - **Adaptive boundary refinement** — optional mode that evaluates the full selected grid, then subdivides only cells on a phase boundary for a sharper diagram at lower cost than a uniform fine grid.
 - **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB.
+- **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
+- **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, Eh/pe toggle, and **phase color persistence** across refreshes.
+- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, Eh/pe toggle, animated header logo during compute, and **phase color persistence** across refreshes.
 
 ---
 
@@ -62,7 +64,10 @@ PHASER/
 ├── services/              # Orchestration logic
 │   ├── compute.py         # FIFO compute queue + background grid jobs
 │   └── species.py         # Species picker suggestions
-├── Icon/                  # Logo and favicon (served at /icons/)
+├── Icon/                  # Branding assets (served at /icons/)
+│   ├── phaser_logo.svg        # Animated header logo (in-app)
+│   ├── phaser_logo_v8.png     # Static wordmark (README / docs)
+│   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
 ├── static/
 │   └── index.html         # Single-page web UI
 ├── tests/
@@ -188,6 +193,9 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | Boundary subdivision factor in adaptive mode (default `5`) |
 | `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
+| `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
+| `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
+| `PHASER_JOB_REAPER_INTERVAL_SEC` | Background reaper wake interval in seconds (default `60`) |
 
 ---
 
@@ -253,6 +261,9 @@ Limits (`config.py`):
 | `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
 | `MAX_WORKERS` | 8 | Worker processes per sweep (capped by CPU count) |
 | `MAX_CONCURRENT_JOBS` | 1 | Max simultaneous sweeps server-wide |
+| `JOB_RESULT_TTL_SEC` | 3600 | Drop finished jobs from memory after this (env `PHASER_JOB_RESULT_TTL_SEC`) |
+| `JOB_QUEUE_TTL_SEC` | 7200 | Drop abandoned queued jobs after this (env `PHASER_JOB_QUEUE_TTL_SEC`) |
+| `JOB_REAPER_INTERVAL_SEC` | 60 | Reaper thread interval (env `PHASER_JOB_REAPER_INTERVAL_SEC`) |
 
 ### Compute queue (`services/compute.py`)
 
@@ -265,6 +276,8 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 4. On completion: **`done`** or **`error`**.
 5. Queued jobs expose **`queue_position`** (1-based) and **`queue_size`** so the UI can show *"Queued — position 2 of 3"*.
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
+7. **Page reload during compute:** the UI stores the active `job_id` in `sessionStorage` and resumes polling on load. If the job finished while the tab was away, the result is fetched automatically.
+8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h) and queued jobs that were never started after `JOB_QUEUE_TTL_SEC` (default 2 h). Polls update `last_seen_at` on each job.
 
 Job statuses: `queued` → `running` → `done` | `error`.
 
@@ -312,6 +325,7 @@ User settings (database, species, axes, phase selection, plot resolution, adapti
 | `localStorage` | `phaseDiagramState.v7` | UI settings (auto-saved on every edit) |
 | `localStorage` | `phaserLayout.v1` | Sidebar width |
 | `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
+| `sessionStorage` | `phaserActiveJob.v1` | Active compute job (`jobId` + cache key) for reconnect after refresh |
 | IndexedDB | `phaserResultCache.v2` / `results` | Packed diagram JSON (large results) |
 
 Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or cache eviction.
@@ -337,6 +351,12 @@ Cache limits: **12 results max**, **12-hour TTL** per entry.
 
 On page load, if the tab session still references a cached result, the diagram is restored from IndexedDB without recomputing.
 
+### Compute reconnect
+
+If you refresh or close and reopen the tab while a job is **queued** or **running**, the UI resumes polling from `sessionStorage` (`phaserActiveJob.v1`). If the job finished while you were away, the result is downloaded, cached, and rendered automatically.
+
+Starting a **new** compute abandons the previous job (server `DELETE`). Running PHREEQC sweeps are not interrupted mid-run — they continue on the server until completion or TTL cleanup.
+
 ### Progress and queue feedback
 
 While a job is **queued**, the status line shows **"Queued — position N of M"**.
@@ -361,7 +381,8 @@ Adaptive mode deliberately **resets** the bar between the grid and boundaries ph
 - Non-convergent / `none` cells render **white**; aqueous fallback species use light grey in solid view.
 - Resizable left sidebar (desktop); double-click the divider to reset width.
 - Square phase diagram area (`aspect-ratio: 1 / 1`).
-- PHASER animated SVG logo in the header and beside the progress bar during compute (rainbow scan via `animation-play-state`); favicon in `Icon/` (served at `/icons/`).
+- **Header logo** — animated inline SVG (`phaser_logo.svg`) with a rainbow scan while computing (`animation-play-state` toggled via `.is-computing` on the brand link).
+- **Favicon** — square spectrum **P** (`phaser_favicon.svg`, served at `/icons/`). The README uses the static PNG wordmark because GitHub cannot render the animated SVG logo.
 
 ---
 
@@ -371,7 +392,7 @@ Adaptive mode deliberately **resets** the bar between the grid and boundaries ph
 |--------|------|-------------|
 | `GET` | `/` | Web UI |
 | `GET` | `/api/health` | Liveness check |
-| `GET` | `/api/config` | Defaults, limits (`max_concurrent_jobs`, `grid_levels`, `adaptive_refine_factor`, `max_adaptive_points`, …), default `db_id` |
+| `GET` | `/api/config` | Defaults, limits (`max_concurrent_jobs`, `grid_levels`, `adaptive_refine_factor`, `max_adaptive_points`, `job_result_ttl_sec`, `job_queue_ttl_sec`, …), default `db_id` |
 | `GET` | `/api/databases` | List available databases |
 | `GET` | `/api/databases/{db_id}` | Database details |
 | `POST` | `/api/databases/register` | Register generated database metadata |
@@ -421,7 +442,7 @@ sequenceDiagram
     end
     Job->>Pack: pack_grid_results
     Pack-->>Job: layered grids
-    loop Poll while running
+    loop Poll while running or after page reload
         UI->>API: GET job status
         API-->>UI: progress and phase
     end
@@ -446,6 +467,9 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Total PHREEQC runs allowed in adaptive mode |
 | Max workers per sweep | — | `MAX_WORKERS = 8` | Capped by `os.cpu_count()` in `sweep.py` |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
+| Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
+| Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
+| Job reaper interval | `PHASER_JOB_REAPER_INTERVAL_SEC` | `60` | Background cleanup wake interval |
 | Default units | — | `mmol/kgw` | UI and API default |
 | Default species conc. | — | `1.0` | Per species in UI |
 
@@ -468,7 +492,7 @@ PHASER can consume databases produced by external tools:
 - **Package name** = folder name (`PHASER`). `run_server.py` adds the parent directory to `sys.path` so `import PHASER` works when run from inside the folder.
 - **WSL + Windows**: run the server in WSL; edit files on the Windows side; paths in `config.py` use `/mnt/c/...` when running under Linux.
 - **Networking**: with WSL2 **mirrored networking** (`networkingMode=mirrored` in `%UserProfile%\.wslconfig`), the app is reachable on your LAN at the machine's IP (e.g. `http://192.168.x.x:8765`). You may need a Windows Firewall inbound rule for TCP port 8765.
-- **Multi-user**: each browser session is isolated (local settings + IndexedDB cache). Compute jobs are independent but share the server queue and CPU pool.
+- **Multi-user**: each browser session is isolated (local settings + IndexedDB cache). Compute jobs are independent but share the server queue and CPU pool. Orphaned jobs are reclaimed by the reaper after the configured TTLs.
 - **Tests**:
   ```bash
   python scripts/smoke_check.py
@@ -510,6 +534,8 @@ PHASER_GENERATED_DB_DIR=/app/PHASER/data/databases/generated
 PHASER_MAX_CONCURRENT_JOBS=1
 PHASER_ADAPTIVE_REFINE_FACTOR=5
 PHASER_MAX_ADAPTIVE_POINTS=120000
+PHASER_JOB_RESULT_TTL_SEC=3600
+PHASER_JOB_QUEUE_TTL_SEC=7200
 ```
 
 Run a smoke check inside the image:

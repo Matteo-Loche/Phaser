@@ -108,6 +108,13 @@ ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"
 # honored; the factor is only downgraded if a diagram would exceed this.
 MAX_ADAPTIVE_POINTS = int(os.environ.get("PHASER_MAX_ADAPTIVE_POINTS", "120000"))
 
+# Completed job results are dropped from server memory after this TTL if the
+# browser never fetched them (or after fetch + DELETE). Also used by the reaper.
+JOB_RESULT_TTL_SEC = int(os.environ.get("PHASER_JOB_RESULT_TTL_SEC", "3600"))
+# Queued jobs that were never polled are removed (abandoned tab / never returned).
+JOB_QUEUE_TTL_SEC = int(os.environ.get("PHASER_JOB_QUEUE_TTL_SEC", "7200"))
+JOB_REAPER_INTERVAL_SEC = int(os.environ.get("PHASER_JOB_REAPER_INTERVAL_SEC", "60"))
+
 # Concentration unit options passed straight to PHREEQC SOLUTION blocks.
 UNIT_OPTIONS = (
     "mol/kgw", "mmol/kgw", "umol/kgw",

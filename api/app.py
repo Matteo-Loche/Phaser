@@ -1,6 +1,7 @@
 """FastAPI application factory."""
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -13,7 +14,17 @@ PACKAGE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PACKAGE_DIR / "static"
 ICON_DIR = PACKAGE_DIR / "Icon"
 
-app = FastAPI(title="Phase Diagram Service", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from ..services.compute import start_job_reaper, stop_job_reaper
+
+    start_job_reaper()
+    yield
+    stop_job_reaper()
+
+
+app = FastAPI(title="Phase Diagram Service", version="1.0.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/icons", StaticFiles(directory=str(ICON_DIR)), name="icons")
 app.include_router(router)

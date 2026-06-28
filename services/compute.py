@@ -21,6 +21,76 @@ _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
 _pending: deque[tuple[str, ComputeRequest]] = deque()
 _running_count = 0
+_reaper_stop = threading.Event()
+_reaper_started = False
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _age_seconds(since: datetime | None, now: datetime) -> float | None:
+    if since is None:
+        return None
+    return (now - since).total_seconds()
+
+
+def _prune_jobs_locked(now: datetime | None = None) -> int:
+    """Remove stale queued and finished jobs. Caller must hold _jobs_lock."""
+    global _pending
+    now = now or _utcnow()
+    removed = 0
+
+    for job_id in list(_jobs.keys()):
+        job = _jobs[job_id]
+        status = job.get("status")
+
+        if status == "queued":
+            created = _parse_dt(job.get("created_at"))
+            age = _age_seconds(created, now)
+            if age is not None and age > config.JOB_QUEUE_TTL_SEC:
+                _jobs.pop(job_id, None)
+                _pending = deque((jid, body) for jid, body in _pending if jid != job_id)
+                removed += 1
+            continue
+
+        if status in ("done", "error"):
+            finished = _parse_dt(job.get("finished_at")) or _parse_dt(job.get("created_at"))
+            age = _age_seconds(finished, now)
+            if age is not None and age > config.JOB_RESULT_TTL_SEC:
+                _jobs.pop(job_id, None)
+                removed += 1
+
+    if removed:
+        _refresh_queue_positions_locked()
+    return removed
+
+
+def _reaper_loop() -> None:
+    while not _reaper_stop.wait(config.JOB_REAPER_INTERVAL_SEC):
+        with _jobs_lock:
+            _prune_jobs_locked()
+
+
+def start_job_reaper() -> None:
+    global _reaper_started
+    if _reaper_started:
+        return
+    _reaper_started = True
+    threading.Thread(target=_reaper_loop, daemon=True, name="phaser-job-reaper").start()
+
+
+def stop_job_reaper() -> None:
+    _reaper_stop.set()
 
 
 def _refresh_queue_positions_locked() -> None:
@@ -42,6 +112,7 @@ def _try_dispatch() -> None:
             _running_count += 1
             _jobs[job_id]["status"] = "running"
             _jobs[job_id]["queue_position"] = None
+            _jobs[job_id]["started_at"] = _utcnow().isoformat()
             _refresh_queue_positions_locked()
             to_start.append((job_id, body))
 
@@ -55,6 +126,7 @@ def _try_dispatch() -> None:
 
 def create_job() -> str:
     job_id = str(uuid.uuid4())
+    now = _utcnow().isoformat()
     with _jobs_lock:
         _jobs[job_id] = {
             "id": job_id,
@@ -62,23 +134,30 @@ def create_job() -> str:
             "progress": 0.0,
             "queue_position": len(_pending) + 1,
             "queue_size": len(_pending) + 1,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": now,
+            "last_seen_at": now,
         }
+        _prune_jobs_locked()
     return job_id
 
 
 def get_job(job_id: str) -> dict[str, Any] | None:
     with _jobs_lock:
         job = _jobs.get(job_id)
+        if job:
+            job["last_seen_at"] = _utcnow().isoformat()
+        _prune_jobs_locked()
     return dict(job) if job else None
 
 
 def get_job_result(job_id: str) -> dict[str, Any] | None:
     with _jobs_lock:
         job = _jobs.get(job_id)
-    if not job or job.get("status") != "done":
-        return None
-    return job.get("result")
+        if job:
+            job["last_seen_at"] = _utcnow().isoformat()
+        if not job or job.get("status") != "done":
+            return None
+        return job.get("result")
 
 
 def delete_job(job_id: str) -> bool:
@@ -192,7 +271,7 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
                     "result": packed,
                     "raw_count": len(rows),
                     "phases_used": list(phase_names),
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "finished_at": _utcnow().isoformat(),
                 }
             )
     except Exception as exc:
@@ -204,6 +283,6 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
                     "status": "error",
                     "error": str(exc),
                     "queue_position": None,
-                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "finished_at": _utcnow().isoformat(),
                 }
             )
