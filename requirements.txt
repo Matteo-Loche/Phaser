@@ -1,4 +1,5 @@
 fastapi>=0.110
 uvicorn[standard]>=0.27
 numpy>=1.24
+scikit-image>=0.22
 phreeqpy

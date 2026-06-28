@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from itertools import combinations
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 
@@ -154,6 +154,7 @@ def pack_grid_results(
     rows: list[dict],
     *,
     db_path: str,
+    progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
     ph = np.linspace(params.ph_min, params.ph_max, params.ph_levels)
     pe = np.linspace(params.pe_min, params.pe_max, params.pe_levels)
@@ -162,8 +163,18 @@ def pack_grid_results(
     pe_lookup = {round(float(value), 12): i for i, value in enumerate(pe)}
 
     phase_elements = phase_element_map(db_path)
+    subset_list = subsets_to_pack(params.system_elements)
+    pack_steps = len(subset_list) + len(params.system_elements)
+    step = 0
+
+    def tick() -> None:
+        nonlocal step
+        step += 1
+        if progress_cb:
+            progress_cb(step, pack_steps)
+
     solid_subsets: dict[str, Any] = {}
-    for subset in subsets_to_pack(params.system_elements):
+    for subset in subset_list:
         key = subset_key(subset)
         solid_subsets[key] = pack_subset_grid(
             rows,
@@ -175,6 +186,7 @@ def pack_grid_results(
             pe_levels=params.pe_levels,
             ph_levels=params.ph_levels,
         )
+        tick()
 
     layers: dict[str, Any] = {
         "solid_subsets": solid_subsets,
@@ -190,6 +202,7 @@ def pack_grid_results(
             pe_levels=params.pe_levels,
             ph_levels=params.ph_levels,
         )
+        tick()
 
     default_key = subset_key(params.system_elements)
     default_layer = solid_subsets.get(default_key) or next(

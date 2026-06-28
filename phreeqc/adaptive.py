@@ -10,12 +10,12 @@ Strategy ("hunt and track boundaries"):
    new sub-grid points with PHREEQC.
 4. Upscale the rest of the diagram from the base grid (block fill, no compute).
 
-The result is packed at the finer resolution, so boundaries look much sharper
-while total PHREEQC runs stay far below a uniform fine grid.
+The display is built as vector polygons (see ``diagram/vectors.py``); only the
+base grid is packed for hover and per-point data.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from typing import Any, Callable
 
 import numpy as np
@@ -30,12 +30,6 @@ def fine_axis_levels(base_levels: int, factor: int) -> int:
     if base_levels <= 1 or factor <= 1:
         return max(1, base_levels)
     return (base_levels - 1) * factor + 1
-
-
-def category_label(row: GridPointResult) -> str:
-    if not row.converged:
-        return "none"
-    return row.dominant_solid or "aqueous"
 
 
 def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
@@ -168,17 +162,28 @@ def _clone_result_at(row: GridPointResult, ph: float, pe: float) -> GridPointRes
     )
 
 
+def _serialize_evaluated(
+    evaluated: dict[tuple[int, int], GridPointResult],
+) -> list[dict[str, Any]]:
+    return [
+        {"fi": fi, "fj": fj, "row": asdict(row)}
+        for (fi, fj), row in sorted(evaluated.items())
+    ]
+
+
 def run_adaptive_boundary_sweep(
     params: GridJobParams,
     *,
     max_workers: int | None = None,
     progress_cb=None,
     refine_factor: int | None = None,
-) -> tuple[list[GridPointResult], GridJobParams, dict[str, Any]]:
-    """Full base grid + boundary subdivision, returned at the finer resolution.
+) -> tuple[GridJobParams, dict[str, Any], list[GridPointResult], dict[str, Any] | None]:
+    """Full base grid + boundary subdivision.
 
-    Returns ``(fine_rows, pack_params, stats)`` where ``pack_params`` carries the
-    finer ``ph_levels``/``pe_levels`` for :func:`pack_grid_results`.
+    Returns ``(base_params, stats, base_rows, refine_bundle)`` where
+    ``base_params``/``base_rows`` are the user grid (packed for hover/data), and
+    ``refine_bundle`` (when refinement runs) carries the evaluated fine nodes
+    inside boundary cells, which the display packer turns into vector polygons.
     """
     base_ph, base_pe = build_grid(params)
     n_ph = params.ph_levels
@@ -235,8 +240,9 @@ def run_adaptive_boundary_sweep(
             "refine_factor": 1,
             "boundary_cells": len(cells),
             "n_boundary_evaluated": 0,
+            "display_mode": "grid",
         }
-        return base_rows, params, stats
+        return params, stats, base_rows, None
 
     n_ph_fine = fine_axis_levels(n_ph, factor)
     n_pe_fine = fine_axis_levels(n_pe, factor)
@@ -268,30 +274,12 @@ def run_adaptive_boundary_sweep(
         for (fi, fj), (ph, pe) in zip(to_eval, refine_points, strict=True):
             evaluated[(fi, fj)] = refine_by_key[_point_key(ph, pe)]
 
-    # Assemble the full fine grid; fill non-evaluated nodes from nearest base node.
-    fine_rows: list[GridPointResult] = []
-    filled = 0
-    for fj in range(n_pe_fine):
-        for fi in range(n_ph_fine):
-            row = evaluated.get((fi, fj))
-            if row is None:
-                bi = min(n_ph - 1, max(0, round(fi / factor)))
-                bj = min(n_pe - 1, max(0, round(fj / factor)))
-                row = _clone_result_at(
-                    base_result_ij[(bi, bj)],
-                    float(fine_ph[fi]),
-                    float(fine_pe[fj]),
-                )
-                filled += 1
-            fine_rows.append(row)
-
     report(n_refine, n_refine, "boundaries")
 
-    pack_params = replace(params, ph_levels=n_ph_fine, pe_levels=n_pe_fine)
     stats = {
         "n_evaluated": base_total + len(refine_points),
-        "n_total": n_ph_fine * n_pe_fine,
-        "n_filled": filled,
+        "n_total": base_total,
+        "n_filled": 0,
         "base_levels_ph": n_ph,
         "base_levels_pe": n_pe,
         "fine_levels_ph": n_ph_fine,
@@ -299,5 +287,12 @@ def run_adaptive_boundary_sweep(
         "refine_factor": factor,
         "boundary_cells": len(cells),
         "n_boundary_evaluated": len(refine_points),
+        "display_mode": "vectors",
     }
-    return fine_rows, pack_params, stats
+    refine_bundle = {
+        "factor": factor,
+        "evaluated": _serialize_evaluated(evaluated),
+        "fine_ph": fine_ph.tolist(),
+        "fine_pe": fine_pe.tolist(),
+    }
+    return params, stats, base_rows, refine_bundle

@@ -100,7 +100,7 @@ MAX_CONCURRENT_JOBS = int(os.environ.get("PHASER_MAX_CONCURRENT_JOBS", "1"))
 # When enabled, compute evaluates the full selected grid first, then subdivides
 # only the cells that straddle a phase boundary and evaluates those sub-cells.
 # The diagram is rendered at the finer (subdivided) resolution.
-ADAPTIVE_BOUNDARIES_DEFAULT = False
+ADAPTIVE_BOUNDARIES_DEFAULT = True
 # How many times each boundary cell edge is subdivided during refinement.
 ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"))
 # Max total PHREEQC evaluations allowed in adaptive mode (base grid + boundary

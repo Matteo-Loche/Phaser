@@ -60,7 +60,8 @@ PHASER/
 │   └── adaptive.py        # Adaptive boundary refinement (optional)
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
-│   └── packer.py          # Pack raw results into layered grids for the UI
+│   ├── packer.py          # Pack raw results into layered grids for the UI
+│   └── vectors.py         # Marching-squares vector polygons for adaptive display
 ├── services/              # Orchestration logic
 │   ├── compute.py         # FIFO compute queue + background grid jobs
 │   └── species.py         # Species picker suggestions
@@ -71,7 +72,8 @@ PHASER/
 ├── static/
 │   └── index.html         # Single-page web UI
 ├── tests/
-│   └── test_adaptive.py   # Adaptive boundary logic unit tests
+│   ├── test_adaptive.py   # Adaptive boundary logic unit tests
+│   └── test_vectors.py    # Vector display packing + species validation tests
 └── data/
     └── databases/
         └── generated/     # User-generated .dat files (+ optional .meta.json)
@@ -235,20 +237,19 @@ The optional **Adaptive boundaries** mode hunts and tracks phase boundaries so t
 1. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). Nothing is downsampled, so no phase region is missed.
 2. **Boundary detection (all layers)** — for each base point a composite signature is built across *every* plottable layer: each solid-element subset (e.g. Fe-only, Cu-only, Fe-Cu, …) and each aqueous-element map. A base cell is flagged when this signature differs across its four corners, so boundaries are refined even when only a sub-system layer (not the full-system solid predominance) changes there.
 3. **Subdivision** — only those boundary cells are subdivided by `ADAPTIVE_REFINE_FACTOR` (default 5). New sub-grid points are evaluated with **real PHREEQC runs** (not interpolation).
-4. **Upscale fill** — homogeneous interior cells are block-filled from the nearest base node (no extra compute).
+4. **Vector extraction** — a fine category grid is assembled (interior cells taken from the nearest base node, boundary cells from the refined results) and marching-squares contours (`scikit-image`) trace each region into smooth filled polygons plus thin boundary lines.
 
-The diagram is packed at the finer resolution. For a 100×100 base with factor 5, the output grid is up to **496×496** (≈246k cells) but typically only ~15–25k of those are real PHREEQC runs, versus ~246k for a uniform fine grid.
+For display, regions are delivered as **vector polygons and boundary lines**, so they stay crisp at any zoom. Each region polygon carries its area so enclosed regions are painted in the correct front-to-back order. Only the base grid is packed for hover and per-point data.
 
 **Result metadata** (`adaptive_stats` in the packed JSON):
 
 | Field | Meaning |
 |-------|---------|
 | `refine_factor` | Subdivision factor actually used (may be downgraded if `MAX_ADAPTIVE_POINTS` would be exceeded) |
-| `fine_levels_ph`, `fine_levels_pe` | Output grid dimensions |
-| `base_levels_ph`, `base_levels_pe` | Scout grid dimensions (same as the user's plot resolution) |
+| `fine_levels_ph`, `fine_levels_pe` | Fine category-grid dimensions used for contour extraction |
+| `base_levels_ph`, `base_levels_pe` | Base grid dimensions (same as the user's plot resolution) |
 | `boundary_cells` | Number of base cells flagged as straddling a boundary |
 | `n_evaluated` | Total PHREEQC runs (base + boundary sub-cells) |
-| `n_filled` | Fine-grid nodes filled from the base grid without PHREEQC |
 
 Limits (`config.py`):
 
@@ -256,6 +257,7 @@ Limits (`config.py`):
 |----------|---------|---------|
 | `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
 | `MAX_GRID_POINTS` | 40,000 | Hard cap on `ph_levels × pe_levels` for the **base** grid |
+| `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI and API default for adaptive mode |
 | `ADAPTIVE_REFINE_FACTOR` | 5 | Boundary-cell subdivision factor (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
 | `MAX_ADAPTIVE_POINTS` | 120,000 | Max total PHREEQC evaluations in adaptive mode; refine factor is downgraded only if exceeded (env `PHASER_MAX_ADAPTIVE_POINTS`) |
 | `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
@@ -374,6 +376,19 @@ While **running**, the progress bar and status text reflect the active phase:
 
 Adaptive mode deliberately **resets** the bar between the grid and boundaries phases so each PHREEQC pass reports 0→100% accurately. Post-compute stages (packing, download, cache, render) are tracked separately so a large JSON transfer or slow render does not look like a stuck compute.
 
+### Adaptive display vs hover
+
+When adaptive refinement is active (`refine_factor > 1`):
+
+| Layer | Source | Role |
+|-------|--------|------|
+| **Packed grid** (`layers` in JSON) | Base grid only (e.g. 100×100) | Hover, per-point data (future: concentrations), never shown as colors |
+| **Vector display** (`display` in JSON) | Marching-squares contours of the fine category grid | Smooth colored filled polygons and thin boundary lines |
+
+Each display layer is a list of region polygons (`{cat, area, x, y}`) plus a single `boundaries` polyline set. The browser sorts polygons by `area` (largest first) and fills each with `fill: "toself"`, so a region enclosed inside another is drawn on top; white `none` regions are painted explicitly.
+
+Uniform mode (or adaptive with `refine_factor = 1`) uses the base heatmap for both display and hover.
+
 ### Display and layout
 
 - **Solid predominance** vs **aqueous species (by element)** display modes.
@@ -415,7 +430,7 @@ Key fields in the JSON body:
 | `phases` | auto-discover | Selected solid phase names |
 | `system_elements` | from totals | Explicit element list for layers |
 | `db_id` | server default | Database from registry |
-| `adaptive_boundaries` | `false` | Enable adaptive boundary refinement |
+| `adaptive_boundaries` | `true` | Enable adaptive boundary refinement |
 | `adaptive_refine_factor` | server default (5) | Subdivision factor (optional; included in browser cache key) |
 
 ### Compute flow

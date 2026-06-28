@@ -42,7 +42,7 @@ class ComputeRequest(BaseModel):
     include_common_gases: bool = False
     gas_phases: list[str] | None = None
     max_workers: int | None = None
-    adaptive_boundaries: bool = False
+    adaptive_boundaries: bool = config.ADAPTIVE_BOUNDARIES_DEFAULT
     adaptive_refine_factor: int | None = None
 
 

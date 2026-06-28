@@ -536,7 +536,7 @@
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
     const LS_KEY = "phaseDiagramState.v7";
-    const RESULT_DB = "phaserResultCache.v2";
+    const RESULT_DB = "phaserResultCache.v8";
     const RESULT_STORE = "results";
     const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v1";
@@ -557,7 +557,7 @@
       ph: { min: 2, max: 12 },
       y: { axis: "pe", peMin: -10, peMax: 14 },
       gridLevels: 100,
-      adaptiveBoundaries: false,
+      adaptiveBoundaries: true,
       displayMode: "solid",
       solidSubsetElements: [],
       targetElement: "Fe",
@@ -571,6 +571,8 @@
       cfg: null,
       databases: [],
       catalog: [],          // discovered phases [{name, elements}]
+      allowedSpecies: [],   // species valid for the selected database
+      speciesSuggestions: [],
       lastResult: null,
       pollTimer: null,
       phaseSeq: 0,
@@ -599,13 +601,14 @@
     function displayYMax() {
       return state.y.axis === "eh" ? peToEh(state.y.peMax, state.tempC) : state.y.peMax;
     }
-    function plotPeAxis(result) {
-      return result.pe || result.y || [];
+    function plotPeAxis(source) {
+      return source.pe || source.y || [];
     }
-    function plotYValues(result) {
-      const pe = plotPeAxis(result);
+    function plotYValues(source, tempC) {
+      const pe = plotPeAxis(source);
+      const t = tempC ?? source.temp_c ?? state.tempC;
       return state.y.axis === "eh"
-        ? pe.map(p => peToEh(p, result.temp_c))
+        ? pe.map(p => peToEh(p, t))
         : pe;
     }
     function plotYLabel() {
@@ -693,8 +696,10 @@
       $("solidSubsetWrap").style.display = isElement ? "none" : "inline-flex";
     }
 
-    function activeLayer(result) {
-      const layers = result.layers || {};
+    function activeLayer(result, source = null) {
+      const src = source || result;
+      const layers = src.layers || {};
+      const elems = src.system_elements || result.system_elements || systemElements();
       if (state.displayMode === "element" && layers.elements) {
         const elem = state.targetElement;
         const layer = layers.elements[elem];
@@ -707,9 +712,33 @@
         const label = `Solids (${state.solidSubsetElements.sort().join(", ")}) + fluid species`;
         return { grid: layer.grid, names: layer.names, label, aqueous: layer.aqueous_names || [] };
       }
-      const fallback = solidSubsets[subsetKey(result.system_elements || [])];
+      const fallback = solidSubsets[subsetKey(elems)];
       if (fallback) return { grid: fallback.grid, names: fallback.names, label: "Solid predominance", aqueous: fallback.aqueous_names || [] };
-      return { grid: result.grid, names: result.phase_names, label: "Solid predominance", aqueous: [] };
+      return { grid: src.grid || result.grid, names: src.phase_names || result.phase_names, label: "Solid predominance", aqueous: [] };
+    }
+
+    function activeVectorLayer(result) {
+      const layers = result.display?.layers || {};
+      const elems = result.system_elements || systemElements();
+      if (state.displayMode === "element" && layers.elements) {
+        const elem = state.targetElement;
+        const layer = layers.elements[elem];
+        if (layer) return { ...layer, label: `${elem} aqueous species`, aqueous: [] };
+      }
+      const key = subsetKey(state.solidSubsetElements);
+      const solidSubsets = layers.solid_subsets || {};
+      const layer = solidSubsets[key];
+      if (layer) {
+        const label = `Solids (${state.solidSubsetElements.sort().join(", ")}) + fluid species`;
+        return { ...layer, label, aqueous: layer.aqueous_names || [] };
+      }
+      const fallback = solidSubsets[subsetKey(elems)];
+      if (fallback) return { ...fallback, label: "Solid predominance", aqueous: fallback.aqueous_names || [] };
+      return null;
+    }
+
+    function usesVectorDisplay(result) {
+      return result.display?.mode === "vectors";
     }
     function setStatus(msg, kind = "") {
       const el = $("statusMsg");
@@ -888,9 +917,24 @@
       sel.value = state.units || runtime.cfg?.default_units || "mmol/kgw";
     }
 
+    function isAllowedSpecies(name) {
+      const sp = (name || "").trim();
+      if (!sp) return false;
+      const allowed = runtime.allowedSpecies || [];
+      return allowed.some(a => a.toLowerCase() === sp.toLowerCase());
+    }
+
     function addSpecies(name) {
       const sp = (name || "").trim();
       if (!sp) return;
+      if (!runtime.allowedSpecies?.length) {
+        setStatus("Load a database first, then add species.", "err");
+        return;
+      }
+      if (!isAllowedSpecies(sp)) {
+        setStatus(`${sp} is not in the selected database. Choose from the list.`, "err");
+        return;
+      }
       if (state.totals.some(t => t.species.toLowerCase() === sp.toLowerCase())) {
         setStatus(`${sp} already added.`, "warn");
         return;
@@ -1011,12 +1055,10 @@
       const total = n * n;
       if (state.adaptiveBoundaries) {
         const factor = adaptiveFactor();
-        const fine = (n - 1) * factor + 1;
         const est = estimateAdaptiveRuns(n);
         $("gridMeta").innerHTML =
-          `Base ${n} × ${n}, boundaries refined ${factor}× → up to ${fine} × ${fine} output`
+          `Base ${n} × ${n} grid · boundary cells refined ${factor}× (vector display)`
           + ` · ~<b>${est.toLocaleString()}</b> PHREEQC runs`
-          + ` <span style="color:var(--muted)">(vs ${(fine * fine).toLocaleString()} for a uniform fine grid)</span>`
           + (est > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
       } else {
         $("gridMeta").innerHTML = `${n} × ${n} = <b>${total.toLocaleString()}</b> PHREEQC runs`
@@ -1218,20 +1260,35 @@
 
     function fillSpeciesOptions() {
       const dl = $("speciesOptions");
-      const sug = runtime.speciesSuggestions || runtime.cfg?.species_suggestions || [];
+      const sug = runtime.allowedSpecies?.length
+        ? runtime.allowedSpecies
+        : (runtime.speciesSuggestions || runtime.cfg?.species_suggestions || []);
       dl.innerHTML = sug.map(s => `<option value="${s}"></option>`).join("");
     }
 
+    function pruneInvalidSpecies() {
+      if (!runtime.allowedSpecies?.length) return;
+      const before = state.totals.length;
+      state.totals = state.totals.filter(t => isAllowedSpecies(t.species));
+      if (state.totals.length < before) {
+        commit({ totalsChanged: true });
+        setStatus("Removed species not in the selected database.", "warn");
+      }
+    }
+
     async function reloadSpeciesSuggestions() {
-      if (!state.dbId) return;
+      if (!state.dbId) {
+        runtime.allowedSpecies = [];
+        runtime.speciesSuggestions = [];
+        fillSpeciesOptions();
+        return;
+      }
       try {
         const data = await api(`/api/elements?db_id=${encodeURIComponent(state.dbId)}`);
-        const known = runtime.cfg?.known_totals || [];
-        const merged = [];
-        known.forEach(s => { if (!merged.includes(s)) merged.push(s); });
-        (data.elements || []).forEach(s => { if (!merged.includes(s)) merged.push(s); });
-        runtime.speciesSuggestions = merged;
+        runtime.allowedSpecies = data.species_suggestions || data.elements || [];
+        runtime.speciesSuggestions = runtime.allowedSpecies;
         fillSpeciesOptions();
+        pruneInvalidSpecies();
       } catch (e) {
         /* keep existing suggestions */
       }
@@ -1386,7 +1443,9 @@
         result.compute_mode === "adaptive" && result.adaptive_stats
           ? `Done — ${result.adaptive_stats.n_evaluated.toLocaleString()} PHREEQC runs`
             + `, boundaries refined ${result.adaptive_stats.refine_factor}×`
-            + ` (${result.adaptive_stats.fine_levels_ph}×${result.adaptive_stats.fine_levels_pe} output)`
+            + (usesVectorDisplay(result)
+              ? ` · ${result.adaptive_stats.base_levels_ph}×${result.adaptive_stats.base_levels_pe} base grid + vector display`
+              : ` · ${result.adaptive_stats.base_levels_ph}×${result.adaptive_stats.base_levels_pe} grid`)
             + ` · cached in this browser.`
           : `Done — ${st.phases_used?.length ?? "?"} phases evaluated and cached in this browser.`,
         "ok"
@@ -1490,9 +1549,10 @@
           }
           if (st.status === "running") {
             if (st.phase === "packing") {
-              bar.removeAttribute("value");
-              setStatus("Packing diagram…");
-              setLogoComputing(true, "Packing diagram…");
+              bar.value = Math.round((st.progress || 0) * 100);
+              const msg = `Packing diagram… ${bar.value}%`;
+              setStatus(msg);
+              setLogoComputing(true, msg);
               return;
             }
             bar.value = Math.round((st.progress || 0) * 100);
@@ -1660,6 +1720,55 @@
       return anns;
     }
 
+    function mapPlotY(values, tempC) {
+      if (state.y.axis === "eh") return values.map(v => (v == null ? null : peToEh(v, tempC)));
+      return values;
+    }
+
+    function vectorFillTraces(layer, aqueousSet, tempC) {
+      const names = layer.names || [];
+      const polygons = [...(layer.polygons || [])].sort((a, b) => (b.area || 0) - (a.area || 0));
+      return polygons.map(poly => {
+        const cat = poly.cat;
+        const name = names[cat] ?? "?";
+        let fill;
+        if (name === "none") fill = NONE_COLOR;
+        else if (aqueousSet && aqueousSet.has(name)) fill = AQ_GREY;
+        else fill = colorForPhase(name);
+        return {
+          type: "scatter", mode: "lines", fill: "toself",
+          x: poly.x, y: mapPlotY(poly.y, tempC),
+          fillcolor: fill,
+          line: { width: 0, color: fill },
+          hoverinfo: "skip",
+          showlegend: false,
+        };
+      });
+    }
+
+    function boundaryLineTrace(boundaries, tempC) {
+      if (!boundaries?.x?.length) return null;
+      return {
+        type: "scattergl", mode: "lines",
+        x: boundaries.x,
+        y: mapPlotY(boundaries.y, tempC),
+        line: { color: "#222", width: 0.65 },
+        hoverinfo: "skip",
+        showlegend: false,
+      };
+    }
+
+    function adaptiveStatusSuffix(result) {
+      if (result.compute_mode !== "adaptive" || !result.adaptive_stats) return "";
+      const s = result.adaptive_stats;
+      const mode = usesVectorDisplay(result)
+        ? `vector display · ${s.base_levels_ph}×${s.base_levels_pe} hover grid`
+        : `${s.base_levels_ph}×${s.base_levels_pe} grid`;
+      return ` · adaptive ${s.n_evaluated.toLocaleString()} runs (${s.refine_factor}× boundaries, ${mode})`;
+    }
+
+    const INVISIBLE_COLORSCALE = [[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]];
+
     function drawDiagram(result) {
       runtime.lastResult = result;
       $("plotEmpty").style.display = "none";
@@ -1667,6 +1776,8 @@
       renderSolidSubsetBoxes(result);
       syncDisplayControls();
 
+      const vectorMode = usesVectorDisplay(result);
+      const vectorLayer = vectorMode ? activeVectorLayer(result) : null;
       const layer = activeLayer(result);
       const x = result.ph;
       const y = plotYValues(result);
@@ -1677,19 +1788,42 @@
       const plotResult = { ph: x, y, grid, phase_names: names, y_label: yLabel };
       const n = names.length;
       const traces = [];
+      const hoverTpl = `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<extra></extra>`;
+      const baseHoverTpl = `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<br><span style="color:#666;font-size:0.9em">base grid sample</span><extra></extra>`;
 
-      if (!state.labelsOnly) {
+      if (vectorMode && vectorLayer) {
+        if (!state.labelsOnly) traces.push(...vectorFillTraces(vectorLayer, aqueousSet, result.temp_c));
+        if (state.showBoundaries) {
+          const bt = boundaryLineTrace(vectorLayer.boundaries, result.temp_c);
+          if (bt) traces.push(bt);
+        }
+      } else if (!state.labelsOnly) {
         traces.push({
           type: "heatmap", x, y,
           z: grid.map(r => r.map(v => (v < 0 ? null : v))),
           zmin: -0.5, zmax: Math.max(n - 0.5, 0.5),
           colorscale: buildDiscreteColorscale(names, aqueousSet),
           showscale: false, xgap: 0, ygap: 0,
-          customdata: grid.map(r => r.map(v => (v < 0 ? "—" : names[v]))),
-          hovertemplate: `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<extra></extra>`,
+          hoverinfo: "skip",
         });
+        if (state.showBoundaries) traces.push(boundaryTrace(plotResult));
+      } else if (state.showBoundaries && !vectorMode) {
+        traces.push(boundaryTrace(plotResult));
       }
-      if (state.showBoundaries) traces.push(boundaryTrace(plotResult));
+
+      // Invisible base-grid hover layer (always on top for mouse capture).
+      const hGrid = layer.grid;
+      const hNames = layer.names;
+      const hn = hNames.length;
+      traces.push({
+        type: "heatmap", x, y,
+        z: hGrid.map(r => r.map(v => (v < 0 ? -1 : v))),
+        zmin: -0.5, zmax: Math.max(hn - 0.5, 0.5),
+        colorscale: INVISIBLE_COLORSCALE,
+        showscale: false, xgap: 0, ygap: 0,
+        customdata: hGrid.map(r => r.map(v => (v < 0 ? "—" : hNames[v]))),
+        hovertemplate: vectorMode ? baseHoverTpl : hoverTpl,
+      });
 
       const ax = {
         showgrid: false, zeroline: false, mirror: true, ticks: "outside", linecolor: "#222",
@@ -1711,11 +1845,9 @@
         responsive: true, displaylogo: false,
         toImageButtonOptions: { format: "png", filename: "phase_diagram", scale: 2 },
       });
-      const mode = result.compute_mode === "adaptive" && result.adaptive_stats
-        ? ` · adaptive ${result.adaptive_stats.n_evaluated.toLocaleString()} runs (${result.adaptive_stats.refine_factor}× boundaries)`
-        : "";
+      const mode = adaptiveStatusSuffix(result);
       $("plotMeta").textContent =
-        `${result.n_converged}/${result.n_total} converged · ${layer.label} · T=${result.temp_c} °C${mode}`;
+        `${result.n_converged}/${result.n_total} converged · ${(vectorLayer || layer).label} · T=${result.temp_c} °C${mode}`;
     }
 
     async function restoreSessionResult() {
