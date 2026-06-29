@@ -1,4 +1,10 @@
-"""Pack raw PHREEQC grid results into layered predominance diagrams."""
+"""Pack raw PHREEQC grid results into layered predominance diagrams.
+
+Category labels for solid-subset layers come from ``category_solid_subset``. When
+a phase name is also reported as an aqueous species, the precipitated solid is
+labelled ``<name>(s)`` so it stays distinct from the aqueous complex (see
+``solid_aqueous_collisions`` and ``solid_label``).
+"""
 from __future__ import annotations
 
 from itertools import combinations
@@ -8,6 +14,56 @@ import numpy as np
 
 from ..phreeqc.engine import GridJobParams
 from .phases import phase_element_map
+
+
+SOLID_SUFFIX = "(s)"
+
+
+def solid_label(phase: str, collision_names: frozenset[str]) -> str:
+    """Display label for a precipitated solid.
+
+    When a phase name is also used by an aqueous species (e.g. ``FeO``), the
+    solid is written ``FeO(s)`` so it stays a distinct category from the aqueous
+    complex of the same name. Non-colliding solids keep their bare phase name.
+    """
+    return f"{phase}{SOLID_SUFFIX}" if phase in collision_names else phase
+
+
+def phase_from_label(label: str) -> str:
+    """Phase name behind a category label (strips the solid ``(s)`` suffix)."""
+    return label[: -len(SOLID_SUFFIX)] if label.endswith(SOLID_SUFFIX) else label
+
+
+def label_is_solid(
+    label: str,
+    solid_set: set[str] | frozenset[str],
+    collision_names: frozenset[str],
+) -> bool:
+    """Whether a category label denotes a precipitated solid (not an aqueous complex).
+
+    Structural, not a heuristic: a solid is either ``<phase>(s)`` (a colliding
+    name) or a bare phase name that is not a collision. A bare colliding name
+    therefore always means the aqueous species.
+    """
+    if label.endswith(SOLID_SUFFIX) and label[: -len(SOLID_SUFFIX)] in solid_set:
+        return True
+    return label in solid_set and label not in collision_names
+
+
+def solid_aqueous_collisions(rows: list[dict], job_phases: tuple[str, ...]) -> frozenset[str]:
+    """Phase names that also occur as aqueous species names across the results.
+
+    Derived purely from the job's phase list and the species PHREEQC reports, so
+    it is database- and system-agnostic (no hardcoded names).
+    """
+    solid_set = set(job_phases)
+    aq_names: set[str] = set()
+    for row in rows:
+        for sp in (row.get("dominant_aq_by_element") or {}).values():
+            if sp and sp not in ("none", "aqueous"):
+                aq_names.add(sp)
+        aq_names.update((row.get("aq_molality_by_species") or {}).keys())
+    return frozenset(solid_set & aq_names)
 
 
 def subset_key(subset: tuple[str, ...]) -> str:
@@ -54,6 +110,7 @@ def category_solid_subset(
     *,
     phase_elements: dict[str, frozenset[str]],
     job_phases: tuple[str, ...],
+    collision_names: frozenset[str] = frozenset(),
 ) -> str:
     from ..db.parser import is_gas
 
@@ -68,7 +125,7 @@ def category_solid_subset(
     if finite:
         phase, value = max(finite.items(), key=lambda kv: kv[1])
         if value >= 0.0:
-            return phase
+            return solid_label(phase, collision_names)
     return dominant_aq_in_subset(row, subset_set)
 
 
@@ -119,12 +176,14 @@ def pack_subset_grid(
     pe_lookup: dict[float, int],
     pe_levels: int,
     ph_levels: int,
+    collision_names: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     categories: set[str] = set()
     for row in rows:
         categories.add(
             category_solid_subset(
-                row, subset, phase_elements=phase_elements, job_phases=job_phases
+                row, subset, phase_elements=phase_elements,
+                job_phases=job_phases, collision_names=collision_names,
             )
         )
     names = sorted(categories)
@@ -136,11 +195,12 @@ def pack_subset_grid(
         if ix is None or iy is None:
             continue
         cat = category_solid_subset(
-            row, subset, phase_elements=phase_elements, job_phases=job_phases
+            row, subset, phase_elements=phase_elements,
+            job_phases=job_phases, collision_names=collision_names,
         )
         grid[iy, ix] = index.get(cat, -1)
     solid_set = set(job_phases)
-    aqueous_names = [n for n in names if n not in solid_set]
+    aqueous_names = [n for n in names if not label_is_solid(n, solid_set, collision_names)]
     return {
         "names": names,
         "grid": grid.tolist(),
@@ -167,6 +227,10 @@ def pack_grid_results(
     pack_steps = len(subset_list) + len(params.system_elements)
     step = 0
 
+    collisions = frozenset(params.solid_aqueous_collisions) or solid_aqueous_collisions(
+        rows, params.phases
+    )
+
     def tick() -> None:
         nonlocal step
         step += 1
@@ -185,6 +249,7 @@ def pack_grid_results(
             pe_lookup=pe_lookup,
             pe_levels=params.pe_levels,
             ph_levels=params.ph_levels,
+            collision_names=collisions,
         )
         tick()
 

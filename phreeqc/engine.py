@@ -30,6 +30,10 @@ class GridJobParams:
     aq_species_molality: tuple[str, ...] = ()
     # Override TOP_AQ_SPECIES_PER_ELEMENT for this job (trace uses fewer).
     top_aq_species_per_element: int | None = None
+    # Phase names that also occur as aqueous species names in this job's results.
+    # The solid form of such a name is labelled "<name>(s)" so solid and aqueous
+    # categories stay distinct everywhere (categoriser, tracer, display).
+    solid_aqueous_collisions: tuple[str, ...] = ()
 
 
 @dataclass

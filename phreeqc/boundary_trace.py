@@ -5,7 +5,8 @@ cells emit convex fill regions bounded by oriented lines: a genuine triple point
 (three crossings) or a diagonal band (four crossings). 2-category saddles (four
 edge crossings) split on two crossing lines. Unresolved 4-category cells and
 lost brackets share one sampled sub-grid per cell. Stability limits (converged
-vs failed) are traced separately.
+vs failed) are traced separately. Solid/aqueous category pairs that share a
+name are disambiguated upstream via the ``(s)`` suffix (see ``diagram.packer``).
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from scipy.optimize import brentq, least_squares, root
 from skimage.measure import find_contours
 
 from .. import config
+from ..diagram.packer import label_is_solid, phase_from_label
 from ..diagram.phases import phase_element_map
 from .engine import GridJobParams, GridPointResult, evaluate_point, init_phreeqc
 from .sweep import _point_key
@@ -85,6 +87,9 @@ class PointEvaluator:
         # Solid phases identify solid<->aqueous edges (where the aqueous side is
         # labelled by its dominant species, not the literal string "aqueous").
         self.solid_phases: frozenset[str] = frozenset(params.phases)
+        # Phase names shared with an aqueous species; their solid form is the
+        # "(s)"-suffixed label, so a bare name always denotes the aqueous side.
+        self.collisions: frozenset[str] = frozenset(params.solid_aqueous_collisions)
 
     def crossing_t_lookup(
         self, i: int, j: int, edge: int, cat_a: str, cat_b: str
@@ -127,6 +132,7 @@ def layer_specs(params: GridJobParams, db_path: str) -> list[LayerSpec]:
 
     phase_elements = phase_element_map(db_path)
     job_phases = params.phases
+    collisions = frozenset(params.solid_aqueous_collisions)
     specs: list[LayerSpec] = []
 
     for subset in subsets_to_pack(params.system_elements):
@@ -134,7 +140,8 @@ def layer_specs(params: GridJobParams, db_path: str) -> list[LayerSpec]:
 
         def solid_cat(row: dict, subset: tuple[str, ...] = subset) -> str:
             return category_solid_subset(
-                row, subset, phase_elements=phase_elements, job_phases=job_phases
+                row, subset, phase_elements=phase_elements,
+                job_phases=job_phases, collision_names=collisions,
             )
 
         specs.append(LayerSpec(layer_id=f"solid:{key}", cat_fn=solid_cat))
@@ -207,9 +214,10 @@ def _edge_coords(
 
 def _si_scalar(row: dict, cat_a: str, cat_b: str) -> float | None:
     si = row.get("si") or {}
-    if cat_a not in si or cat_b not in si:
+    pa, pb = phase_from_label(cat_a), phase_from_label(cat_b)
+    if pa not in si or pb not in si:
         return None
-    va, vb = si[cat_a], si[cat_b]
+    va, vb = si[pa], si[pb]
     if va != va or vb != vb:
         return None
     return float(va) - float(vb)
@@ -237,41 +245,17 @@ def _convergence_scalar(row: dict) -> float:
 def _single_si_scalar(row: dict, solid: str) -> float | None:
     """SI of one solid (>0 stable, <0 dissolved) -- the solid/aqueous edge."""
     si = row.get("si") or {}
-    v = si.get(solid)
+    v = si.get(phase_from_label(solid))
     if v is None or v != v:
         return None
     return float(v)
-
-
-def _cat_is_solid_here(
-    cat: str, solid_phases: frozenset[str], row: dict | None
-) -> bool:
-    """Is ``cat`` acting as a precipitated solid (not an aqueous complex)?
-
-    A name like ``CuCO3`` is both a solid phase *and* a neutral aqueous
-    complex. The categoriser only labels a corner with the solid when its SI is
-    non-negative there; below saturation the same name denotes the dominant
-    aqueous species. We mirror that decision using the corner's SI so the right
-    scalar (solubility ``SI=0`` vs. log-molality ratio) is chosen. Falls back to
-    name membership when no row context is available.
-    """
-    if cat not in solid_phases:
-        return False
-    if row is None:
-        return True
-    si = row.get("si") or {}
-    v = si.get(cat)
-    if v is None or v != v:
-        return False
-    return float(v) >= 0.0
 
 
 def _resolve_pair_scalar(
     cat_a: str,
     cat_b: str,
     solid_phases: frozenset[str] = frozenset(),
-    row_a: dict | None = None,
-    row_b: dict | None = None,
+    collisions: frozenset[str] = frozenset(),
 ) -> tuple[Callable[[dict], float | None] | None, str]:
     """Continuous scalar whose zero is the boundary between two categories.
 
@@ -281,14 +265,14 @@ def _resolve_pair_scalar(
     converged<->failed edge bounding ``none`` regions (the stability limit,
     reused so fills stay smooth).
 
-    ``row_a``/``row_b`` are the corner rows where ``cat_a``/``cat_b`` are the
-    labels; when given they disambiguate names shared by a solid phase and an
-    aqueous complex (e.g. ``CuCO3``).
+    Solid vs aqueous is decided structurally from the label (the ``(s)`` suffix
+    on names shared with an aqueous complex), so names like ``FeO`` never need a
+    saturation-index guess.
     """
     if cat_a == "none" or cat_b == "none":
         return _convergence_scalar, "conv"
-    a_solid = _cat_is_solid_here(cat_a, solid_phases, row_a)
-    b_solid = _cat_is_solid_here(cat_b, solid_phases, row_b)
+    a_solid = label_is_solid(cat_a, solid_phases, collisions)
+    b_solid = label_is_solid(cat_b, solid_phases, collisions)
     if a_solid and not b_solid:  # solid <-> aqueous solubility edge
         return (lambda row: _single_si_scalar(row, cat_a)), "aq_solid"
     if b_solid and not a_solid:
@@ -306,7 +290,8 @@ def collect_trace_species(
     cells: list[tuple[int, int]],
     specs: list[LayerSpec],
 ) -> tuple[str, ...]:
-    solid_set = set(params.phases)
+    solid_set = frozenset(params.phases)
+    collisions = frozenset(params.solid_aqueous_collisions)
     names: set[str] = set()
     for key in base_ij:
         r = base_ij[key]
@@ -318,8 +303,11 @@ def collect_trace_species(
     for spec in specs:
         for i, j in cells:
             for cat in _corner_cats(i, j, spec.cat_fn, base_ij):
-                if cat not in ("none", "aqueous") and cat not in solid_set:
-                    names.add(cat)
+                if cat in ("none", "aqueous"):
+                    continue
+                if label_is_solid(cat, solid_set, collisions):
+                    continue
+                names.add(cat)
     return tuple(sorted(names))
 
 
@@ -362,7 +350,7 @@ def _find_crossing_brentq(
     row0 = evaluator.eval(ph0, pe0)
     row1 = evaluator.eval(ph1, pe1)
     scalar_fn, kind = _resolve_pair_scalar(
-        cat_a, cat_b, evaluator.solid_phases, row0, row1
+        cat_a, cat_b, evaluator.solid_phases, evaluator.collisions
     )
     if scalar_fn is None:
         return None
@@ -649,15 +637,13 @@ def _find_interior_point_2d(
     *,
     tol: float,
     stats: TraceStats | None = None,
-    cat_rows: dict[str, dict] | None = None,
 ) -> tuple[float, float] | None:
     """Locate a point where two independent pair-scalars vanish (triple point)."""
-    cr = cat_rows or {}
     fn_ab, _ = _resolve_pair_scalar(
-        cat_a, cat_b, evaluator.solid_phases, cr.get(cat_a), cr.get(cat_b)
+        cat_a, cat_b, evaluator.solid_phases, evaluator.collisions
     )
     fn_ac, _ = _resolve_pair_scalar(
-        cat_a, cat_c, evaluator.solid_phases, cr.get(cat_a), cr.get(cat_c)
+        cat_a, cat_c, evaluator.solid_phases, evaluator.collisions
     )
     if fn_ab is None or fn_ac is None:
         return None
@@ -962,18 +948,6 @@ def _trace_triple_cell(
         sum(w[0] for _, w in crossings.values()) / len(crossings),
         sum(w[1] for _, w in crossings.values()) / len(crossings),
     )
-    # Representative corner row per category, so the solid/aqueous role of a
-    # shared name (e.g. CuCO3) is resolved from its SI like the categoriser does.
-    corner_world = (
-        (float(base_ph[i]), float(base_pe[j])),
-        (float(base_ph[i + 1]), float(base_pe[j])),
-        (float(base_ph[i + 1]), float(base_pe[j + 1])),
-        (float(base_ph[i]), float(base_pe[j + 1])),
-    )
-    cat_rows: dict[str, dict] = {}
-    for k, cat in enumerate(corners):
-        if cat not in cat_rows:
-            cat_rows[cat] = evaluator.eval(*corner_world[k])
     T_world: tuple[float, float] | None = None
     # Try each category as the reference for the 2x2 scalar system.
     for ref, other_a, other_b in (
@@ -993,7 +967,6 @@ def _trace_triple_cell(
             x0,
             tol=tol,
             stats=stats,
-            cat_rows=cat_rows,
         )
         if T_world is not None:
             break

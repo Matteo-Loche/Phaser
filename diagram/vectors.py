@@ -22,7 +22,13 @@ _FIELD_PAD = -1.0e6  # border pad: closes regions touching the plot frame
 
 from ..phreeqc.adaptive import fine_axis_levels
 from ..phreeqc.engine import GridJobParams
-from .packer import category_solid_subset, subset_key, subsets_to_pack
+from .packer import (
+    category_solid_subset,
+    label_is_solid,
+    solid_aqueous_collisions,
+    subset_key,
+    subsets_to_pack,
+)
 from .phases import phase_element_map
 
 
@@ -279,7 +285,7 @@ def _pack_one_layer(
     recs = _parse_cell_lines(cell_lines, name_index)
     cell_regions = (
         layer_nodes.get("cell_regions")
-        or layer_nodes.get("cell_wedges")  # legacy trace bundle key
+        or layer_nodes.get("cell_wedges")  # trace bundles before v20
         or []
     )
     regions_by_cat = _parse_cell_regions(cell_regions, name_index)
@@ -377,6 +383,10 @@ def pack_traced_display(
 
     phase_elements = phase_element_map(db_path)
     job_phases = params.phases
+    solid_set = set(job_phases)
+    collisions = frozenset(params.solid_aqueous_collisions) or solid_aqueous_collisions(
+        base_rows, job_phases
+    )
     subset_list = subsets_to_pack(params.system_elements)
     pack_steps = len(subset_list) + len(params.system_elements)
     step = 0
@@ -405,10 +415,10 @@ def pack_traced_display(
 
         def cat_fn(row: dict, subset: tuple[str, ...] = subset) -> str:
             return category_solid_subset(
-                row, subset, phase_elements=phase_elements, job_phases=job_phases
+                row, subset, phase_elements=phase_elements,
+                job_phases=job_phases, collision_names=collisions,
             )
 
-        solid_set = set(job_phases)
         _layer = trace_layers.get(f"solid:{key}", {})
         names_preview = sorted(
             {cat_fn(r) for r in base_rows}
@@ -420,7 +430,10 @@ def pack_traced_display(
             cat_fn=cat_fn,
             extra={
                 "elements": list(subset),
-                "aqueous_names": [n for n in names_preview if n not in solid_set],
+                "aqueous_names": [
+                    n for n in names_preview
+                    if not label_is_solid(n, solid_set, collisions)
+                ],
             },
             **common,
         )

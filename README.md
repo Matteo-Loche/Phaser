@@ -61,7 +61,7 @@ PHASER/
 │   └── boundary_trace.py  # Root-finding tracer (brentq, triple/band regions, fallback)
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
-│   ├── packer.py          # Pack raw results into layered grids for the UI
+│   ├── packer.py          # Pack grid results; solid/aqueous name collision labels
 │   └── vectors.py         # Signed-distance vector display from traced boundaries
 ├── services/              # Orchestration logic
 │   ├── compute.py         # FIFO compute queue + background grid jobs
@@ -238,21 +238,22 @@ The optional **Adaptive boundaries** mode evaluates the full user-selected grid,
 **Pipeline:**
 
 1. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
-2. **Boundary detection** — for each base point a composite signature is built across *every* plottable layer: each solid-element subset (e.g. Fe-only, Cu-only, Fe–Cu, …) and each aqueous-element map. A base cell is flagged when this signature differs across its four corners.
-3. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with dynamic chunking). For each layer and cell:
+2. **Collision detection** — `solid_aqueous_collisions` scans the base results for phase names that also appear as aqueous species; colliding solids are labelled `"<name>(s)"` on `GridJobParams` before tracing.
+3. **Boundary detection** — for each base point a composite signature is built across *every* plottable layer (using the suffixed solid labels). A base cell is flagged when this signature differs across its four corners.
+4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with dynamic chunking). For each layer and cell:
    - **2-category cells** — `scipy.optimize.brentq` along cell edges locates crossings of a continuous scalar whose zero is the boundary:
      - solid↔solid: `SI_A − SI_B`
      - aqueous↔aqueous: `log(m_A) − log(m_B)` (absent species floored so corners always bracket)
-     - solid↔aqueous solubility: `SI_solid = 0` (aqueous side labelled by its dominant species name)
+     - solid↔aqueous solubility: `SI_solid = 0` (aqueous side uses the bare species name; solid side uses `"<name>(s)"` when the name collides)
      - converged↔failed (`none`): convergence scalar (+1 / −1) for the **stability limit**
-   - **Solid/aqueous name disambiguation** — when a species name is shared by a solid phase and an aqueous complex (e.g. `CuCO3`), the role at each corner is decided from that corner's SI (≥ 0 ⇒ precipitated solid), matching the categoriser.
+   - **Solid/aqueous scalar choice** — the tracer reads solid vs aqueous from the category label (`label_is_solid` in `packer.py`): `"<name>(s)"` ⇒ solid, bare colliding name ⇒ aqueous. No per-corner SI guess.
    - **3-category cells** — the cell is split into **convex fill regions**, each bounded by oriented lines (a category fills where every line's signed distance is ≥ 0). Two cases arise:
      - *Triple point* (three crossings): a 2D root (`scipy.optimize.root` / `least_squares`), or the crossing centroid when one scalar is the convergence step (or the solver clamps to an edge), gives an interior junction `T`. Rays from `T` to the three crossings — plus a virtual ray toward the un-crossed same-category edge — cut the cell into angular sectors, one convex cone per corner; the category sharing two corners gets two sectors (joined by union).
      - *Band* (four crossings): the doubled category sits on the diagonal, so each single-corner category is the half-plane cut off by the line joining its two adjacent crossings, and the doubled category is the convex strip between both cuts.
    - **2-category saddles** (four edge crossings) — two intersecting dividing lines.
    - **Fallback** — unresolved cells (4+ categories, lost brackets) share one local `(factor+1)²` sub-grid evaluation per cell across all layers, then marching squares on the sampled category field.
    - **Crossing cache** — identical edge crossings are cached per worker across layers that share geometry.
-4. **Vector display** (`diagram/vectors.py`) — per layer, a fine categorical grid is assembled from base data, traced overrides, and exact dividing-line geometry. Fills come from **signed-distance fields** whose zero contour matches the traced segments: straight lines for 2-category cells, and per-region line bounds (min of half-planes) for triple/band cells, with disconnected pieces of one category combined by union. Boundary polylines are taken directly from the trace bundle. A despeckle pass removes isolated pixels from fallback regions.
+5. **Vector display** (`diagram/vectors.py`) — per layer, a fine categorical grid is assembled from base data, traced overrides, and exact dividing-line geometry. Fills come from **signed-distance fields** whose zero contour matches the traced segments: straight lines for 2-category cells, and per-region line bounds (min of half-planes) for triple/band cells, with disconnected pieces of one category combined by union. Boundary polylines are taken directly from the trace bundle. A despeckle pass removes isolated pixels from fallback regions.
 
 Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SPECIES`, default 4) while keeping explicit `-mol` output for species seen on boundaries.
 
@@ -324,10 +325,13 @@ Before compute:
 After the sweep, each grid point has SI values and aqueous dominance data. The packer:
 
 1. Builds axis arrays (pH, pe or Eh).
-2. For each **element subset** of the system, determines the **dominant solid** (highest SI ≥ 0 among eligible phases) or falls back to the dominant aqueous species.
-3. Produces integer category grids mapping each `(pH, y)` cell to a phase/species index.
-4. Builds **layers**:
-   - `solid_subsets` — predominance among solids + aqueous fallback per subset
+2. For each **element subset** of the system, assigns a category per point:
+   - **Dominant solid** — highest SI ≥ 0 among eligible phases in that subset.
+   - **Otherwise** — dominant aqueous species in the subset (highest molality among elements in the subset).
+3. **Solid/aqueous name collisions** — some databases define a solid phase and an aqueous complex with the same name (e.g. `FeO`, `CuCO3`). After the base sweep, `solid_aqueous_collisions` finds phase names that also appear as aqueous species in the results. The precipitated solid is then labelled `"<name>(s)"` (e.g. `FeO(s)`); the aqueous complex keeps the bare name. This is structural (derived from phases vs USER_PUNCH species), works for any database, and is stored on `GridJobParams.solid_aqueous_collisions` for tracing and display.
+4. Produces integer category grids mapping each `(pH, y)` cell to a phase/species index.
+5. Builds **layers**:
+   - `solid_subsets` — predominance among solids + aqueous fallback per subset (`aqueous_names` lists categories rendered grey in solid view)
    - `elements` — per-element aqueous species maps
 
 The UI (`static/index.html`) renders these layers as colored regions with Plotly. In adaptive mode, **display** polygons come from `diagram/vectors.py` instead; the packed grids remain for hover only.
@@ -361,7 +365,7 @@ User settings (database, species, axes, phase selection, plot resolution, adapti
 | `localStorage` | `phaserLayout.v1` | Sidebar width |
 | `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
 | `sessionStorage` | `phaserActiveJob.v1` | Active compute job (`jobId` + cache key) for reconnect after refresh |
-| IndexedDB | `phaserResultCache.v19` / `results` | Packed diagram JSON (large results) |
+| IndexedDB | `phaserResultCache.v20` / `results` | Packed diagram JSON (large results) |
 
 Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or cache eviction.
 
@@ -426,7 +430,7 @@ Uniform mode uses the base heatmap for both display and hover.
 
 - **Solid predominance** vs **aqueous species (by element)** display modes.
 - **pe / Eh** axis toggle — Eh is converted for display; the compute API always uses `pe`.
-- Non-convergent / `none` cells render **white**; aqueous fallback species use light grey in solid view.
+- Non-convergent / `none` cells render **white**; aqueous species use light grey in solid predominance view (`aqueous_names` on each layer — bare colliding names like `FeO` are aqueous; their solid twin is `FeO(s)` with a phase color).
 - Resizable left sidebar (desktop); double-click the divider to reset width.
 - Square phase diagram area (`aspect-ratio: 1 / 1`).
 - **Header logo** — animated inline SVG (`phaser_logo.svg`) with a rainbow scan while computing (`animation-play-state` toggled via `.is-computing` on the brand link).
