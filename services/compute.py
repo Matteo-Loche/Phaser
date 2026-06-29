@@ -260,14 +260,18 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
         rows = [asdict(r) for r in base_results]
         subset_list = subsets_to_pack(pack_params.system_elements)
         pack_layers = len(subset_list) + len(pack_params.system_elements)
-        pack_total = pack_layers
+        # Adaptive jobs pack the base hover grids and then the traced vector
+        # display, each with the same layer count. Budget both passes so the
+        # reported packing fraction is monotonic and never exceeds 100%.
+        pack_total = pack_layers * (2 if trace_bundle else 1)
 
         def pack_tick(_step: int, _total: int) -> None:
             nonlocal pack_done
             pack_done += 1
-            progress(pack_done, pack_total, "packing")
+            progress(min(pack_done, pack_total), pack_total, "packing")
 
         pack_done = 0
+        progress(0, pack_total, "packing")
         packed = pack_grid_results(
             pack_params, rows, db_path=db, progress_cb=pack_tick
         )

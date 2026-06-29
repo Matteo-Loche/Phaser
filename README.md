@@ -163,6 +163,11 @@ Users select a database by **`db_id`** from a server-managed catalog. Filesystem
 4. `GET /api/databases` returns client-safe records (**no filesystem paths**).
 5. Compute requests pass `db_id`; the server resolves to a trusted absolute path internally.
 
+### Phase catalog vs runtime species
+
+- **Phase candidates** shown in the UI come from `db/parser.py`, which reads the database `PHASES` block and filters phases by element set. PHREEQC selected output reports saturation indices only for requested phases, so the parser remains the source of the candidate phase list.
+- **Runtime aqueous species** come from PHREEQC itself (`USER_PUNCH`/`SYS` top species and explicit `SELECTED_OUTPUT -mol` species). Solid/aqueous name collisions are detected from the actual sweep results, then colliding solid labels get the `(s)` suffix before tracing and display.
+
 ### Registering a generated database
 
 ```bash
@@ -406,12 +411,12 @@ While **running**, the progress bar and status text reflect the active phase:
 |-------|-------------|--------------|
 | `grid` | Computing grid… X% | Determinate (base PHREEQC sweep) |
 | `boundaries` | Tracing boundaries… X% | Determinate (root-finding + fallback sub-grids) |
-| `packing` | Packing diagram… | Indeterminate (server-side grid packing) |
+| `packing` | Packing diagram… X% | Determinate (server-side grid packing + vector display packing when adaptive) |
 | *(after `done`)* | Downloading diagram result… X% | Determinate when `Content-Length` is available |
 | *(client)* | Caching diagram in this browser… | Indeterminate |
 | *(client)* | Rendering diagram… | Indeterminate (Plotly) |
 
-Adaptive mode deliberately **resets** the bar between the grid and boundaries phases so each PHREEQC pass reports 0→100% accurately. Post-compute stages (packing, download, cache, render) are tracked separately so a large JSON transfer or slow render does not look like a stuck compute.
+Adaptive mode deliberately **resets** the bar between the grid and boundaries phases so each PHREEQC pass reports 0→100% accurately. Packing has its own layer-based counter; adaptive jobs count both base grid packing and traced vector-display packing. Post-compute stages (download, cache, render) are tracked separately so a large JSON transfer or slow render does not look like a stuck compute. Very short packing phases can still finish between browser polls, in which case the UI may jump straight from tracing to result download.
 
 ### Adaptive display vs hover
 
