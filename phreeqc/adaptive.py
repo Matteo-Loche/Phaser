@@ -3,8 +3,8 @@
 Pipeline:
 
 1. Evaluate the full user-selected base grid (hover data + corner categories).
-2. Detect solid/aqueous name collisions from the sweep; suffix colliding solids as
-   ``<name>(s)`` on ``GridJobParams``.
+2. Use catalog-derived solid/aqueous collision labels; colliding solids are suffixed
+   ``<name>(s)`` on ``GridJobParams`` before tracing.
 3. Flag base cells whose corners differ across any plottable layer signature.
 4. Trace phase boundaries on those cells via root-finding (``boundary_trace.py``),
    emitting exact line segments and convex fill regions for 3-category cells.
@@ -12,7 +12,7 @@ Pipeline:
 """
 from __future__ import annotations
 
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from typing import Any, Callable
 
 import numpy as np
@@ -31,20 +31,19 @@ def fine_axis_levels(base_levels: int, factor: int) -> int:
 
 def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
     """Build a row -> signature function spanning every plottable layer."""
-    from ..db.parser import is_gas
-    from ..diagram.packer import dominant_aq_in_subset, solid_label, subsets_to_pack
-    from ..diagram.phases import phase_element_map
+    from ..phreeqc.catalog import is_gas
+    from ..diagram.packer import dominant_aq_in_subset, solid_label, subset_key, subsets_to_pack
 
-    phase_elements = phase_element_map(params.db_path)
     elements = params.system_elements
     collisions = frozenset(params.solid_aqueous_collisions)
+    subset_map = params.phase_names_by_subset
 
     eligible_by_subset: list[tuple[set[str], tuple[str, ...]]] = []
     for subset in subsets_to_pack(params.system_elements):
         sset = set(subset)
         elig = tuple(
             p for p in params.phases
-            if not is_gas(p) and phase_elements.get(p, frozenset()).issubset(sset)
+            if not is_gas(p) and p in subset_map.get(subset_key(subset), ())
         )
         eligible_by_subset.append((sset, elig))
 
@@ -120,12 +119,6 @@ def run_adaptive_boundary_sweep(
         progress_cb=(lambda d, _t: report(d, base_total, "grid")) if progress_cb else None,
     )
     base_by_key = {_point_key(r.ph, r.pe): r for r in base_rows}
-
-    # Names shared by a solid phase and an aqueous species (e.g. FeO): the solid
-    # form becomes "<name>(s)" so the two stay distinct categories everywhere.
-    from ..diagram.packer import solid_aqueous_collisions
-    collisions = solid_aqueous_collisions([asdict(r) for r in base_rows], params.phases)
-    params = replace(params, solid_aqueous_collisions=tuple(sorted(collisions)))
 
     signature = layer_signature_fn(params)
     categories = np.empty((n_pe, n_ph), dtype=object)

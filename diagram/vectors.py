@@ -25,11 +25,9 @@ from ..phreeqc.engine import GridJobParams
 from .packer import (
     category_solid_subset,
     label_is_solid,
-    solid_aqueous_collisions,
     subset_key,
     subsets_to_pack,
 )
-from .phases import phase_element_map
 
 
 def _base_index_grid(
@@ -381,12 +379,10 @@ def pack_traced_display(
     ph_lookup = {round(float(v), 12): i for i, v in enumerate(base_ph)}
     pe_lookup = {round(float(v), 12): i for i, v in enumerate(base_pe)}
 
-    phase_elements = phase_element_map(db_path)
+    collisions = frozenset(params.solid_aqueous_collisions)
+    subset_map = params.phase_names_by_subset
     job_phases = params.phases
     solid_set = set(job_phases)
-    collisions = frozenset(params.solid_aqueous_collisions) or solid_aqueous_collisions(
-        base_rows, job_phases
-    )
     subset_list = subsets_to_pack(params.system_elements)
     pack_steps = len(subset_list) + len(params.system_elements)
     step = 0
@@ -413,9 +409,11 @@ def pack_traced_display(
     for subset in subset_list:
         key = subset_key(subset)
 
-        def cat_fn(row: dict, subset: tuple[str, ...] = subset) -> str:
+        eligible = frozenset(subset_map.get(key, ()))
+
+        def cat_fn(row: dict, subset: tuple[str, ...] = subset, elig: frozenset[str] = eligible) -> str:
             return category_solid_subset(
-                row, subset, phase_elements=phase_elements,
+                row, subset, eligible_phases=elig,
                 job_phases=job_phases, collision_names=collisions,
             )
 

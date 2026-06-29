@@ -53,8 +53,9 @@ PHASER/
 │   └── routes/            # One module per API concern
 ├── db/                    # PHREEQC database handling
 │   ├── registry.py        # Server-side database catalog (trusted paths)
-│   └── parser.py          # Parse PHASES block from .dat files
+│   └── catalog_store.py   # SQLite PHREEQC catalog (elements/phases/species/collisions)
 ├── phreeqc/               # PHREEQC solver integration
+│   ├── catalog.py         # SYS probes + PHASES-block parse -> catalog snapshot
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
 │   ├── sweep.py           # Multiprocessing grid sweep
 │   ├── adaptive.py        # Adaptive boundary orchestration
@@ -98,7 +99,7 @@ flowchart TB
 
     subgraph db_layer [db layer]
         Registry[database registry]
-        Parser[database parser]
+        Catalog[SQLite catalog store]
     end
 
     subgraph solver [phreeqc layer]
@@ -118,7 +119,7 @@ flowchart TB
     Routes --> Models
     Routes --> Compute
     Routes --> Registry
-    Routes --> Parser
+    Routes --> Catalog
     Compute --> Registry
     Compute --> Phases
     Compute --> Engine
@@ -127,7 +128,8 @@ flowchart TB
     Adaptive --> Trace
     Compute --> Packer
     Compute --> Vectors
-    Parser --> Registry
+    Compute --> Catalog
+    Phases --> Catalog
     Engine -->|phreeqpy| IPhreeqc[IPhreeqc library]
     Packer --> UI
     Vectors --> UI
@@ -139,7 +141,7 @@ flowchart TB
 |-------|------|
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
 | **services** | FIFO compute queue, job lifecycle, and species helpers. No PHREEQC math here. |
-| **db** | Discover and register `.dat` files; parse phase catalogs for the UI. |
+| **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`). |
 | **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps, optional adaptive boundary tracing. |
 | **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers. |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
@@ -163,10 +165,30 @@ Users select a database by **`db_id`** from a server-managed catalog. Filesystem
 4. `GET /api/databases` returns client-safe records (**no filesystem paths**).
 5. Compute requests pass `db_id`; the server resolves to a trusted absolute path internally.
 
-### Phase catalog vs runtime species
+### The PHREEQC catalog (`data/catalog.sqlite`)
 
-- **Phase candidates** shown in the UI come from `db/parser.py`, which reads the database `PHASES` block and filters phases by element set. PHREEQC selected output reports saturation indices only for requested phases, so the parser remains the source of the candidate phase list.
-- **Runtime aqueous species** come from PHREEQC itself (`USER_PUNCH`/`SYS` top species and explicit `SELECTED_OUTPUT -mol` species). Solid/aqueous name collisions are detected from the actual sweep results, then colliding solid labels get the `(s)` suffix before tracing and display.
+Everything the UI needs about a database (elements, phases, species, collisions) is
+precomputed into a per-database SQLite catalog at startup and on registration
+(`phreeqc/catalog.py` scans, `db/catalog_store.py` stores). There is **no runtime
+`.dat` parsing fallback**.
+
+Two distinct sources of truth feed the scan:
+
+| Catalog data | Source | Why |
+|--------------|--------|-----|
+| Accepted totals / elements | **PHREEQC engine** — `SYS("elements")` + per-total species probes | Only keeps elements PHREEQC actually defines species for |
+| Aqueous species (grouped per element) | **PHREEQC engine** — one `SYS("aq")` probe | All species in a single equilibration (probing per element re-equilibrates the whole solution each time and stalls large DBs) |
+| Phase names, kind (solid/gas), element composition | **`.dat` `PHASES` block text** (`parse_phase_elements`) | Complete and **independent of temperature / pH / pe**. `SYS("phases")` is condition-dependent (it drops Fe(III) oxides like Hematite/Goethite/Magnetite at a reducing pe) and exposes no element composition |
+| Saturation-index metadata (`si_probe`) | **PHREEQC engine** — `SYS("phases")` | Best-effort only (`NaN` if not surfaced); the real SI is recomputed during the sweep |
+| Solid/aqueous name collisions | **Derived** — phase names (text) ∩ species names (engine) | e.g. `FeO`, `CuCO3` defined as both a solid and an aqueous complex |
+
+Notes:
+
+- The `PHASES` parser is bounded by datablock keywords (so trailing `PITZER`/`SIT`/`EXCHANGE_*` blocks are not mis-read as phases), takes the phase name as the first token (drops legacy numbers like `Brucite 19`), and reads composition from the **reaction**, not the label (so suffixes like `Ferrihydrite(2L)` don't inject a spurious element `L`).
+- **Element-subset eligibility** ("which solids can form given only these elements") is pure set logic on stored compositions (`phase elements ⊆ system elements`) — no per-subset PHREEQC probing. Any subset (singles, pairs, triples, full system) resolves correctly, and scans stay fast even for 50+ element databases.
+- **Solid/aqueous collisions** are stored in SQLite and passed to compute on `GridJobParams.solid_aqueous_collisions`; the precipitated solid is labelled `"<name>(s)"` and the aqueous complex keeps the bare name.
+- On startup, `services/catalog.py` scans the **default** database synchronously (so the app fails clearly if it is unusable) and scans the rest in a background thread, logging pass/cached/fail per database.
+- Each catalog entry is fingerprinted (path, size, mtime, sha256) and tagged with a `SCHEMA_VERSION`; changing the file or bumping the schema triggers an **automatic rebuild** on next startup. Databases whose scan **fails** are marked `failed` and hidden from the UI database selector rather than offered and then erroring.
 
 ### Registering a generated database
 
@@ -197,6 +219,8 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_DEFAULT_DB_ID` | Force default registry id |
 | `PHASER_BUILTIN_DB_DIRS` | Extra builtin scan dirs (`os.pathsep`-separated) |
 | `PHASER_GENERATED_DB_DIR` | Override generated database directory |
+| `PHASER_CATALOG_DB` | SQLite catalog cache path (default `data/catalog.sqlite`) |
+| `PHASER_CATALOG_PROBE_AMOUNT` | Total concentration per element for catalog SYS probes (default `1.0` in `mmol/kgw`) |
 | `PHASER_IPHREEQC_LIB` | Path to `libiphreeqc.so` / `IPhreeqc.dll` |
 | `PHASER_HOST` | Bind address (default `0.0.0.0`) |
 | `PHASER_PORT` | Listen port (default `8765`) |
@@ -322,7 +346,7 @@ Job statuses: `queued` → `running` → `done` | `error`.
 Before compute:
 
 1. Derive **system elements** from total concentrations (e.g. `Fe`, `C(4)` → `Fe`, `C`).
-2. **`filter_phases`** (from `db/parser.py`) returns phases whose element sets are subsets of the system.
+2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog.
 3. User-selected phases (or auto-discovered set) become the `phases` tuple passed to PHREEQC.
 
 ### Result packing (`packer.py`)
@@ -333,7 +357,7 @@ After the sweep, each grid point has SI values and aqueous dominance data. The p
 2. For each **element subset** of the system, assigns a category per point:
    - **Dominant solid** — highest SI ≥ 0 among eligible phases in that subset.
    - **Otherwise** — dominant aqueous species in the subset (highest molality among elements in the subset).
-3. **Solid/aqueous name collisions** — some databases define a solid phase and an aqueous complex with the same name (e.g. `FeO`, `CuCO3`). After the base sweep, `solid_aqueous_collisions` finds phase names that also appear as aqueous species in the results. The precipitated solid is then labelled `"<name>(s)"` (e.g. `FeO(s)`); the aqueous complex keeps the bare name. This is structural (derived from phases vs USER_PUNCH species), works for any database, and is stored on `GridJobParams.solid_aqueous_collisions` for tracing and display.
+3. **Solid/aqueous name collisions** — some databases define a solid phase and an aqueous complex with the same name (e.g. `FeO`, `CuCO3`). Collisions are detected at **catalog scan time** and stored in SQLite; compute receives them on `GridJobParams.solid_aqueous_collisions`. The precipitated solid is then labelled `"<name>(s)"` (e.g. `FeO(s)`); the aqueous complex keeps the bare name.
 4. Produces integer category grids mapping each `(pH, y)` cell to a phase/species index.
 5. Builds **layers**:
    - `solid_subsets` — predominance among solids + aqueous fallback per subset (`aqueous_names` lists categories rendered grey in solid view)

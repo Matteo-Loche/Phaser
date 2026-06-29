@@ -847,9 +847,22 @@
       return runtime.databases.find(d => d.id === state.dbId) || null;
     }
 
+    function databaseReady(d) {
+      return d?.exists && d.catalog_status !== "failed";
+    }
+
+    function selectableDatabases() {
+      return runtime.databases.filter(databaseReady);
+    }
+
+    function defaultSelectableDbId(dbs = selectableDatabases()) {
+      const configured = runtime.cfg?.default_db_id || "";
+      return dbs.some(d => d.id === configured) ? configured : (dbs[0]?.id || "");
+    }
+
     function fillDatabaseOptions() {
       const sel = $("dbSelect");
-      const dbs = runtime.databases.filter(d => d.exists);
+      const dbs = selectableDatabases();
       sel.innerHTML = dbs.length
         ? dbs.map(d => {
             const label = d.source === "generated" ? `${d.name} (generated)` : d.name;
@@ -859,13 +872,13 @@
         : `<option value="">No databases available</option>`;
 
       if (!state.dbId || !dbs.some(d => d.id === state.dbId)) {
-        state.dbId = runtime.cfg?.default_db_id || dbs[0]?.id || "";
+        state.dbId = defaultSelectableDbId(dbs);
         sel.value = state.dbId;
       }
 
       const current = selectedDatabase();
       $("dbMeta").textContent = current
-        ? `${current.filename} · ${current.source}`
+        ? `${current.filename} · ${current.source}${current.catalog_status ? ` · ${current.catalog_status}` : ""}`
         : "No database selected on server.";
     }
 
@@ -1939,7 +1952,9 @@
         applyState(structuredClone(DEFAULT_STATE));
         seedDefaultsFromConfig();
       }
-      if (!state.dbId) state.dbId = runtime.cfg.default_db_id || "";
+      if (!state.dbId || !selectableDatabases().some(d => d.id === state.dbId)) {
+        state.dbId = defaultSelectableDbId();
+      }
       fillDatabaseOptions();
       await reloadSpeciesSuggestions();
       afterStateLoad();

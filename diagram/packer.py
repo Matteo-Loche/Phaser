@@ -13,7 +13,7 @@ from typing import Any, Callable
 import numpy as np
 
 from ..phreeqc.engine import GridJobParams
-from .phases import phase_element_map
+from ..phreeqc.catalog import is_gas
 
 
 SOLID_SUFFIX = "(s)"
@@ -108,25 +108,18 @@ def category_solid_subset(
     row: dict,
     subset: tuple[str, ...],
     *,
-    phase_elements: dict[str, frozenset[str]],
+    eligible_phases: frozenset[str],
     job_phases: tuple[str, ...],
     collision_names: frozenset[str] = frozenset(),
 ) -> str:
-    from ..db.parser import is_gas
-
-    subset_set = set(subset)
-    eligible = {
-        p for p in job_phases
-        if not is_gas(p)
-        and phase_elements.get(p, frozenset()).issubset(subset_set)
-    }
+    eligible = {p for p in job_phases if p in eligible_phases and not is_gas(p)}
     si = row.get("si") or {}
     finite = {p: si[p] for p in eligible if p in si and si[p] == si[p]}
     if finite:
         phase, value = max(finite.items(), key=lambda kv: kv[1])
         if value >= 0.0:
             return solid_label(phase, collision_names)
-    return dominant_aq_in_subset(row, subset_set)
+    return dominant_aq_in_subset(row, set(subset))
 
 
 def pack_category_grid(
@@ -170,7 +163,7 @@ def pack_subset_grid(
     rows: list[dict],
     *,
     subset: tuple[str, ...],
-    phase_elements: dict[str, frozenset[str]],
+    eligible_phases: frozenset[str],
     job_phases: tuple[str, ...],
     ph_lookup: dict[float, int],
     pe_lookup: dict[float, int],
@@ -182,7 +175,7 @@ def pack_subset_grid(
     for row in rows:
         categories.add(
             category_solid_subset(
-                row, subset, phase_elements=phase_elements,
+                row, subset, eligible_phases=eligible_phases,
                 job_phases=job_phases, collision_names=collision_names,
             )
         )
@@ -195,7 +188,7 @@ def pack_subset_grid(
         if ix is None or iy is None:
             continue
         cat = category_solid_subset(
-            row, subset, phase_elements=phase_elements,
+            row, subset, eligible_phases=eligible_phases,
             job_phases=job_phases, collision_names=collision_names,
         )
         grid[iy, ix] = index.get(cat, -1)
@@ -213,23 +206,22 @@ def pack_grid_results(
     params: GridJobParams,
     rows: list[dict],
     *,
-    db_path: str,
+    db_path: str | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:
+    del db_path
     ph = np.linspace(params.ph_min, params.ph_max, params.ph_levels)
     pe = np.linspace(params.pe_min, params.pe_max, params.pe_levels)
 
     ph_lookup = {round(float(value), 12): i for i, value in enumerate(ph)}
     pe_lookup = {round(float(value), 12): i for i, value in enumerate(pe)}
 
-    phase_elements = phase_element_map(db_path)
     subset_list = subsets_to_pack(params.system_elements)
     pack_steps = len(subset_list) + len(params.system_elements)
     step = 0
 
-    collisions = frozenset(params.solid_aqueous_collisions) or solid_aqueous_collisions(
-        rows, params.phases
-    )
+    collisions = frozenset(params.solid_aqueous_collisions)
+    subset_map = params.phase_names_by_subset
 
     def tick() -> None:
         nonlocal step
@@ -240,10 +232,11 @@ def pack_grid_results(
     solid_subsets: dict[str, Any] = {}
     for subset in subset_list:
         key = subset_key(subset)
+        eligible = frozenset(subset_map.get(key, ()))
         solid_subsets[key] = pack_subset_grid(
             rows,
             subset=subset,
-            phase_elements=phase_elements,
+            eligible_phases=eligible,
             job_phases=params.phases,
             ph_lookup=ph_lookup,
             pe_lookup=pe_lookup,

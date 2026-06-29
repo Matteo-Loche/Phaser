@@ -17,8 +17,10 @@ ICON_DIR = PACKAGE_DIR / "Icon"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from ..services.catalog import initialize_catalogs
     from ..services.compute import start_job_reaper, stop_job_reaper
 
+    initialize_catalogs()
     start_job_reaper()
     yield
     stop_job_reaper()

@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from ... import config
-from ...db.parser import list_elements
+from ...db.catalog_store import catalog_public_meta, list_elements, require_ready
 from ...db.registry import get_default_database, list_databases
 from ...services.species import species_suggestions
 
@@ -20,9 +20,22 @@ def get_config():
     except RuntimeError:
         default_db = None
 
-    db_path = default_db.path if default_db else config.THERMODDEM_DB
-    db_elements = list_elements(db_path) if Path(db_path).is_file() else []
-    databases = [rec.public_dict() for rec in list_databases()]
+    db_elements: list[str] = []
+    catalog_meta: dict = {"catalog_status": "missing", "catalog_error": None}
+    if default_db and default_db.exists:
+        catalog_meta = catalog_public_meta(default_db)
+        try:
+            db_key = require_ready(default_db)
+            db_elements = list_elements(db_key)
+        except RuntimeError:
+            db_elements = []
+
+    databases = []
+    for rec in list_databases():
+        payload = rec.public_dict()
+        payload.update(catalog_public_meta(rec))
+        databases.append(payload)
+
     return {
         "default_db_id": default_db.id if default_db else None,
         "databases": databases,
@@ -53,4 +66,5 @@ def get_config():
         "job_queue_ttl_sec": config.JOB_QUEUE_TTL_SEC,
         "db_exists": bool(default_db and default_db.exists),
         "dll_exists": Path(config.IPHREEQC_DLL).is_file(),
+        **catalog_meta,
     }

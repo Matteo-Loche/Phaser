@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import config
-from ..db.parser import is_gas
+from ..phreeqc.catalog import is_gas
 
 
 @dataclass
@@ -30,10 +30,34 @@ class GridJobParams:
     aq_species_molality: tuple[str, ...] = ()
     # Override TOP_AQ_SPECIES_PER_ELEMENT for this job (trace uses fewer).
     top_aq_species_per_element: int | None = None
-    # Phase names that also occur as aqueous species names in this job's results.
-    # The solid form of such a name is labelled "<name>(s)" so solid and aqueous
-    # categories stay distinct everywhere (categoriser, tracer, display).
+    # Phase names that also occur as aqueous species names (from catalog scan).
     solid_aqueous_collisions: tuple[str, ...] = ()
+    # Catalog-derived eligible solid phases per element subset key.
+    phase_names_by_subset: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    gas_phases: tuple[str, ...] = ()
+
+
+_TUPLE_FIELDS = (
+    "phases",
+    "system_elements",
+    "aq_species_molality",
+    "solid_aqueous_collisions",
+    "gas_phases",
+)
+
+
+def grid_job_params_from_dict(data: dict) -> GridJobParams:
+    """Rebuild params after process-pool JSON/asdict round-trip."""
+    kwargs = dict(data)
+    for key in _TUPLE_FIELDS:
+        if key in kwargs and kwargs[key] is not None:
+            kwargs[key] = tuple(kwargs[key])
+    pnbs = kwargs.get("phase_names_by_subset")
+    if isinstance(pnbs, dict):
+        kwargs["phase_names_by_subset"] = {
+            str(k): tuple(v) for k, v in pnbs.items()
+        }
+    return GridJobParams(**kwargs)
 
 
 @dataclass

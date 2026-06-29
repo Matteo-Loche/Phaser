@@ -17,7 +17,10 @@ def main() -> None:
 
     from PHASER.api.app import app
     from PHASER.chemistry.units import convert_concentration
+    from PHASER.db.catalog_store import init_schema
     from PHASER.db.registry import get_default_database, list_databases
+
+    init_schema()
 
     databases = list_databases()
     print(f"app: {app.title}")

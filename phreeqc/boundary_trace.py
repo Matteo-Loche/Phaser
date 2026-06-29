@@ -22,9 +22,8 @@ from scipy.optimize import brentq, least_squares, root
 from skimage.measure import find_contours
 
 from .. import config
-from ..diagram.packer import label_is_solid, phase_from_label
-from ..diagram.phases import phase_element_map
-from .engine import GridJobParams, GridPointResult, evaluate_point, init_phreeqc
+from ..diagram.packer import label_is_solid, phase_from_label, subset_key, subsets_to_pack
+from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc
 from .sweep import _point_key
 
 # Floor for absent aqueous species so log(m_A)-log(m_B) brackets at dominance edges
@@ -127,20 +126,22 @@ class PointEvaluator:
         return self.eval(ph, pe)
 
 
-def layer_specs(params: GridJobParams, db_path: str) -> list[LayerSpec]:
-    from ..diagram.packer import category_solid_subset, subset_key, subsets_to_pack
+def layer_specs(params: GridJobParams, db_path: str | None = None) -> list[LayerSpec]:
+    del db_path
+    from ..diagram.packer import category_solid_subset
 
-    phase_elements = phase_element_map(db_path)
     job_phases = params.phases
     collisions = frozenset(params.solid_aqueous_collisions)
+    subset_map = params.phase_names_by_subset
     specs: list[LayerSpec] = []
 
     for subset in subsets_to_pack(params.system_elements):
         key = subset_key(subset)
+        eligible = frozenset(subset_map.get(key, ()))
 
-        def solid_cat(row: dict, subset: tuple[str, ...] = subset) -> str:
+        def solid_cat(row: dict, subset: tuple[str, ...] = subset, elig: frozenset[str] = eligible) -> str:
             return category_solid_subset(
-                row, subset, phase_elements=phase_elements,
+                row, subset, eligible_phases=elig,
                 job_phases=job_phases, collision_names=collisions,
             )
 
@@ -1368,7 +1369,7 @@ def _trace_worker_init(dll_path: str, db_path: str) -> None:
 def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
     """Process-pool entry: trace a chunk of boundary cells."""
     cells: list[tuple[int, int]] = job["cells"]
-    trace_params = GridJobParams(**job["trace_params"])
+    trace_params = grid_job_params_from_dict(job["trace_params"])
     db_path = job["db_path"]
     base_ph = np.asarray(job["base_ph"], dtype=float)
     base_pe = np.asarray(job["base_pe"], dtype=float)

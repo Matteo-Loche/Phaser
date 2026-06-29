@@ -1,13 +1,14 @@
-"""PHREEQC database discovery, registry, and parsing."""
-from .parser import (
-    COMMON_GASES,
-    PhaseRecord,
-    filter_phases,
-    is_gas,
-    list_common_gases,
+"""PHREEQC database discovery, registry, and SQLite catalog cache."""
+from .catalog_store import (
+    catalog_public_meta,
+    fingerprint_file,
+    get_status,
+    init_schema,
+    is_fresh,
+    list_collisions,
     list_elements,
-    load_phase_catalog,
-    parse_phases,
+    list_phases,
+    require_ready,
 )
 from .registry import (
     DatabaseRecord,
@@ -22,21 +23,22 @@ from .registry import (
 )
 
 __all__ = [
-    "COMMON_GASES",
     "DatabaseRecord",
     "DatabaseSource",
-    "PhaseRecord",
-    "filter_phases",
+    "catalog_public_meta",
     "find_database_by_path",
+    "fingerprint_file",
     "get_database",
     "get_default_database",
+    "get_status",
+    "init_schema",
     "invalidate_registry",
-    "is_gas",
-    "list_common_gases",
+    "is_fresh",
+    "list_collisions",
     "list_databases",
     "list_elements",
-    "load_phase_catalog",
-    "parse_phases",
+    "list_phases",
     "register_generated_database",
+    "require_ready",
     "resolve_database",
 ]

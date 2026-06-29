@@ -209,13 +209,22 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
         dll = dll_path(body.dll_path)
         system_elems = set(system_elements_from_totals(body.totals, body.system_elements))
         phase_names = resolve_phase_names(
-            db,
+            db_rec,
             phases=body.phases,
             system_elems=system_elems,
         )
 
         validate_phreeqc_setup(dll, db)
 
+        from ..db.catalog_store import (
+            list_collisions,
+            list_gas_phases,
+            phase_names_by_subset_map,
+            require_ready,
+        )
+
+        db_key = require_ready(db_rec)
+        sys_tuple = system_elements_from_totals(body.totals, body.system_elements)
         params = GridJobParams(
             db_path=db,
             dll_path=dll,
@@ -228,9 +237,12 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
             pe_levels=body.pe_levels,
             totals=body.totals,
             phases=phase_names,
-            system_elements=system_elements_from_totals(body.totals, body.system_elements),
+            system_elements=sys_tuple,
             charge_species=body.charge_species,
             units=body.units,
+            solid_aqueous_collisions=tuple(sorted(list_collisions(db_key))),
+            phase_names_by_subset=phase_names_by_subset_map(db_key, sys_tuple),
+            gas_phases=list_gas_phases(db_key),
         )
 
         def progress(done: int, total: int, phase: str = "compute"):

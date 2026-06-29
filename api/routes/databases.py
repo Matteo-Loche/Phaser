@@ -4,15 +4,23 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ... import config
+from ...db.catalog_store import catalog_public_meta
 from ...db.registry import (
     get_database,
     get_default_database,
     list_databases,
     register_generated_database,
 )
+from ...services.catalog import scan_database_record
 from ..models import RegisterDatabaseRequest
 
 router = APIRouter(tags=["databases"])
+
+
+def _public_record(rec) -> dict:
+    out = rec.public_dict()
+    out.update(catalog_public_meta(rec))
+    return out
 
 
 @router.get("/api/databases")
@@ -25,7 +33,7 @@ def api_list_databases():
         except RuntimeError:
             default_id = None
     return {
-        "databases": [rec.public_dict() for rec in records],
+        "databases": [_public_record(rec) for rec in records],
         "count": len(records),
         "default_db_id": default_id,
     }
@@ -36,7 +44,7 @@ def api_get_database(db_id: str):
     rec = get_database(db_id)
     if not rec:
         raise HTTPException(404, f"Database id not found: {db_id}")
-    return rec.public_dict()
+    return _public_record(rec)
 
 
 @router.post("/api/databases/register")
@@ -51,6 +59,10 @@ def api_register_database(body: RegisterDatabaseRequest):
         )
     try:
         rec = register_generated_database(dat_path, metadata=body.metadata)
+        scan_database_record(rec)
     except (FileNotFoundError, RuntimeError) as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return {"registered": True, "database": rec.public_dict()}
+        raise HTTPException(422, str(exc)) from exc
+    meta = _public_record(rec)
+    if meta.get("catalog_status") == "failed":
+        raise HTTPException(422, meta.get("catalog_error") or "catalog scan failed")
+    return {"registered": True, "database": meta}

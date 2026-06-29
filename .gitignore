@@ -33,6 +33,13 @@ data/databases/generated/*.dat
 !data/databases/generated/.gitkeep
 !data/databases/generated/example.meta.json
 
+# SQLite PHREEQC catalog cache (regenerated from PHREEQC on startup)
+data/catalog.sqlite
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
 # Docker/local build cache
 docker-data/
 
