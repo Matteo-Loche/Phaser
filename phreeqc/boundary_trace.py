@@ -56,6 +56,7 @@ class TraceStats:
     n_cells_triple_traced: int = 0
     n_cells_saddle_traced: int = 0
     n_brentq_2d: int = 0
+    n_gas_segments: int = 0
 
 
 _CROSSING_UNCACHED = object()
@@ -1528,6 +1529,20 @@ def run_boundary_trace(
 
     stats.n_segments = sum(len(layer["node_cat"]) for layer in layers_out.values())
 
+    from .gas_limits import trace_gas_limit_segments
+
+    gas_segments = trace_gas_limit_segments(
+        trace_params,
+        base_ph=base_ph,
+        base_pe=base_pe,
+        base_ij=base_ij,
+        evaluator=PointEvaluator(trace_params, {
+            _point_key(float(r.ph), float(r.pe)): asdict(r) for r in base_ij.values()
+        }),
+        tolerance=tol,
+    )
+    stats.n_gas_segments = len(gas_segments)
+
     trace_bundle: dict[str, Any] = {
         "method": "traced",
         "tolerance": tol,
@@ -1537,6 +1552,10 @@ def run_boundary_trace(
         "stability_limits": {
             "kind": "stability_limit",
             "segments": stability,
+        },
+        "gas_limits": {
+            "kind": "gas_limit",
+            "segments": gas_segments,
         },
         "layers": layers_out,
         "stats": {
@@ -1550,6 +1569,7 @@ def run_boundary_trace(
             "n_brentq_aq": stats.n_brentq_aq,
             "n_brentq_conv": stats.n_brentq_conv,
             "n_stability_segments": stats.n_stability_segments,
+            "n_gas_segments": stats.n_gas_segments,
             "n_cells_complex_fallback": stats.n_cells_complex_fallback,
             "n_crossing_cache_hits": stats.n_crossing_cache_hits,
             "n_cells_triple_traced": stats.n_cells_triple_traced,

@@ -131,8 +131,16 @@ def run_adaptive_boundary_sweep(
 
     cells = boundary_base_cells(categories)
 
+    from .gas_limits import trace_gas_limit_segments
+
     if not cells:
         report(base_total, base_total, "grid")
+        gas_segments = trace_gas_limit_segments(
+            params,
+            base_ph=base_ph,
+            base_pe=base_pe,
+            base_ij=base_result_ij,
+        )
         stats = {
             "n_evaluated": base_total,
             "n_total": base_total,
@@ -142,10 +150,18 @@ def run_adaptive_boundary_sweep(
             "refine_factor": 1,
             "boundary_cells": 0,
             "n_boundary_evaluated": 0,
+            "n_gas_segments": len(gas_segments),
             "refinement_method": "trace",
-            "display_mode": "grid",
+            "display_mode": "traced",
         }
-        return params, stats, base_rows, None
+        trace_bundle = {
+            "method": "traced",
+            "refine_factor": 1,
+            "layers": {},
+            "stability_limits": {"kind": "stability_limit", "segments": []},
+            "gas_limits": {"kind": "gas_limit", "segments": gas_segments},
+        }
+        return params, stats, base_rows, trace_bundle
 
     from .boundary_trace import _chunk_cells, run_boundary_trace
 
@@ -181,6 +197,7 @@ def run_adaptive_boundary_sweep(
         "n_fallback_evals": trace_stats.n_fallback_evals,
         "n_trace_segments": trace_stats.n_segments,
         "n_stability_segments": trace_stats.n_stability_segments,
+        "n_gas_segments": trace_stats.n_gas_segments,
         "refinement_method": "trace",
         "display_mode": "traced",
     }

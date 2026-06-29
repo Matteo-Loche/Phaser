@@ -28,8 +28,10 @@ def main() -> None:
     if databases:
         default_db = get_default_database()
         print(f"default database: {default_db.id} ({default_db.name})")
-    converted = convert_concentration(1.0, "mmol/kgw", "mol/kgw")
+    converted = convert_concentration(1.0, "umol/kgw", "mmol/kgw")
     assert converted == 0.001, converted
+    converted2 = convert_concentration(1.0, "mmol/kgw", "mol/kgw")
+    assert converted2 == 0.001, converted2
     print("unit conversion: ok")
 
 

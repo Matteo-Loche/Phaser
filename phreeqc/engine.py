@@ -1,6 +1,7 @@
 """Generic PHREEQC pe–pH grid evaluation."""
 from __future__ import annotations
 
+import math
 import re
 import struct
 from dataclasses import dataclass, field
@@ -24,7 +25,6 @@ class GridJobParams:
     totals: dict[str, float]
     phases: tuple[str, ...]
     system_elements: tuple[str, ...] = ()
-    charge_species: str = "Na"
     units: str = config.DEFAULT_UNITS
     # Extra aqueous species for SELECTED_OUTPUT -mol (boundary tracing).
     aq_species_molality: tuple[str, ...] = ()
@@ -35,6 +35,11 @@ class GridJobParams:
     # Catalog-derived eligible solid phases per element subset key.
     phase_names_by_subset: dict[str, tuple[str, ...]] = field(default_factory=dict)
     gas_phases: tuple[str, ...] = ()
+    # Component gases traced via SI(gas) - log10(P_ref) (O2/H2 use analytic limits).
+    trace_gas_phases: tuple[str, ...] = ()
+    o2_limit_atm: float = config.O2_FUGACITY_LIMIT_ATM
+    h2_limit_atm: float = config.H2_FUGACITY_LIMIT_ATM
+    component_gas_limit_atm: float = config.COMPONENT_GAS_FUGACITY_LIMIT_ATM
 
 
 _TUPLE_FIELDS = (
@@ -43,6 +48,7 @@ _TUPLE_FIELDS = (
     "aq_species_molality",
     "solid_aqueous_collisions",
     "gas_phases",
+    "trace_gas_phases",
 )
 
 
@@ -71,6 +77,8 @@ class GridPointResult:
     aq_molality_by_element: dict[str, float] = field(default_factory=dict)
     aq_molality_by_species: dict[str, float] = field(default_factory=dict)
     si: dict[str, float] = field(default_factory=dict)
+    gas_si: dict[str, float] = field(default_factory=dict)
+    gas_domain: dict[str, str] = field(default_factory=dict)
 
 
 def python_is_64bit() -> bool:
@@ -212,17 +220,116 @@ def _parse_species_molalities(row: dict, params: GridJobParams) -> dict[str, flo
     return out
 
 
+def _si_output_phases(params: GridJobParams) -> tuple[str, ...]:
+    """Solid phases plus component trace gases for SELECTED_OUTPUT -si."""
+    gases = tuple(g for g in params.trace_gas_phases if g not in ("O2(g)", "H2(g)"))
+    return tuple(dict.fromkeys((*params.phases, *gases)))
+
+
+def _si_from_row(row: dict, phase: str) -> float:
+    return _row_value(row, f"si_{phase}", f'si_"{phase}"')
+
+
+def _run_phreeqc_string(phreeqc, inp: str) -> list | None:
+    """Run input; retry once when selected output is empty on first pass."""
+    selected = None
+    for _ in range(2):
+        phreeqc.run_string(inp)
+        selected = phreeqc.get_selected_output_array()
+        if selected and len(selected) >= 2:
+            return selected
+    return selected
+
+
+def _parse_grid_row(
+    row: dict,
+    *,
+    ph: float,
+    pe: float,
+    params: GridJobParams,
+) -> GridPointResult:
+    solid_phases = {p for p in params.phases if not is_gas(p)}
+    si = {phase: _si_from_row(row, phase) for phase in _si_output_phases(params)}
+    gas_si = {
+        g: si[g] for g in params.trace_gas_phases
+        if g in si and si[g] == si[g]
+    }
+
+    from .gas_limits import water_gas_domain_labels
+
+    gas_domain = water_gas_domain_labels(
+        ph=ph,
+        pe=pe,
+        temp_c=params.temp_c,
+        o2_limit_atm=params.o2_limit_atm,
+        h2_limit_atm=params.h2_limit_atm,
+    )
+    for gas, val in gas_si.items():
+        if gas not in ("O2(g)", "H2(g)") and val > math.log10(params.component_gas_limit_atm):
+            gas_domain[gas] = f"{gas} > {params.component_gas_limit_atm:g} atm"
+
+    dominant_aq: dict[str, str] = {}
+    mol_aq: dict[str, float] = {}
+    sp_mol = _parse_species_molalities(row, params)
+    for elem in params.system_elements:
+        species = _row_str(row, f"dom_{elem}", default="none")
+        if species != "none":
+            dominant_aq[elem] = species
+        m = _row_value(row, f"m_dom_{elem}")
+        if m == m:
+            mol_aq[elem] = m
+            if species != "none" and species not in sp_mol:
+                sp_mol[species] = m
+
+    return GridPointResult(
+        ph=ph,
+        pe=pe,
+        converged=True,
+        si=si,
+        gas_si=gas_si,
+        gas_domain=gas_domain,
+        dominant_phase=_dominant_from_si(si, include=solid_phases, default="aqueous"),
+        dominant_solid=_dominant_from_si(si, include=solid_phases, default="aqueous"),
+        dominant_aq_by_element=dominant_aq,
+        aq_molality_by_element=mol_aq,
+        aq_molality_by_species=sp_mol,
+    )
+
+
+def _format_selected_output_block(
+    params: GridJobParams,
+    *,
+    user_punch: str,
+    mol_line: str = "",
+) -> str:
+    si_phases = _si_output_phases(params)
+    si_list = " ".join(f'"{p}"' if " " in p or "(" in p else p for p in si_phases)
+    return f"""SELECTED_OUTPUT
+    -reset false
+    -pH true
+    -pe true
+    -si {si_list}
+{mol_line}{user_punch}"""
+
+
 def format_grid_input(
     *,
     ph: float,
     pe: float,
     params: GridJobParams,
 ) -> str:
+    """PhreePlot-style titration: acidic seed + Fix_H+/NaOH + fixed O2 fugacity.
+
+    The acidic seed solution (pH 1.8, benign pe) is charge-balanced with
+    ``Cl ... charge`` so PHREEQC does not fail while constructing strongly
+    reducing target points.  pH is then pinned with a fictitious ``Fix_H+``
+    phase titrated by ``NaOH``, and redox is imposed through the gas phase
+    directly as ``SI(O2(g)) = log10(fO2)`` (no ``Fix_pe``), where
+    ``log10(fO2) = 4 * (pe + pH - log K_O2)`` (see ``gas_limits.log_f_o2``).
+    """
     totals_lines = "\n".join(
         f"    {name:<10} {val:.12e}" for name, val in sorted(params.totals.items()) if val > 0
     )
-    si_list = " ".join(f'"{p}"' if " " in p or "(" in p else p for p in params.phases)
-    charge = params.charge_species
     user_punch = _format_user_punch(
         params.system_elements,
         top_n=_top_aq_species_per_element(params),
@@ -234,73 +341,48 @@ def format_grid_input(
             for s in params.aq_species_molality
         )
         mol_line = f"    -mol {mol_tokens}\n"
+    from .gas_limits import log_f_o2
+
+    target_log_f_o2 = log_f_o2(ph=ph, pe=pe, temp_c=params.temp_c)
     return f"""
-TITLE Phase diagram
+TITLE Phase diagram (titration)
+PHASES
+Fix_H+
+    H+ = H+
+    log_k 0
 SOLUTION 1
     temp      {params.temp_c:.6g}
-    units     {params.units}
+    units     {config.DEFAULT_UNITS}
     water     {config.WATER_MASS_KGW:.12e}
-    pH        {ph:.12g}
-    pe        {pe:.12g}
+    pH        1.8
+    pe        4.0
 {totals_lines}
-    {charge:<10} 0.0 charge
-    Cl         0.0
-
-SELECTED_OUTPUT
-    -reset false
-    -pH true
-    -pe true
-    -si {si_list}
-{mol_line}
-{user_punch}END
+    Cl         1.0 charge
+END
+USE solution 1
+EQUILIBRIUM_PHASES 1
+    Fix_H+ {-ph:.12g} NaOH 10
+    -force_equality true
+    O2(g) {target_log_f_o2:.12g} 10
+    -force_equality true
+END
+{_format_selected_output_block(params, user_punch=user_punch, mol_line=mol_line)}END
 """
 
 
 def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> GridPointResult:
     base = GridPointResult(ph=ph, pe=pe, converged=False)
     try:
-        phreeqc.run_string(format_grid_input(ph=ph, pe=pe, params=params))
-        selected = phreeqc.get_selected_output_array()
+        selected = _run_phreeqc_string(phreeqc, format_grid_input(ph=ph, pe=pe, params=params))
         if not selected or len(selected) < 2:
             return base
         headers = selected[0]
-        row = dict(zip(headers, selected[1]))
-        si = {phase: _row_value(row, f"si_{phase}") for phase in params.phases}
-
-        solid_phases = {p for p in params.phases if not is_gas(p)}
-
-        dominant_aq: dict[str, str] = {}
-        mol_aq: dict[str, float] = {}
-        sp_mol = _parse_species_molalities(row, params)
-        for elem in params.system_elements:
-            species = _row_str(row, f"dom_{elem}", default="none")
-            if species != "none":
-                dominant_aq[elem] = species
-            m = _row_value(row, f"m_dom_{elem}")
-            if m == m:
-                mol_aq[elem] = m
-                if species != "none" and species not in sp_mol:
-                    sp_mol[species] = m
-
-        return GridPointResult(
-            ph=ph,
-            pe=pe,
-            converged=True,
-            si=si,
-            dominant_phase=_dominant_from_si(si, include=solid_phases, default="aqueous"),
-            dominant_solid=_dominant_from_si(si, include=solid_phases, default="aqueous"),
-            dominant_aq_by_element=dominant_aq,
-            aq_molality_by_element=mol_aq,
-            aq_molality_by_species=sp_mol,
-        )
+        # Titration emits a row per reaction step; the equilibrated state is last.
+        data_row = selected[-1]
+        row = dict(zip(headers, data_row))
+        return _parse_grid_row(row, ph=ph, pe=pe, params=params)
     except Exception:
         return base
-
-
-def eh_from_pe(pe: float, temp_c: float) -> float:
-    """Convert pe to Eh (V) at temperature T (°C)."""
-    t_k = temp_c + 273.15
-    return pe * 2.303 * 8.314462618 * t_k / 96485.33212
 
 
 def element_from_total_key(key: str) -> str:

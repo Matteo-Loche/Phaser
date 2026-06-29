@@ -11,6 +11,7 @@ from typing import Any
 from .. import config
 from ..api.dependencies import dll_path, resolve_db_record
 from ..api.models import ComputeRequest
+from ..chemistry.units import is_valid_unit, normalize_unit, totals_to_mmol_kgw
 from ..diagram.packer import pack_grid_results, subsets_to_pack
 from ..diagram.vectors import pack_traced_display
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
@@ -219,12 +220,23 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
         from ..db.catalog_store import (
             list_collisions,
             list_gas_phases,
+            list_trace_gas_phases,
             phase_names_by_subset_map,
             require_ready,
         )
 
         db_key = require_ready(db_rec)
         sys_tuple = system_elements_from_totals(body.totals, body.system_elements)
+        if body.gas_phases:
+            trace_gases = tuple(body.gas_phases)
+        elif body.include_common_gases:
+            trace_gases = list_trace_gas_phases(db_key, sys_tuple)
+        else:
+            trace_gases = ()
+        input_units = normalize_unit(body.units)
+        if not is_valid_unit(input_units):
+            raise ValueError(f"Unsupported concentration unit: {body.units!r}")
+        totals_mmol = totals_to_mmol_kgw(body.totals, input_units)
         params = GridJobParams(
             db_path=db,
             dll_path=dll,
@@ -235,14 +247,16 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
             pe_min=body.pe_min,
             pe_max=body.pe_max,
             pe_levels=body.pe_levels,
-            totals=body.totals,
+            totals=totals_mmol,
             phases=phase_names,
             system_elements=sys_tuple,
-            charge_species=body.charge_species,
-            units=body.units,
+            units=config.DEFAULT_UNITS,
             solid_aqueous_collisions=tuple(sorted(list_collisions(db_key))),
             phase_names_by_subset=phase_names_by_subset_map(db_key, sys_tuple),
             gas_phases=list_gas_phases(db_key),
+            trace_gas_phases=trace_gases,
+            o2_limit_atm=body.o2_limit_atm,
+            h2_limit_atm=body.h2_limit_atm,
         )
 
         def progress(done: int, total: int, phase: str = "compute"):

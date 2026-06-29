@@ -14,7 +14,7 @@ Key behaviours:
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, Eh/pe toggle, animated header logo during compute, and **phase color persistence** across refreshes.
+- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, **Eh / pe / log fO₂** redox-axis toggle, animated header logo during compute, and **phase color persistence** across refreshes.
 
 ---
 
@@ -227,6 +227,9 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | Display subdivision factor in adaptive mode (default `5`) |
 | `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
+| `PHASER_O2_LIMIT_ATM` | O₂ water-stability limit in atm (default `0.21`); per-job override `o2_limit_atm` |
+| `PHASER_H2_LIMIT_ATM` | H₂ water-stability limit in atm (default `1.0`); per-job override `h2_limit_atm` |
+| `PHASER_COMPONENT_GAS_LIMIT_ATM` | Reference pressure for component-gas over-pressure boundaries (default `1.0`) |
 | `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
 | `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
 | `PHASER_JOB_REAPER_INTERVAL_SEC` | Background reaper wake interval in seconds (default `60`) |
@@ -237,19 +240,29 @@ curl -X POST http://localhost:8765/api/databases/register \
 
 ### Single-point evaluation (`engine.py`)
 
-For each grid point `(pH, pe)`:
+Each grid point `(pH, pe)` is equilibrated with a **PhreePlot-style titration** — the single calculation method (`format_grid_input`). Imposing `pH`/`pe` directly on one `SOLUTION` block is brittle for charge balance at the extremes of a pe–pH diagram, so instead the target state is *titrated* into an acidic seed:
 
-1. **`format_grid_input`** builds a PHREEQC input string:
-   - `SOLUTION` with temperature, totals, charge balance species
-   - Fixed `pH` and `pe` (Eh is converted in the browser for display)
-   - `SELECTED_OUTPUT` requesting saturation indices (`si`) for selected phases
-   - `USER_PUNCH` blocks to extract dominant aqueous species per element
+1. **Seed `SOLUTION`** — temperature, totals, and a benign starting point (`pH 1.8`, `pe 4.0`). It is charge-balanced with **`Cl … charge`** (the seed is cation-heavy; `Cl⁻` is the species PHREEQC adjusts upward without bound, so balancing never fails). pH/pe here are only a stable starting guess, not the target.
 
-2. **`evaluate_point`** runs the string through **phreeqpy** → **IPhreeqc**:
-   - Parses selected output and USER_PUNCH results
-   - Returns `GridPointResult`: convergence flag, SI dict, dominant solid, aqueous species per element
+2. **`EQUILIBRIUM_PHASES` titration** drives the seed to the target point:
+   - **pH** is pinned by a fictitious `Fix_H+` phase (`H+ = H+`, `log_k 0`) titrated with **`NaOH`** at a saturation index of `−pH`, with `-force_equality true`. The titrant `Na⁺` supplies the cations needed as pH rises.
+   - **Redox** is pinned through the gas phase directly: **`O2(g)`** is fixed at `log10(fO₂)` with `-force_equality true`, where
 
-3. **`validate_phreeqc_setup`** loads the library and database once before spawning workers (fail-fast with clear errors).
+     ```
+     log10(fO₂) = 4 · (pe + pH − log K_O₂)        # gas_limits.log_f_o2()
+     ```
+
+     This replaces the classic `Fix_pe` phase. Imposing O₂ fugacity is numerically robust across the whole grid (including strongly reducing points) and makes `log fO₂` a first-class, exact diagram coordinate — see [Gas management](#gas-management-water-stability--component-gases) and [Redox axis](#redox-axis-log-fo₂--eh--pe).
+
+3. **Charge balance** is therefore fixed by the recipe, not user-selectable: **Cl⁻** in the seed, **Na⁺** from the NaOH titrant. The UI states this as *"Charge balance: Cl⁻ or Na⁺"*.
+
+4. **`SELECTED_OUTPUT`** requests saturation indices (`si`) for the selected phases (and any component trace gases), plus **`USER_PUNCH`** blocks that extract the dominant aqueous species per element. The titration emits one output row per reaction step; `evaluate_point` reads the **last** row (the equilibrated target state).
+
+5. **`evaluate_point`** runs the string through **phreeqpy** → **IPhreeqc**, parses the selected output / USER_PUNCH results, computes per-point gas-domain labels (see [Gas management](#gas-management-water-stability--component-gases)), and returns a `GridPointResult`: convergence flag, SI dict, dominant solid, dominant aqueous species per element, and gas SI/domain.
+
+6. **`validate_phreeqc_setup`** loads the library and database once before spawning workers (fail-fast with clear errors).
+
+The internal sweep coordinate is always **`pe`**; `Eh` and `log fO₂` are derived (exactly, per point) for display only.
 
 ### Parallel grid sweep (`sweep.py`)
 
@@ -353,7 +366,7 @@ Before compute:
 
 After the sweep, each grid point has SI values and aqueous dominance data. The packer:
 
-1. Builds axis arrays (pH, pe or Eh).
+1. Builds axis arrays (pH, pe — `Eh`/`log fO₂` are display conversions; see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
 2. For each **element subset** of the system, assigns a category per point:
    - **Dominant solid** — highest SI ≥ 0 among eligible phases in that subset.
    - **Otherwise** — dominant aqueous species in the subset (highest molality among elements in the subset).
@@ -376,13 +389,54 @@ A despeckle pass removes isolated fallback pixels before contouring.
 
 ---
 
+## Gas management (water stability & component gases)
+
+PHASER draws two kinds of gas boundaries (`phreeqc/gas_limits.py`). Both are reported as overlay regions/lines on the diagram and never alter the chemistry categories underneath.
+
+### Water-stability limits (O₂ / H₂)
+
+The classic Pourbaix "water window". These are **analytic** functions of `(pH, pe, T)` — no extra PHREEQC runs:
+
+```
+log10(fO₂) =  4 · (pe + pH − log K_O₂)        # O2(g) + 4H+ + 4e- = 2H2O
+log10(fH₂) = -2 · (pe + pH)                   # 2H+ + 2e- = H2(g),  log K ≈ 0 at 25 °C
+log K_O₂   = 20.75 + 0.0018 · (T − 25)        # ≈20.75 at 25 °C, linear dT approximation
+```
+
+A point lies **outside** the water window when its O₂ or H₂ fugacity exceeds a configured limit:
+
+| Region | Condition | Default limit | Config / API |
+|--------|-----------|---------------|--------------|
+| O₂ over-pressure (oxidising) | `log10(fO₂) > log10(o2_limit_atm)` | `0.21` atm (atmospheric pO₂) | `O2_FUGACITY_LIMIT_ATM`, `PHASER_O2_LIMIT_ATM`, request `o2_limit_atm` |
+| H₂ over-pressure (reducing) | `log10(fH₂) > log10(h2_limit_atm)` | `1.0` atm | `H2_FUGACITY_LIMIT_ATM`, `PHASER_H2_LIMIT_ATM`, request `h2_limit_atm` |
+
+Each limit line has slope `−1` in `(pH, pe)` space (constant `pe + pH`), so it is built as a single straight segment clipped to the plot box (`water_gas_boundary_segments` / `_water_gas_limit_line`). Labels are generated from the active limits, e.g. `O2(g) > 0.21 atm`, `H2(g) > 1 atm` (`water_gas_outside_labels`). Per grid point, `water_gas_domain_labels` tags whether the cell is inside the window or in an O₂/H₂ over-pressure region (stored on `GridPointResult.gas_domain`).
+
+Because redox is imposed as **`O2(g)` fugacity** during equilibration (see [Single-point evaluation](#single-point-evaluation-enginepy)), the O₂ line the user sees is exactly the quantity the solver controls — the diagram axis and the constraint are the same formula.
+
+### Component-gas limits (CO₂, CH₄, …)
+
+For real gases that are part of the chemical system, the saturation index from PHREEQC **is** the log fugacity. A component gas is "over-pressure" where
+
+```
+SI(gas) − log10(P_ref) > 0                    # component_gas_scalar()
+```
+
+with `P_ref = COMPONENT_GAS_FUGACITY_LIMIT_ATM` (default `1.0` atm, env `PHASER_COMPONENT_GAS_LIMIT_ATM`). These boundaries are **not** analytic — the zero crossing is refined along base-grid cell edges with the same `scipy.optimize.brentq` root-finder used for phase boundaries (`trace_gas_limit_segments`), reusing SI values already punched in `SELECTED_OUTPUT`. Component trace gases are selected per request (`gas_phases`, or `include_common_gases`).
+
+### Rendering
+
+In `diagram/vectors.py` the gas limits become real overlay geometry: O₂/H₂ regions are clipped half-planes (Sutherland–Hodgman against the plot box and the chemistry fills), and component-gas edges are added as boundary polylines. Chemistry fills are clipped to the `pe + pH` water window so they do not bleed past the gas cut.
+
+---
+
 ## Web UI (`static/index.html`)
 
 ### Chemistry defaults
 
-- Default units: **`mmol/kgw`**, default concentration **1** per species.
-- Mol-family unit changes auto-convert concentrations in the UI.
-- Charge balance species selectable (default `Na`); `0` concentration means no contribution to balance.
+- Default units: **`mmol/kgw`** (PHREEQC input always uses mmol/kgw). The UI also offers **mol/kgw** and **µmol/kgw**; concentrations are converted to mmol/kgw before each compute job.
+- Changing units in the UI auto-converts species concentrations between mol, mmol, and µmol.
+- **Charge balance is fixed by the titration recipe — not user-selectable:** `Cl⁻` in the acidic seed, `Na⁺` from the NaOH titrant (shown in the UI as *"Charge balance: Cl⁻ or Na⁺"*). See [Single-point evaluation](#single-point-evaluation-enginepy).
 
 ### Settings persistence
 
@@ -458,12 +512,45 @@ Uniform mode uses the base heatmap for both display and hover.
 ### Display and layout
 
 - **Solid predominance** vs **aqueous species (by element)** display modes.
-- **pe / Eh** axis toggle — Eh is converted for display; the compute API always uses `pe`.
+- **Eh / pe / log fO₂** redox-axis toggle (default **Eh**) — Eh and log fO₂ are converted for display; the compute API always uses `pe` (see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
 - Non-convergent / `none` cells render **white**; aqueous species use light grey in solid predominance view (`aqueous_names` on each layer — bare colliding names like `FeO` are aqueous; their solid twin is `FeO(s)` with a phase color).
 - Resizable left sidebar (desktop); double-click the divider to reset width.
 - Square phase diagram area (`aspect-ratio: 1 / 1`).
 - **Header logo** — animated inline SVG (`phaser_logo.svg`) with a rainbow scan while computing (`animation-play-state` toggled via `.is-computing` on the brand link).
 - **Favicon** — square spectrum **P** (`phaser_favicon.svg`, served at `/icons/`). The README uses the static PNG wordmark because GitHub cannot render the animated SVG logo.
+
+### Redox axis (log fO₂ / Eh / pe)
+
+The vertical axis offers three interchangeable redox parametrisations. **`pe` is the single internal variable**: the compute API, the PHREEQC sweep, and all cached results are always expressed in `pe`. `Eh` and `log fO₂` are **display-only conversions** applied in the browser. The default display axis is **Eh**.
+
+**Conversion math** (all logs base-10; `T` in °C, `T_K = T + 273.15`):
+
+| Display axis | From `pe` | Back to `pe` |
+|--------------|-----------|--------------|
+| **pe** | `pe` | `pe` |
+| **Eh (V)** | `Eh = pe · (ln10 · R · T_K / F)` | `pe = Eh / (ln10 · R · T_K / F)` |
+| **log fO₂** | `log fO₂ = 4 · (pe + pH − log K_O₂)` | `pe = log fO₂ / 4 − pH + log K_O₂` |
+
+where `R = 8.314462618 J mol⁻¹ K⁻¹`, `F = 96485.33212 C mol⁻¹`, `ln10 ≈ 2.302585`, and
+
+```
+log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20.75 at 25 °C
+```
+
+This `log K_O₂` and the `log fO₂` formula match `log_k_o2_water()` / `log_f_o2()` in `phreeqc/gas_limits.py`, so the axis the user reads is exactly the O₂ fugacity that titration mode imposes on `O2(g)`.
+
+**Why `pe` stays internal (sheared-grid note).** `Eh` is a pH-independent linear scaling of `pe`, but `log fO₂` depends on **both** `pe` and `pH`. A rectangular grid in `(pH, pe)` is therefore a *sheared* (parallelogram) grid in `(pH, log fO₂)` and vice-versa. Keeping `pe` as the swept variable means:
+
+- `pe ↔ Eh` is an exact, pH-independent rescale of the axis.
+- Only the `log fO₂` view is sheared, and it is mapped **per vertex** (each polygon/boundary point is converted with its own `pH`), so O₂/H₂ water lines (constant `log fO₂`) render correctly.
+
+Implications for the **log fO₂** view:
+
+- **Vector polygons & boundary lines** — every vertex is transformed with `mapPlotXY(pH, pe)`, so diagonal `(pH, pe)` boundaries stay correct in `(pH, log fO₂)` space.
+- **Axis limits** — editing `log fO₂` min/max converts back to `pe` using the opposite pH corner: `peMin = fO₂min/4 − pH_max + log K_O₂`, `peMax = fO₂max/4 − pH_min + log K_O₂`. Changing pH in this mode refreshes the displayed limits.
+- **Hover heatmap** — the base grid is rectangular in `pe`; its `log fO₂` tick values use the mid-pH of the range as an approximation (the vector fills/boundaries remain exact).
+
+If a future change makes `log fO₂` the **native swept coordinate** instead (rectangular in `(pH, log fO₂)`), this table is the conversion to invert: derive `pe` per point before building the PHREEQC input, and the `pe`/`Eh` displays then become the sheared views.
 
 ---
 
@@ -498,6 +585,11 @@ Key fields in the JSON body:
 | `db_id` | server default | Database from registry |
 | `adaptive_boundaries` | `true` | Enable adaptive boundary tracing |
 | `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
+| `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
+| `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm) — see [Gas management](#gas-management-water-stability--component-gases) |
+| `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
+
+Redox is always swept and returned in **`pe`**; the API has no `equilibration_mode` or `charge_species` field — equilibration is the fixed titration recipe and charge balance is `Cl⁻`/`Na⁺` (see [Single-point evaluation](#single-point-evaluation-enginepy)).
 
 ### Compute flow
 
@@ -559,6 +651,9 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
 | Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
 | Job reaper interval | `PHASER_JOB_REAPER_INTERVAL_SEC` | `60` | Background cleanup wake interval |
+| O₂ stability limit | `PHASER_O2_LIMIT_ATM` | `0.21` | `O2_FUGACITY_LIMIT_ATM` — water window (atm); per-job `o2_limit_atm` |
+| H₂ stability limit | `PHASER_H2_LIMIT_ATM` | `1.0` | `H2_FUGACITY_LIMIT_ATM` — water window (atm); per-job `h2_limit_atm` |
+| Component-gas limit | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | `COMPONENT_GAS_FUGACITY_LIMIT_ATM` — reference pressure for CO₂/CH₄/… boundaries |
 | Default units | — | `mmol/kgw` | UI and API default |
 | Default species conc. | — | `1.0` | Per species in UI |
 

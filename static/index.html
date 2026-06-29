@@ -415,20 +415,19 @@
           </div>
           <div class="species-head"><span>species</span><span id="unitHead">concentration (mmol/kgw)</span><span></span></div>
           <div class="species-list" id="speciesList"></div>
-          <div class="grid3">
+          <div class="grid2">
             <div>
               <label for="units">Units</label>
               <select id="units"></select>
-            </div>
-            <div>
-              <label for="chargeSpecies">Charge balance</label>
-              <select id="chargeSpecies"></select>
             </div>
             <div>
               <label for="tempC">Temp (°C)</label>
               <input id="tempC" type="number" step="0.1" />
             </div>
           </div>
+          <p class="meta" style="margin-top:0.55rem;line-height:1.35">
+            Charge balance: Cl⁻ or Na⁺
+          </p>
         </div>
       </details>
 
@@ -438,8 +437,9 @@
           <div>
             <label>Vertical axis (redox)</label>
             <div class="seg" id="yAxisSeg">
-              <button data-axis="pe" class="active">pe</button>
-              <button data-axis="eh">Eh (V)</button>
+              <button data-axis="eh" class="active">Eh (V)</button>
+              <button data-axis="pe">pe</button>
+              <button data-axis="log_fo2">log fO₂</button>
             </div>
           </div>
           <div class="grid2">
@@ -476,6 +476,16 @@
             <input type="checkbox" id="adaptiveBoundaries" />
             Adaptive boundaries <span class="meta">(root-find phase edges)</span>
           </label>
+          <div class="grid2" style="margin-top:0.55rem">
+            <div>
+              <label for="o2LimitAtm">O₂ stability limit (atm)</label>
+              <input id="o2LimitAtm" type="number" step="0.01" min="1e-12" />
+            </div>
+            <div>
+              <label for="h2LimitAtm">H₂ stability limit (atm)</label>
+              <input id="h2LimitAtm" type="number" step="0.1" min="1e-12" />
+            </div>
+          </div>
           <div class="meta" id="gridMeta"></div>
           <div class="meta">Settings are kept in this browser only until you clear site data.</div>
         </div>
@@ -543,19 +553,76 @@
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
     const RESULT_CACHE_MAX = 12;
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
+    const LOG_K_O2_25 = 20.75;
+    const LOG_K_O2_DT = 0.0018;
+
+    function logKO2(tempC) {
+      const t = tempC ?? state.tempC ?? 25;
+      return LOG_K_O2_25 + LOG_K_O2_DT * (t - 25);
+    }
+
+    function peToLogFO2(pe, ph, tempC) {
+      return 4 * (pe + ph - logKO2(tempC));
+    }
+
+    function logFO2ToPe(logFO2, ph, tempC) {
+      return logFO2 / 4 - ph + logKO2(tempC);
+    }
+
+    function roundLogFO2(v) {
+      if (!Number.isFinite(v)) return v;
+      return Math.round(v * 100) / 100;
+    }
+
     const MOL_SCALE = {
       "mol/kgw": 1, "mmol/kgw": 1e-3, "umol/kgw": 1e-6,
-      "mol/l": 1, "mmol/l": 1e-3, "umol/l": 1e-6,
     };
+    const CANONICAL_UNITS = new Set(Object.keys(MOL_SCALE));
+
+    const UNIT_DECIMALS = { "mol/kgw": 6, "mmol/kgw": 4, "umol/kgw": 2 };
+
+    function normalizeUnit(unit) {
+      if (unit === "µmol/kgw" || unit === "μmol/kgw") return "umol/kgw";
+      return unit;
+    }
+
+    function unitDisplay(unit) {
+      const u = normalizeUnit(unit);
+      return u === "umol/kgw" ? "µmol/kgw" : u;
+    }
+
+    function roundForUnit(value, unit) {
+      const u = normalizeUnit(unit);
+      const d = UNIT_DECIMALS[u];
+      if (d == null || !Number.isFinite(value)) return value;
+      const f = 10 ** d;
+      return Math.round(value * f) / f;
+    }
+
+    function roundPe(v) {
+      if (!Number.isFinite(v)) return v;
+      return Math.round(v * 1000) / 1000;
+    }
+
+    function roundEh(v) {
+      if (!Number.isFinite(v)) return v;
+      return Math.round(v * 10000) / 10000;
+    }
+
+    function roundPh(v) {
+      if (!Number.isFinite(v)) return v;
+      return Math.round(v * 100) / 100;
+    }
 
     const DEFAULT_STATE = {
       dbId: "",
       totals: [{ species: "Fe", value: 1 }, { species: "C(4)", value: 1 }],
       units: "mmol/kgw",
       tempC: 25,
-      chargeSpecies: "Na",
+      o2LimitAtm: 0.21,
+      h2LimitAtm: 1.0,
       ph: { min: 2, max: 12 },
-      y: { axis: "pe", peMin: -10, peMax: 14 },
+      y: { axis: "eh", peMin: -10, peMax: 14 },
       gridLevels: 100,
       adaptiveBoundaries: true,
       displayMode: "solid",
@@ -589,17 +656,25 @@
     function ehToPe(eh, t) { return eh / (F * (t + 273.15)); }
 
     function convertConc(value, fromUnit, toUnit) {
-      if (fromUnit === toUnit) return value;
-      if (!(fromUnit in MOL_SCALE) || !(toUnit in MOL_SCALE)) return null;
-      if (fromUnit.endsWith("/kgw") !== toUnit.endsWith("/kgw")) return null;
-      return value * MOL_SCALE[fromUnit] / MOL_SCALE[toUnit];
+      const src = normalizeUnit(fromUnit);
+      const dst = normalizeUnit(toUnit);
+      if (src === dst) return value;
+      if (!(src in MOL_SCALE) || !(dst in MOL_SCALE)) return null;
+      const mol = value * MOL_SCALE[src];
+      return roundForUnit(mol / MOL_SCALE[dst], dst);
     }
 
     function displayYMin() {
-      return state.y.axis === "eh" ? peToEh(state.y.peMin, state.tempC) : state.y.peMin;
+      const t = state.tempC;
+      if (state.y.axis === "eh") return peToEh(state.y.peMin, t);
+      if (state.y.axis === "log_fo2") return peToLogFO2(state.y.peMin, state.ph.min, t);
+      return state.y.peMin;
     }
     function displayYMax() {
-      return state.y.axis === "eh" ? peToEh(state.y.peMax, state.tempC) : state.y.peMax;
+      const t = state.tempC;
+      if (state.y.axis === "eh") return peToEh(state.y.peMax, t);
+      if (state.y.axis === "log_fo2") return peToLogFO2(state.y.peMax, state.ph.max, t);
+      return state.y.peMax;
     }
     function plotPeAxis(source) {
       return source.pe || source.y || [];
@@ -607,12 +682,34 @@
     function plotYValues(source, tempC) {
       const pe = plotPeAxis(source);
       const t = tempC ?? source.temp_c ?? state.tempC;
-      return state.y.axis === "eh"
-        ? pe.map(p => peToEh(p, t))
-        : pe;
+      if (state.y.axis === "eh") return pe.map(p => peToEh(p, t));
+      if (state.y.axis === "log_fo2") {
+        const phMid = (state.ph.min + state.ph.max) / 2;
+        return pe.map(p => peToLogFO2(p, phMid, t));
+      }
+      return pe;
     }
     function plotYLabel() {
-      return state.y.axis === "eh" ? "Eh (V)" : "pe";
+      if (state.y.axis === "eh") return "Eh (V)";
+      if (state.y.axis === "log_fo2") return "log fO₂";
+      return "pe";
+    }
+
+    function mapPlotXY(xs, ys, tempC) {
+      if (!xs?.length || !ys?.length) return { x: xs || [], y: ys || [] };
+      const yOut = [];
+      for (let i = 0; i < ys.length; i++) {
+        const pe = ys[i];
+        const ph = xs[i];
+        if (pe == null || ph == null) {
+          yOut.push(null);
+          continue;
+        }
+        if (state.y.axis === "eh") yOut.push(peToEh(pe, tempC));
+        else if (state.y.axis === "log_fo2") yOut.push(peToLogFO2(pe, ph, tempC));
+        else yOut.push(pe);
+      }
+      return { x: xs, y: yOut };
     }
 
     function elementOf(species) {
@@ -645,7 +742,13 @@
     }
     function labelForPhase(name) {
       if (name === "none") return "—";
+      if (name.startsWith("O2(g)")) return name.replace("O2(g)", "O₂");
+      if (name.startsWith("H2(g)")) return name.replace("H2(g)", "H₂");
       return name.replace("(2L)", "").replace("(disordered)", "");
+    }
+
+    function isGasDomainLabel(name) {
+      return name.startsWith("O2(g)") || name.startsWith("H2(g)");
     }
 
     function subsetKey(elems) {
@@ -832,10 +935,28 @@
         state.y.peMin ??= DEFAULT_STATE.y.peMin;
         state.y.peMax ??= DEFAULT_STATE.y.peMax;
         state.y.axis ??= "pe";
+        if (!["pe", "eh", "log_fo2"].includes(state.y.axis)) state.y.axis = "pe";
         delete state.y.levels;
       }
       if (state.ph) delete state.ph.levels;
       if (!state.units) state.units = runtime.cfg?.default_units || DEFAULT_STATE.units;
+      const u = normalizeUnit(state.units);
+      state.units = CANONICAL_UNITS.has(u) ? u : (runtime.cfg?.default_units || DEFAULT_STATE.units);
+      state.o2LimitAtm ??= runtime.cfg?.defaults?.o2_limit_atm ?? DEFAULT_STATE.o2LimitAtm;
+      state.h2LimitAtm ??= runtime.cfg?.defaults?.h2_limit_atm ?? DEFAULT_STATE.h2LimitAtm;
+      delete state.chargeSpecies;
+      if (state.y) {
+        state.y.peMin = roundPe(state.y.peMin);
+        state.y.peMax = roundPe(state.y.peMax);
+      }
+      if (state.ph) {
+        state.ph.min = roundPh(state.ph.min);
+        state.ph.max = roundPh(state.ph.max);
+      }
+      state.totals = state.totals.map(t => ({
+        ...t,
+        value: roundForUnit(t.value, state.units),
+      }));
       if (!state.dbId && state.dbPath) {
         const legacy = runtime.databases.find(d => d.filename && state.dbPath.endsWith(d.filename));
         state.dbId = legacy?.id || "";
@@ -906,11 +1027,11 @@
         row.className = "species-row";
         row.innerHTML = `
           <span class="name">${t.species}</span>
-          <input type="number" step="any" min="0" value="${t.value}" aria-label="${t.species} concentration" />
+          <input type="number" step="any" min="0" value="${roundForUnit(t.value, state.units)}" aria-label="${t.species} concentration" />
           <button class="rm" title="Remove ${t.species}">×</button>`;
         const num = row.querySelector("input");
         num.addEventListener("input", () => {
-          state.totals[i].value = parseFloat(num.value) || 0;
+          state.totals[i].value = roundForUnit(parseFloat(num.value) || 0, state.units);
           commit();
         });
         row.querySelector(".rm").addEventListener("click", () => {
@@ -920,15 +1041,18 @@
         list.appendChild(row);
       });
       $("elemCount").textContent = state.totals.length;
-      $("unitHead").textContent = `concentration (${state.units})`;
-      refreshChargeOptions();
+      $("unitHead").textContent = `concentration (${unitDisplay(state.units)})`;
     }
 
     function fillUnitOptions() {
       const sel = $("units");
       const opts = runtime.cfg?.unit_options || ["mmol/kgw"];
-      sel.innerHTML = opts.map(u => `<option value="${u}">${u}</option>`).join("");
-      sel.value = state.units || runtime.cfg?.default_units || "mmol/kgw";
+      const labels = runtime.cfg?.unit_labels || {};
+      sel.innerHTML = opts.map(u => {
+        const label = labels[u] || unitDisplay(u);
+        return `<option value="${u}">${label}</option>`;
+      }).join("");
+      sel.value = normalizeUnit(state.units || runtime.cfg?.default_units || "mmol/kgw");
     }
 
     function isAllowedSpecies(name) {
@@ -956,21 +1080,6 @@
       state.totals.push({ species: sp, value: runtime.cfg?.default_species_conc ?? 1 });
       $("speciesPicker").value = "";
       commit({ totalsChanged: true });
-    }
-
-    function refreshChargeOptions() {
-      const sel = $("chargeSpecies");
-      const opts = new Set(["Na", "Cl"]);
-      state.totals.forEach(t => opts.add(t.species));
-      const cur = state.chargeSpecies;
-      sel.innerHTML = "";
-      [...opts].forEach(o => {
-        const op = document.createElement("option");
-        op.value = o; op.textContent = o;
-        if (o === cur) op.selected = true;
-        sel.appendChild(op);
-      });
-      if (![...opts].includes(cur)) { state.chargeSpecies = "Na"; sel.value = "Na"; }
     }
 
     /* ---------------- rendering: phases ---------------- */
@@ -1045,9 +1154,11 @@
 
     /* ---------------- axes ---------------- */
     function syncAxisUI() {
-      const isEh = state.y.axis === "eh";
-      $("yMinLabel").textContent = isEh ? "Eh min (V)" : "pe min";
-      $("yMaxLabel").textContent = isEh ? "Eh max (V)" : "pe max";
+      const axis = state.y.axis;
+      $("yMinLabel").textContent =
+        axis === "eh" ? "Eh min (V)" : axis === "log_fo2" ? "log fO₂ min" : "pe min";
+      $("yMaxLabel").textContent =
+        axis === "eh" ? "Eh max (V)" : axis === "log_fo2" ? "log fO₂ max" : "pe max";
       document.querySelectorAll("#yAxisSeg button").forEach(b =>
         b.classList.toggle("active", b.dataset.axis === state.y.axis));
     }
@@ -1162,40 +1273,53 @@
         fillInputs();
         commit();
       });
-      $("chargeSpecies").addEventListener("change", e => { state.chargeSpecies = e.target.value; commit(); });
       $("units").addEventListener("change", e => {
-        const newUnit = e.target.value;
-        const oldUnit = state.units;
+        const newUnit = normalizeUnit(e.target.value);
+        const oldUnit = normalizeUnit(state.units);
         if (oldUnit !== newUnit) {
-          let anyConverted = false;
           state.totals = state.totals.map(t => {
             const v = convertConc(t.value, oldUnit, newUnit);
-            if (v != null) { anyConverted = true; return { ...t, value: v }; }
-            return t;
+            return { ...t, value: v != null ? v : t.value };
           });
-          if (!anyConverted) {
-            setStatus(
-              `Units set to ${newUnit}. Concentrations were not auto-converted (mass/ppm units need manual values).`,
-              "warn"
-            );
-          }
         }
         state.units = newUnit;
-        $("unitHead").textContent = `concentration (${state.units})`;
+        $("unitHead").textContent = `concentration (${unitDisplay(state.units)})`;
         renderSpecies();
         commit();
       });
 
-      $("phMin").addEventListener("input", e => { state.ph.min = parseFloat(e.target.value); commit(); });
-      $("phMax").addEventListener("input", e => { state.ph.max = parseFloat(e.target.value); commit(); });
+      $("phMin").addEventListener("input", e => {
+        state.ph.min = roundPh(parseFloat(e.target.value));
+        if (state.y.axis === "log_fo2") fillInputs();
+        commit();
+      });
+      $("phMax").addEventListener("input", e => {
+        state.ph.max = roundPh(parseFloat(e.target.value));
+        if (state.y.axis === "log_fo2") fillInputs();
+        commit();
+      });
       $("yMin").addEventListener("input", e => {
         const v = parseFloat(e.target.value);
-        state.y.peMin = state.y.axis === "eh" ? ehToPe(v, state.tempC) : v;
+        if (state.y.axis === "eh") state.y.peMin = roundPe(ehToPe(v, state.tempC));
+        else if (state.y.axis === "log_fo2") {
+          state.y.peMin = roundPe(logFO2ToPe(v, state.ph.max, state.tempC));
+        } else state.y.peMin = roundPe(v);
         commit();
       });
       $("yMax").addEventListener("input", e => {
         const v = parseFloat(e.target.value);
-        state.y.peMax = state.y.axis === "eh" ? ehToPe(v, state.tempC) : v;
+        if (state.y.axis === "eh") state.y.peMax = roundPe(ehToPe(v, state.tempC));
+        else if (state.y.axis === "log_fo2") {
+          state.y.peMax = roundPe(logFO2ToPe(v, state.ph.min, state.tempC));
+        } else state.y.peMax = roundPe(v);
+        commit();
+      });
+      $("o2LimitAtm").addEventListener("input", e => {
+        state.o2LimitAtm = parseFloat(e.target.value) || runtime.cfg?.defaults?.o2_limit_atm || 0.21;
+        commit();
+      });
+      $("h2LimitAtm").addEventListener("input", e => {
+        state.h2LimitAtm = parseFloat(e.target.value) || runtime.cfg?.defaults?.h2_limit_atm || 1.0;
         commit();
       });
       $("gridLevels").addEventListener("input", e => {
@@ -1212,6 +1336,8 @@
       document.querySelectorAll("#yAxisSeg button").forEach(b => {
         b.addEventListener("click", () => {
           if (b.dataset.axis === state.y.axis) return;
+          state.y.peMin = roundPe(state.y.peMin);
+          state.y.peMax = roundPe(state.y.peMax);
           state.y.axis = b.dataset.axis;
           fillInputs();
           syncAxisUI();
@@ -1260,12 +1386,22 @@
     function fillInputs() {
       $("dbSelect").value = state.dbId || "";
       $("tempC").value = state.tempC;
-      $("phMin").value = state.ph.min;
-      $("phMax").value = state.ph.max;
+      $("phMin").value = roundPh(state.ph.min);
+      $("phMax").value = roundPh(state.ph.max);
       $("gridLevels").value = state.gridLevels;
       $("adaptiveBoundaries").checked = !!state.adaptiveBoundaries;
-      $("yMin").value = displayYMin();
-      $("yMax").value = displayYMax();
+      $("o2LimitAtm").value = state.o2LimitAtm;
+      $("h2LimitAtm").value = state.h2LimitAtm;
+      $("yMin").value = state.y.axis === "eh"
+        ? roundEh(displayYMin())
+        : state.y.axis === "log_fo2"
+          ? roundLogFO2(displayYMin())
+          : roundPe(state.y.peMin);
+      $("yMax").value = state.y.axis === "eh"
+        ? roundEh(displayYMax())
+        : state.y.axis === "log_fo2"
+          ? roundLogFO2(displayYMax())
+          : roundPe(state.y.peMax);
       $("displayMode").value = state.displayMode;
       syncDisplayControls();
       $("labelsOnly").checked = state.labelsOnly;
@@ -1486,7 +1622,8 @@
         pe_min: state.y.peMin, pe_max: state.y.peMax, pe_levels: state.gridLevels,
         totals,
         units: state.units,
-        charge_species: state.chargeSpecies,
+        o2_limit_atm: state.o2LimitAtm,
+        h2_limit_atm: state.h2LimitAtm,
         phases: sel,
         system_elements: systemElements(),
         exclude_gases: true,
@@ -1734,6 +1871,51 @@
       return anns;
     }
 
+    function polygonCentroid(xs, ys) {
+      let a = 0, cx = 0, cy = 0;
+      const n = xs.length;
+      if (n < 3) return { x: xs[0] ?? 0, y: ys[0] ?? 0 };
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const cross = xs[i] * ys[j] - xs[j] * ys[i];
+        a += cross;
+        cx += (xs[i] + xs[j]) * cross;
+        cy += (ys[i] + ys[j]) * cross;
+      }
+      a *= 0.5;
+      if (Math.abs(a) < 1e-12) {
+        const sx = xs.reduce((s, v) => s + v, 0);
+        const sy = ys.reduce((s, v) => s + v, 0);
+        return { x: sx / n, y: sy / n };
+      }
+      return { x: cx / (6 * a), y: cy / (6 * a) };
+    }
+
+    function vectorPolygonAnnotations(vectorLayer, tempC) {
+      const names = vectorLayer.names || [];
+      const polygons = [...(vectorLayer.polygons || [])].sort((a, b) => (b.area || 0) - (a.area || 0));
+      const plotW = (vectorLayer.plot_ph_span || 10);
+      const plotH = (vectorLayer.plot_pe_span || 20);
+      const minArea = Math.max(1e-4, plotW * plotH * 0.004);
+      const anns = [];
+      const seen = new Set();
+      for (const poly of polygons) {
+        if ((poly.area || 0) < minArea) continue;
+        const name = names[poly.cat] ?? "?";
+        if (name === "none" || seen.has(name)) continue;
+        seen.add(name);
+        const ys = mapPlotXY(poly.x, poly.y, tempC).y;
+        const c = polygonCentroid(poly.x, ys);
+        anns.push({
+          x: c.x, y: c.y,
+          text: `<b>${labelForPhase(name)}</b>`,
+          showarrow: false, font: { size: 12, color: "#111" },
+          bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
+        });
+      }
+      return anns;
+    }
+
     function mapPlotY(values, tempC) {
       if (state.y.axis === "eh") return values.map(v => (v == null ? null : peToEh(v, tempC)));
       return values;
@@ -1746,12 +1928,13 @@
         const cat = poly.cat;
         const name = names[cat] ?? "?";
         let fill;
-        if (name === "none") fill = NONE_COLOR;
+        if (name === "none" || isGasDomainLabel(name)) fill = NONE_COLOR;
         else if (aqueousSet && aqueousSet.has(name)) fill = AQ_GREY;
         else fill = colorForPhase(name);
+        const mapped = mapPlotXY(poly.x, poly.y, tempC);
         return {
           type: "scatter", mode: "lines", fill: "toself",
-          x: poly.x, y: mapPlotY(poly.y, tempC),
+          x: mapped.x, y: mapped.y,
           fillcolor: fill,
           line: { width: 0, color: fill },
           hoverinfo: "skip",
@@ -1762,10 +1945,11 @@
 
     function boundaryLineTrace(boundaries, tempC) {
       if (!boundaries?.x?.length) return null;
+      const mapped = mapPlotXY(boundaries.x, boundaries.y, tempC);
       return {
         type: "scattergl", mode: "lines",
-        x: boundaries.x,
-        y: mapPlotY(boundaries.y, tempC),
+        x: mapped.x,
+        y: mapped.y,
         line: { color: "#222", width: 0.65 },
         hoverinfo: "skip",
         showlegend: false,
@@ -1774,10 +1958,11 @@
 
     function stabilityLimitTrace(stability, tempC) {
       if (!stability?.x?.length) return null;
+      const mapped = mapPlotXY(stability.x, stability.y, tempC);
       return {
         type: "scattergl", mode: "lines",
-        x: stability.x,
-        y: mapPlotY(stability.y, tempC),
+        x: mapped.x,
+        y: mapped.y,
         line: { color: "#c0392b", width: 1.1, dash: "dash" },
         hoverinfo: "skip",
         showlegend: false,
@@ -1859,13 +2044,20 @@
         showgrid: false, zeroline: false, mirror: true, ticks: "outside", linecolor: "#222",
         tickfont: { size: 15 },
       };
+      const yLo = displayYMin();
+      const yHi = displayYMax();
       const layout = {
         margin: { l: 70, r: 20, t: 16, b: 60 },
         paper_bgcolor: "#fff", plot_bgcolor: "#fff",
         showlegend: false,
         xaxis: Object.assign({ title: { text: "pH", font: { size: 18 } }, range: [x[0], x.at(-1)] }, ax),
-        yaxis: Object.assign({ title: { text: yLabel, font: { size: 18 } }, range: [y[0], y.at(-1)] }, ax),
-        annotations: componentAnnotations(plotResult),
+        yaxis: Object.assign({
+          title: { text: yLabel, font: { size: 18 } },
+          range: [Math.min(yLo, yHi), Math.max(yLo, yHi)],
+        }, ax),
+        annotations: vectorMode && vectorLayer
+          ? vectorPolygonAnnotations(vectorLayer, result.temp_c)
+          : componentAnnotations(plotResult),
       };
       if (!traces.length) {
         traces.push({ type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",
@@ -1915,6 +2107,8 @@
         peMax: d.pe_max,
       };
       state.gridLevels = d.grid_levels ?? DEFAULT_STATE.gridLevels;
+      state.o2LimitAtm = d.o2_limit_atm ?? DEFAULT_STATE.o2LimitAtm;
+      state.h2LimitAtm = d.h2_limit_atm ?? DEFAULT_STATE.h2LimitAtm;
       if (runtime.cfg.adaptive_boundaries_default != null) {
         state.adaptiveBoundaries = runtime.cfg.adaptive_boundaries_default;
       }

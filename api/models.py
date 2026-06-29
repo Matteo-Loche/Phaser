@@ -3,14 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import config
-
-
-class TotalsModel(BaseModel):
-    totals: dict[str, float] = Field(default_factory=dict)
-    charge_species: str = "Na"
+from ..chemistry.units import is_valid_unit, normalize_unit
 
 
 class PhaseQuery(BaseModel):
@@ -34,7 +30,6 @@ class ComputeRequest(BaseModel):
     pe_max: float = config.PE_MAX
     pe_levels: int = config.GRID_LEVELS
     totals: dict[str, float]
-    charge_species: str = "Na"
     units: str = config.DEFAULT_UNITS
     phases: list[str] | None = None
     system_elements: list[str] | None = None
@@ -44,6 +39,19 @@ class ComputeRequest(BaseModel):
     max_workers: int | None = None
     adaptive_boundaries: bool = config.ADAPTIVE_BOUNDARIES_DEFAULT
     adaptive_refine_factor: int | None = None
+    o2_limit_atm: float = config.O2_FUGACITY_LIMIT_ATM
+    h2_limit_atm: float = config.H2_FUGACITY_LIMIT_ATM
+
+    @field_validator("units")
+    @classmethod
+    def _validate_units(cls, value: str) -> str:
+        unit = normalize_unit(value)
+        if not is_valid_unit(unit):
+            raise ValueError(
+                f"Unsupported concentration unit: {value!r}. "
+                f"Use one of: {', '.join(config.UNIT_OPTIONS)}."
+            )
+        return unit
 
 
 class RegisterDatabaseRequest(BaseModel):

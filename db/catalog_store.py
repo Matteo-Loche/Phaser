@@ -437,6 +437,26 @@ def list_gas_phases(db_key: str) -> tuple[str, ...]:
         conn.close()
 
 
+def list_trace_gas_phases(
+    db_key: str,
+    system_elements: tuple[str, ...] | set[str],
+) -> tuple[str, ...]:
+    """Component gas phases (not O2/H2) whose elements overlap the system."""
+    sys_set = set(system_elements)
+    conn = _connect()
+    try:
+        phase_elements = _load_phase_elements(conn, db_key)
+        out: list[str] = []
+        for name in list_gas_phases(db_key):
+            if name in ("O2(g)", "H2(g)"):
+                continue
+            if phase_elements.get(name, frozenset()) & sys_set:
+                out.append(name)
+        return tuple(out)
+    finally:
+        conn.close()
+
+
 def phase_names_by_subset_map(
     db_key: str,
     system_elements: tuple[str, ...],

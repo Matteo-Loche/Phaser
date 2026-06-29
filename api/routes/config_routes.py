@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from ... import config
+from ...chemistry.units import unit_label
 from ...db.catalog_store import catalog_public_meta, list_elements, require_ready
 from ...db.registry import get_default_database, list_databases
 from ...services.species import species_suggestions
@@ -49,9 +50,12 @@ def get_config():
             "pe_min": config.PE_MIN,
             "pe_max": config.PE_MAX,
             "grid_levels": config.GRID_LEVELS,
+            "o2_limit_atm": config.O2_FUGACITY_LIMIT_ATM,
+            "h2_limit_atm": config.H2_FUGACITY_LIMIT_ATM,
         },
         "known_totals": list(config.KNOWN_TOTALS),
         "unit_options": list(config.UNIT_OPTIONS),
+        "unit_labels": {u: unit_label(u) for u in config.UNIT_OPTIONS},
         "default_units": config.DEFAULT_UNITS,
         "default_species_conc": config.DEFAULT_SPECIES_CONC,
         "db_elements": db_elements,

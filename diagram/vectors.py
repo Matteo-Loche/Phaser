@@ -22,6 +22,12 @@ _FIELD_PAD = -1.0e6  # border pad: closes regions touching the plot frame
 
 from ..phreeqc.adaptive import fine_axis_levels
 from ..phreeqc.engine import GridJobParams
+from ..phreeqc.gas_limits import (
+    water_gas_boundary_segments,
+    water_gas_outside_labels,
+    water_gas_scalar_grids,
+    water_gas_sum_window,
+)
 from .packer import (
     category_solid_subset,
     label_is_solid,
@@ -216,6 +222,115 @@ def _ring_area(xs: np.ndarray, ys: np.ndarray) -> float:
     return float(abs(np.dot(xs, np.roll(ys, -1)) - np.dot(ys, np.roll(xs, -1))) / 2.0)
 
 
+def _scalar_zero_cross(
+    p0: tuple[float, float],
+    v0: float,
+    p1: tuple[float, float],
+    v1: float,
+) -> tuple[float, float]:
+    """Linear edge crossing where scalar goes from v0 to v1 through zero."""
+    if v0 == v1:
+        return p0
+    t = v0 / (v0 - v1)
+    return (p0[0] + t * (p1[0] - p0[0]), p0[1] + t * (p1[1] - p0[1]))
+
+
+def _clip_polygon_halfplane(
+    verts: list[tuple[float, float]],
+    scalar_fn: Callable[[float, float], float],
+    *,
+    keep_nonpositive: bool,
+) -> list[tuple[float, float]]:
+    """Sutherland–Hodgman clip: keep vertices where scalar <= 0 (or >= 0)."""
+    if len(verts) < 3:
+        return []
+
+    def inside(val: float) -> bool:
+        return val <= 0.0 if keep_nonpositive else val >= 0.0
+
+    out: list[tuple[float, float]] = []
+    for i in range(len(verts)):
+        curr = verts[i]
+        prev = verts[i - 1]
+        vc = scalar_fn(curr[0], curr[1])
+        vp = scalar_fn(prev[0], prev[1])
+        curr_in = inside(vc)
+        prev_in = inside(vp)
+        if curr_in:
+            if not prev_in:
+                out.append(_scalar_zero_cross(prev, vp, curr, vc))
+            out.append(curr)
+        elif prev_in:
+            out.append(_scalar_zero_cross(prev, vp, curr, vc))
+    return out
+
+
+def _water_band_scalars(params: GridJobParams) -> tuple[Callable[[float, float], float], Callable[[float, float], float]]:
+    from ..phreeqc.gas_limits import water_gas_scalar
+
+    def o2(ph: float, pe: float) -> float:
+        return water_gas_scalar(
+            "O2(g)", ph=ph, pe=pe, temp_c=params.temp_c, limit_atm=params.o2_limit_atm,
+        )
+
+    def h2(ph: float, pe: float) -> float:
+        return water_gas_scalar(
+            "H2(g)", ph=ph, pe=pe, temp_c=params.temp_c, limit_atm=params.h2_limit_atm,
+        )
+
+    return o2, h2
+
+
+def _clip_polygon_to_water_band(
+    xs: list[float],
+    ys: list[float],
+    params: GridJobParams,
+) -> tuple[list[float], list[float]]:
+    """Clip a contour ring to the analytic O₂/H₂ water-stability band."""
+    if len(xs) < 3:
+        return [], []
+    o2_fn, h2_fn = _water_band_scalars(params)
+    verts = list(zip(xs, ys))
+    verts = _clip_polygon_halfplane(verts, o2_fn, keep_nonpositive=True)
+    verts = _clip_polygon_halfplane(verts, h2_fn, keep_nonpositive=True)
+    if len(verts) < 3:
+        return [], []
+    return [v[0] for v in verts], [v[1] for v in verts]
+
+
+def _plot_box_polygon(
+    ph_min: float, ph_max: float, pe_min: float, pe_max: float,
+) -> list[tuple[float, float]]:
+    return [
+        (ph_min, pe_min),
+        (ph_max, pe_min),
+        (ph_max, pe_max),
+        (ph_min, pe_max),
+    ]
+
+
+def _gas_outside_polygon(
+    gas: str,
+    params: GridJobParams,
+    *,
+    ph_min: float,
+    ph_max: float,
+    pe_min: float,
+    pe_max: float,
+) -> tuple[list[float], list[float]]:
+    """Analytic fill for an O₂ or H₂ outside region (half-plane ∩ plot box)."""
+    o2_fn, h2_fn = _water_band_scalars(params)
+    scalar_fn = o2_fn if gas == "O2(g)" else h2_fn
+    verts = _clip_polygon_halfplane(
+        _plot_box_polygon(ph_min, ph_max, pe_min, pe_max),
+        scalar_fn,
+        keep_nonpositive=False,
+    )
+    if len(verts) < 3:
+        return [], []
+    return [v[0] for v in verts], [v[1] for v in verts]
+
+
 def _segments_to_boundary_lines(segments: list[dict[str, Any]]) -> dict[str, list]:
     bx: list[float | None] = []
     by: list[float | None] = []
@@ -229,6 +344,44 @@ def _segments_to_boundary_lines(segments: list[dict[str, Any]]) -> dict[str, lis
         bx.append(None)
         by.append(None)
     return {"x": bx, "y": by}
+
+
+def _clip_segments_to_sum_window(
+    segments: list[dict[str, Any]], *, lower: float, upper: float
+) -> list[dict[str, Any]]:
+    """Clip polyline segments to ``lower <= pH + pe <= upper`` (Liang–Barsky).
+
+    Chemistry boundaries are traced across the full pe range; portions outside
+    the water-stability band must not be drawn into the white O₂/H₂ regions.
+    """
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        xs = seg.get("x") or []
+        ys = seg.get("y") or []
+        for k in range(len(xs) - 1):
+            x0, y0 = float(xs[k]), float(ys[k])
+            x1, y1 = float(xs[k + 1]), float(ys[k + 1])
+            s0, s1 = x0 + y0, x1 + y1
+            ds = s1 - s0
+            t0, t1 = 0.0, 1.0
+            ok = True
+            for p, q in ((ds, upper - s0), (-ds, s0 - lower)):
+                if p == 0.0:
+                    if q < 0.0:
+                        ok = False
+                        break
+                    continue
+                r = q / p
+                if p < 0.0:
+                    t0 = max(t0, r)
+                else:
+                    t1 = min(t1, r)
+            if not ok or t0 > t1:
+                continue
+            ax, ay = x0 + t0 * (x1 - x0), y0 + t0 * (y1 - y0)
+            bx, by = x0 + t1 * (x1 - x0), y0 + t1 * (y1 - y0)
+            out.append({"x": [ax, bx], "y": [ay, by]})
+    return out
 
 
 def _pack_one_layer(
@@ -250,9 +403,17 @@ def _pack_one_layer(
     node_cats = layer_nodes.get("node_cat") or []
     cell_lines = layer_nodes.get("cell_lines") or []
     line_cat_names = {c for r in cell_lines for c in (r["pos"], r["neg"])}
-    names = sorted({cat_fn(r) for r in base_rows} | set(node_cats) | line_cat_names)
+    o2_label, h2_label = water_gas_outside_labels(params)
+    names = sorted(
+        {cat_fn(r) for r in base_rows}
+        | set(node_cats)
+        | line_cat_names
+        | {o2_label, h2_label}
+    )
     name_index = {name: i for i, name in enumerate(names)}
     none_idx = name_index.get("none", -999)
+    o2_idx = name_index[o2_label]
+    h2_idx = name_index[h2_label]
 
     base_idx = _base_index_grid(
         base_rows,
@@ -296,6 +457,16 @@ def _pack_one_layer(
         fine, recs, factor=factor, grid_li=grid_li, grid_lj=grid_lj
     )
     fine = _despeckle(fine)
+    chem_fine = fine.copy()
+
+    o2_scalar, h2_scalar, inside_window = water_gas_scalar_grids(
+        fine_ph, fine_pe, params
+    )
+    fine[np.asarray(o2_scalar > 0.0)] = o2_idx
+    fine[np.asarray((h2_scalar > 0.0) & (o2_scalar <= 0.0))] = h2_idx
+
+    ph_lo, ph_hi = float(fine_ph[0]), float(fine_ph[-1])
+    pe_lo, pe_hi = float(fine_pe[0]), float(fine_pe[-1])
 
     # Group clean-cell dividing lines by the categories they bound, so each
     # category's fill field can be overwritten with a continuous signed distance.
@@ -305,19 +476,42 @@ def _pack_one_layer(
         recs_by_cat[r["neg"]].append((r, -1.0))
 
     polygons: list[dict[str, Any]] = []
+    inside_dist = np.minimum(-o2_scalar, -h2_scalar)
     for cat in range(len(names)):
         if cat == none_idx:
             continue
-        field = np.where(fine == cat, _FIELD_BIG, -_FIELD_BIG).astype(float)
+        if cat == o2_idx:
+            cx, cy = _gas_outside_polygon(
+                "O2(g)", params, ph_min=ph_lo, ph_max=ph_hi, pe_min=pe_lo, pe_max=pe_hi,
+            )
+            if len(cx) >= 3:
+                polygons.append({
+                    "cat": cat,
+                    "area": _ring_area(np.array(cx), np.array(cy)),
+                    "x": cx,
+                    "y": cy,
+                })
+            continue
+        if cat == h2_idx:
+            cx, cy = _gas_outside_polygon(
+                "H2(g)", params, ph_min=ph_lo, ph_max=ph_hi, pe_min=pe_lo, pe_max=pe_hi,
+            )
+            if len(cx) >= 3:
+                polygons.append({
+                    "cat": cat,
+                    "area": _ring_area(np.array(cx), np.array(cy)),
+                    "x": cx,
+                    "y": cy,
+                })
+            continue
+        field = np.where(chem_fine == cat, _FIELD_BIG, -_FIELD_BIG).astype(float)
         # Exact per-cell contributions replace the raster init in their block.
-        # Several pieces of the same category in one cell (e.g. a band's two
-        # parts, or a clean line plus a triple region) combine by union (max).
         exact: dict[tuple[int, int], np.ndarray] = {}
-        for r, sign in recs_by_cat.get(cat, ()):  # exact clean-cell boundary
+        for r, sign in recs_by_cat.get(cat, ()):
             s = sign * ((grid_li - r["x1"]) * r["nx"] + (grid_lj - r["y1"]) * r["ny"])
             key = (r["i"], r["j"])
             exact[key] = s if key not in exact else np.maximum(exact[key], s)
-        for region in regions_by_cat.get(cat, ()):  # exact triple / band region
+        for region in regions_by_cat.get(cat, ()):
             block = _region_field_block(region, grid_li, grid_lj)
             key = (region["i"], region["j"])
             exact[key] = block if key not in exact else np.maximum(exact[key], block)
@@ -326,27 +520,49 @@ def _pack_one_layer(
             fi1 = min(fi0 + factor + 1, n_ph_fine)
             fj1 = min(fj0 + factor + 1, n_pe_fine)
             field[fj0:fj1, fi0:fi1] = block[: fj1 - fj0, : fi1 - fi0]
+        field = np.minimum(field, inside_dist)
         if not (field > 0.0).any():
             continue
         for xs, ys in _field_contours(field, fine_ph, fine_pe):
+            cx, cy = _clip_polygon_to_water_band(
+                [float(v) for v in xs], [float(v) for v in ys], params,
+            )
+            if len(cx) < 3:
+                continue
             polygons.append(
                 {
                     "cat": cat,
-                    "area": _ring_area(xs, ys),
-                    "x": [float(v) for v in xs],
-                    "y": [float(v) for v in ys],
+                    "area": _ring_area(np.array(cx), np.array(cy)),
+                    "x": cx,
+                    "y": cy,
                 }
             )
 
-    # Boundary lines come directly from traced segments (brentq crossings,
-    # triple/band cuts, saddle lines, fallback contours) — not from re-contouring fills.
-    boundary_segments = layer_nodes.get("boundaries") or []
-    boundaries = _segments_to_boundary_lines(boundary_segments)
+    # Boundary lines: traced chemistry segments (clipped to the water window so
+    # they don't bleed into the O₂/H₂ regions) plus the analytic gas-limit lines.
+    lower_sum, upper_sum = water_gas_sum_window(params)
+    chem_segments = _clip_segments_to_sum_window(
+        list(layer_nodes.get("boundaries") or []),
+        lower=lower_sum,
+        upper=upper_sum,
+    )
+    chem_segments.extend(
+        water_gas_boundary_segments(
+            params,
+            ph_min=float(fine_ph[0]),
+            ph_max=float(fine_ph[-1]),
+            pe_min=float(fine_pe[0]),
+            pe_max=float(fine_pe[-1]),
+        )
+    )
+    boundaries = _segments_to_boundary_lines(chem_segments)
 
     layer: dict[str, Any] = {
         "names": names,
         "polygons": polygons,
         "boundaries": boundaries,
+        "plot_ph_span": float(fine_ph[-1] - fine_ph[0]),
+        "plot_pe_span": float(fine_pe[-1] - fine_pe[0]),
     }
     if extra:
         layer.update(extra)

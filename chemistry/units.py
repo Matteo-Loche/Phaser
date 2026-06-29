@@ -3,37 +3,75 @@ from __future__ import annotations
 
 from .. import config
 
-# Multiply a numeric value in `unit` by this factor to obtain mol/kgw (or mol/L).
-_MOL_SCALE: dict[str, float] = {
+# Canonical molality units (mol/kgw basis). PHREEQC input always uses mmol/kgw.
+_MOL_SCALE_KGW: dict[str, float] = {
     "mol/kgw": 1.0,
     "mmol/kgw": 1e-3,
     "umol/kgw": 1e-6,
-    "mol/l": 1.0,
-    "mmol/l": 1e-3,
-    "umol/l": 1e-6,
 }
 
-# Mass- and ppm-based units are valid PHREEQC keywords but need per-species
-# molar mass (or manual re-entry) to convert — not auto-converted here.
-_MASS_UNITS = frozenset({"g/kgw", "mg/kgw", "ug/kgw", "g/l", "mg/l", "ug/l", "ppm"})
+# UI / legacy aliases normalized to canonical keys.
+_UNIT_ALIASES = {
+    "µmol/kgw": "umol/kgw",
+    "μmol/kgw": "umol/kgw",
+}
 
 
-def is_mol_unit(unit: str) -> bool:
-    return unit in _MOL_SCALE
+def normalize_unit(unit: str) -> str:
+    """Map UI aliases (e.g. µmol/kgw) to canonical unit keys."""
+    u = (unit or "").strip()
+    return _UNIT_ALIASES.get(u, u)
+
+
+def unit_label(unit: str) -> str:
+    """Human-readable label (µ symbol for micromoles)."""
+    u = normalize_unit(unit)
+    if u == "umol/kgw":
+        return "µmol/kgw"
+    return u
 
 
 def is_valid_unit(unit: str) -> bool:
-    return unit in config.UNIT_OPTIONS
+    return normalize_unit(unit) in config.UNIT_OPTIONS
 
 
 def convert_concentration(value: float, from_unit: str, to_unit: str) -> float | None:
-    """Convert between mol-family units. Returns None if conversion is not defined."""
-    if from_unit == to_unit:
+    """Convert between mol/kgw, mmol/kgw, and umol/kgw."""
+    src = normalize_unit(from_unit)
+    dst = normalize_unit(to_unit)
+    if src == dst:
         return value
-    if from_unit not in _MOL_SCALE or to_unit not in _MOL_SCALE:
+    if src not in _MOL_SCALE_KGW or dst not in _MOL_SCALE_KGW:
         return None
-    # Same basis (kgw vs L) required; treated as equivalent for dilute aqueous solutions.
-    if from_unit.endswith("/kgw") != to_unit.endswith("/kgw"):
-        return None
-    mol = value * _MOL_SCALE[from_unit]
-    return mol / _MOL_SCALE[to_unit]
+    mol = value * _MOL_SCALE_KGW[src]
+    return mol / _MOL_SCALE_KGW[dst]
+
+
+def to_mmol_kgw(value: float, unit: str) -> float:
+    """Convert a concentration to mmol/kgw for PHREEQC SOLUTION input."""
+    u = normalize_unit(unit)
+    if u not in _MOL_SCALE_KGW:
+        raise ValueError(f"Unsupported concentration unit: {unit!r}")
+    converted = convert_concentration(value, u, config.DEFAULT_UNITS)
+    assert converted is not None
+    return converted
+
+
+def totals_to_mmol_kgw(totals: dict[str, float], unit: str) -> dict[str, float]:
+    """Convert all total concentrations to mmol/kgw."""
+    return {name: to_mmol_kgw(val, unit) for name, val in totals.items() if val > 0}
+
+
+_DISPLAY_DECIMALS: dict[str, int] = {
+    "mol/kgw": 6,
+    "mmol/kgw": 4,
+    "umol/kgw": 2,
+}
+
+
+def round_for_unit(value: float, unit: str) -> float:
+    """Round a concentration for display / UI after unit conversion."""
+    u = normalize_unit(unit)
+    if u not in _DISPLAY_DECIMALS:
+        raise ValueError(f"Unsupported concentration unit: {unit!r}")
+    return round(float(value), _DISPLAY_DECIMALS[u])

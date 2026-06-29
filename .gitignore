@@ -40,6 +40,14 @@ data/catalog.sqlite
 *.sqlite-shm
 *.sqlite-journal
 
+# IPhreeqc scratch dumps written to the working directory on error/dump
+error.inp
+phreeqc.out
+dump.out
+error.out
+selected.out
+phreeqc.log
+
 # Docker/local build cache
 docker-data/
 

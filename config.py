@@ -124,13 +124,15 @@ JOB_RESULT_TTL_SEC = int(os.environ.get("PHASER_JOB_RESULT_TTL_SEC", "3600"))
 JOB_QUEUE_TTL_SEC = int(os.environ.get("PHASER_JOB_QUEUE_TTL_SEC", "7200"))
 JOB_REAPER_INTERVAL_SEC = int(os.environ.get("PHASER_JOB_REAPER_INTERVAL_SEC", "60"))
 
-# Concentration unit options passed straight to PHREEQC SOLUTION blocks.
-UNIT_OPTIONS = (
-    "mol/kgw", "mmol/kgw", "umol/kgw",
-    "g/kgw", "mg/kgw", "ug/kgw",
-    "mol/l", "mmol/l", "umol/l",
-    "g/l", "mg/l", "ug/l", "ppm",
-)
+# Water-stability gas limits (atm) for O₂/H₂ diagram boundaries and labels.
+# Override with PHASER_O2_LIMIT_ATM / PHASER_H2_LIMIT_ATM; UI can set per job.
+O2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_O2_LIMIT_ATM", "0.21"))
+H2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_H2_LIMIT_ATM", "1.0"))
+COMPONENT_GAS_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_COMPONENT_GAS_LIMIT_ATM", "1.0"))
+
+# UI/API concentration units (mol/kgw basis). PHREEQC SOLUTION blocks always
+# receive mmol/kgw (DEFAULT_UNITS); values are converted before engine input.
+UNIT_OPTIONS = ("mol/kgw", "mmol/kgw", "umol/kgw")
 
 # Master species labels accepted in the UI (PHREEQC input names).
 KNOWN_TOTALS = (
