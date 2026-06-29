@@ -35,3 +35,6 @@ data/databases/generated/*.dat
 
 # Docker/local build cache
 docker-data/
+
+# Local dev tests (not part of the shipped package)
+tests/

@@ -11,8 +11,6 @@ from .engine import (
 )
 from .adaptive import (
     boundary_base_cells,
-    choose_refine_factor,
-    estimate_adaptive_points,
     fine_axis_levels,
     run_adaptive_boundary_sweep,
 )
@@ -23,7 +21,6 @@ __all__ = [
     "GridPointResult",
     "build_grid",
     "boundary_base_cells",
-    "choose_refine_factor",
     "element_from_total_key",
     "eh_from_pe",
     "evaluate_point",
@@ -33,6 +30,5 @@ __all__ = [
     "run_adaptive_boundary_sweep",
     "run_grid_sweep",
     "run_point_sweep",
-    "estimate_adaptive_points",
     "validate_phreeqc_setup",
 ]

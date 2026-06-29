@@ -12,7 +12,7 @@ from .. import config
 from ..api.dependencies import dll_path, resolve_db_record
 from ..api.models import ComputeRequest
 from ..diagram.packer import pack_grid_results, subsets_to_pack
-from ..diagram.vectors import pack_adaptive_display
+from ..diagram.vectors import pack_traced_display
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
 from ..phreeqc.engine import GridJobParams, validate_phreeqc_setup
 from ..phreeqc.adaptive import run_adaptive_boundary_sweep
@@ -240,11 +240,13 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
                     _jobs[job_id]["phase"] = phase
 
         if body.adaptive_boundaries:
-            pack_params, adapt_stats, base_results, refine_bundle = run_adaptive_boundary_sweep(
-                params,
-                max_workers=body.max_workers,
-                progress_cb=progress,
-                refine_factor=body.adaptive_refine_factor,
+            pack_params, adapt_stats, base_results, trace_bundle = (
+                run_adaptive_boundary_sweep(
+                    params,
+                    max_workers=body.max_workers,
+                    progress_cb=progress,
+                    refine_factor=body.adaptive_refine_factor,
+                )
             )
             compute_mode = "adaptive"
         else:
@@ -252,31 +254,31 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
             pack_params = params
             adapt_stats = {}
             base_results = results
-            refine_bundle = None
+            trace_bundle = None
             compute_mode = "uniform"
 
         rows = [asdict(r) for r in base_results]
         subset_list = subsets_to_pack(pack_params.system_elements)
         pack_layers = len(subset_list) + len(pack_params.system_elements)
-        pack_total = pack_layers * (2 if refine_bundle else 1)
-        pack_done = 0
+        pack_total = pack_layers
 
         def pack_tick(_step: int, _total: int) -> None:
             nonlocal pack_done
             pack_done += 1
             progress(pack_done, pack_total, "packing")
 
+        pack_done = 0
         packed = pack_grid_results(
             pack_params, rows, db_path=db, progress_cb=pack_tick
         )
         packed["compute_mode"] = compute_mode
         if adapt_stats:
             packed["adaptive_stats"] = adapt_stats
-        if refine_bundle:
-            packed["display"] = pack_adaptive_display(
+        if trace_bundle:
+            packed["display"] = pack_traced_display(
                 pack_params,
                 rows,
-                refine_bundle,
+                trace_bundle,
                 db_path=db,
                 progress_cb=pack_tick,
             )

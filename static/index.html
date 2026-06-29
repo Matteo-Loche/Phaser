@@ -474,7 +474,7 @@
           </div>
           <label class="toggle" style="margin-top:0.55rem;font-size:0.82rem">
             <input type="checkbox" id="adaptiveBoundaries" />
-            Adaptive boundaries <span class="meta">(subdivide cells on phase edges)</span>
+            Adaptive boundaries <span class="meta">(root-find phase edges)</span>
           </label>
           <div class="meta" id="gridMeta"></div>
           <div class="meta">Settings are kept in this browser only until you clear site data.</div>
@@ -536,7 +536,7 @@
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
     const LS_KEY = "phaseDiagramState.v7";
-    const RESULT_DB = "phaserResultCache.v8";
+    const RESULT_DB = "phaserResultCache.v19";
     const RESULT_STORE = "results";
     const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v1";
@@ -738,7 +738,8 @@
     }
 
     function usesVectorDisplay(result) {
-      return result.display?.mode === "vectors";
+      const mode = result.display?.mode;
+      return mode === "traced" || mode === "vectors";
     }
     function setStatus(msg, kind = "") {
       const el = $("statusMsg");
@@ -1057,7 +1058,7 @@
         const factor = adaptiveFactor();
         const est = estimateAdaptiveRuns(n);
         $("gridMeta").innerHTML =
-          `Base ${n} × ${n} grid · boundary cells refined ${factor}× (vector display)`
+          `Base ${n} × ${n} grid · boundary tracing`
           + ` · ~<b>${est.toLocaleString()}</b> PHREEQC runs`
           + (est > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
       } else {
@@ -1442,9 +1443,9 @@
       setStatus(
         result.compute_mode === "adaptive" && result.adaptive_stats
           ? `Done — ${result.adaptive_stats.n_evaluated.toLocaleString()} PHREEQC runs`
-            + `, boundaries refined ${result.adaptive_stats.refine_factor}×`
+            + `, ${result.adaptive_stats.boundary_cells || 0} boundary cells traced`
             + (usesVectorDisplay(result)
-              ? ` · ${result.adaptive_stats.base_levels_ph}×${result.adaptive_stats.base_levels_pe} base grid + vector display`
+              ? ` · ${result.adaptive_stats.base_levels_ph}×${result.adaptive_stats.base_levels_pe} base grid + traced display`
               : ` · ${result.adaptive_stats.base_levels_ph}×${result.adaptive_stats.base_levels_pe} grid`)
             + ` · cached in this browser.`
           : `Done — ${st.phases_used?.length ?? "?"} phases evaluated and cached in this browser.`,
@@ -1758,13 +1759,27 @@
       };
     }
 
+    function stabilityLimitTrace(stability, tempC) {
+      if (!stability?.x?.length) return null;
+      return {
+        type: "scattergl", mode: "lines",
+        x: stability.x,
+        y: mapPlotY(stability.y, tempC),
+        line: { color: "#c0392b", width: 1.1, dash: "dash" },
+        hoverinfo: "skip",
+        showlegend: false,
+      };
+    }
+
     function adaptiveStatusSuffix(result) {
       if (result.compute_mode !== "adaptive" || !result.adaptive_stats) return "";
       const s = result.adaptive_stats;
       const mode = usesVectorDisplay(result)
-        ? `vector display · ${s.base_levels_ph}×${s.base_levels_pe} hover grid`
+        ? (result.display?.mode === "traced"
+          ? `traced boundaries · ${s.base_levels_ph}×${s.base_levels_pe} hover grid`
+          : `vector display · ${s.base_levels_ph}×${s.base_levels_pe} hover grid`)
         : `${s.base_levels_ph}×${s.base_levels_pe} grid`;
-      return ` · adaptive ${s.n_evaluated.toLocaleString()} runs (${s.refine_factor}× boundaries, ${mode})`;
+      return ` · adaptive ${s.n_evaluated.toLocaleString()} runs (${s.boundary_cells || 0} boundary cells, ${mode})`;
     }
 
     const INVISIBLE_COLORSCALE = [[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]];
@@ -1796,6 +1811,8 @@
         if (state.showBoundaries) {
           const bt = boundaryLineTrace(vectorLayer.boundaries, result.temp_c);
           if (bt) traces.push(bt);
+          const st = stabilityLimitTrace(result.display?.stability_limits, result.temp_c);
+          if (st) traces.push(st);
         }
       } else if (!state.labelsOnly) {
         traces.push({

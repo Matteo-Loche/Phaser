@@ -9,7 +9,7 @@ PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams**
 Key behaviours:
 
 - **Server-side PHREEQC** with multiprocessing grid sweeps and a **CPU queue** (one sweep at a time by default).
-- **Adaptive boundary refinement** — optional mode that evaluates the full selected grid, then subdivides only cells on a phase boundary for a sharper diagram at lower cost than a uniform fine grid.
+- **Adaptive boundary tracing** — optional mode that evaluates the full selected grid, then locates phase boundaries by root-finding on mixed cells and builds smooth vector fills from exact line geometry (no uniform fine-grid sweep).
 - **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB.
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
@@ -57,11 +57,12 @@ PHASER/
 ├── phreeqc/               # PHREEQC solver integration
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
 │   ├── sweep.py           # Multiprocessing grid sweep
-│   └── adaptive.py        # Adaptive boundary refinement (optional)
+│   ├── adaptive.py        # Adaptive boundary orchestration
+│   └── boundary_trace.py  # Root-finding tracer (brentq, triple/band regions, fallback)
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
 │   ├── packer.py          # Pack raw results into layered grids for the UI
-│   └── vectors.py         # Marching-squares vector polygons for adaptive display
+│   └── vectors.py         # Signed-distance vector display from traced boundaries
 ├── services/              # Orchestration logic
 │   ├── compute.py         # FIFO compute queue + background grid jobs
 │   └── species.py         # Species picker suggestions
@@ -71,9 +72,6 @@ PHASER/
 │   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
 ├── static/
 │   └── index.html         # Single-page web UI
-├── tests/
-│   ├── test_adaptive.py   # Adaptive boundary logic unit tests
-│   └── test_vectors.py    # Vector display packing + species validation tests
 └── data/
     └── databases/
         └── generated/     # User-generated .dat files (+ optional .meta.json)
@@ -106,12 +104,14 @@ flowchart TB
     subgraph solver [phreeqc layer]
         Engine["engine - single point"]
         Sweep["sweep - parallel grid"]
-        Adaptive["adaptive - boundary refine"]
+        Adaptive["adaptive - boundary trace"]
+        Trace["boundary_trace - root finding"]
     end
 
     subgraph diagram_layer [diagram layer]
         Phases[phase resolution]
         Packer[grid packer]
+        Vectors[vector display]
     end
 
     UI -->|REST JSON| Routes
@@ -124,10 +124,13 @@ flowchart TB
     Compute --> Engine
     Compute --> Sweep
     Compute --> Adaptive
+    Adaptive --> Trace
     Compute --> Packer
+    Compute --> Vectors
     Parser --> Registry
     Engine -->|phreeqpy| IPhreeqc[IPhreeqc library]
     Packer --> UI
+    Vectors --> UI
 ```
 
 ### Layer responsibilities
@@ -137,7 +140,7 @@ flowchart TB
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
 | **services** | FIFO compute queue, job lifecycle, and species helpers. No PHREEQC math here. |
 | **db** | Discover and register `.dat` files; parse phase catalogs for the UI. |
-| **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps, optional adaptive boundary refinement. |
+| **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps, optional adaptive boundary tracing. |
 | **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers. |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
 
@@ -193,7 +196,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_HOST` | Bind address (default `0.0.0.0`) |
 | `PHASER_PORT` | Listen port (default `8765`) |
 | `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
-| `PHASER_ADAPTIVE_REFINE_FACTOR` | Boundary subdivision factor in adaptive mode (default `5`) |
+| `PHASER_ADAPTIVE_REFINE_FACTOR` | Display subdivision factor in adaptive mode (default `5`) |
 | `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
 | `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
 | `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
@@ -228,28 +231,45 @@ A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
 - `pool.map` evaluates all `(pH, pe)` pairs, preserving order.
 - Progress callback updates job status for the UI poll loop.
 
-### Adaptive boundary refinement (`adaptive.py`)
+### Adaptive boundary tracing (`adaptive.py` + `boundary_trace.py`)
 
-The optional **Adaptive boundaries** mode hunts and tracks phase boundaries so they render much sharper for far less compute than a uniform fine grid.
+The optional **Adaptive boundaries** mode evaluates the full user-selected grid, then traces phase boundaries on mixed cells so the diagram renders as smooth vector geometry without evaluating every fine-grid node.
 
-**Algorithm:**
+**Pipeline:**
 
-1. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). Nothing is downsampled, so no phase region is missed.
-2. **Boundary detection (all layers)** — for each base point a composite signature is built across *every* plottable layer: each solid-element subset (e.g. Fe-only, Cu-only, Fe-Cu, …) and each aqueous-element map. A base cell is flagged when this signature differs across its four corners, so boundaries are refined even when only a sub-system layer (not the full-system solid predominance) changes there.
-3. **Subdivision** — only those boundary cells are subdivided by `ADAPTIVE_REFINE_FACTOR` (default 5). New sub-grid points are evaluated with **real PHREEQC runs** (not interpolation).
-4. **Vector extraction** — a fine category grid is assembled (interior cells taken from the nearest base node, boundary cells from the refined results) and marching-squares contours (`scikit-image`) trace each region into smooth filled polygons plus thin boundary lines.
+1. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
+2. **Boundary detection** — for each base point a composite signature is built across *every* plottable layer: each solid-element subset (e.g. Fe-only, Cu-only, Fe–Cu, …) and each aqueous-element map. A base cell is flagged when this signature differs across its four corners.
+3. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with dynamic chunking). For each layer and cell:
+   - **2-category cells** — `scipy.optimize.brentq` along cell edges locates crossings of a continuous scalar whose zero is the boundary:
+     - solid↔solid: `SI_A − SI_B`
+     - aqueous↔aqueous: `log(m_A) − log(m_B)` (absent species floored so corners always bracket)
+     - solid↔aqueous solubility: `SI_solid = 0` (aqueous side labelled by its dominant species name)
+     - converged↔failed (`none`): convergence scalar (+1 / −1) for the **stability limit**
+   - **Solid/aqueous name disambiguation** — when a species name is shared by a solid phase and an aqueous complex (e.g. `CuCO3`), the role at each corner is decided from that corner's SI (≥ 0 ⇒ precipitated solid), matching the categoriser.
+   - **3-category cells** — the cell is split into **convex fill regions**, each bounded by oriented lines (a category fills where every line's signed distance is ≥ 0). Two cases arise:
+     - *Triple point* (three crossings): a 2D root (`scipy.optimize.root` / `least_squares`), or the crossing centroid when one scalar is the convergence step (or the solver clamps to an edge), gives an interior junction `T`. Rays from `T` to the three crossings — plus a virtual ray toward the un-crossed same-category edge — cut the cell into angular sectors, one convex cone per corner; the category sharing two corners gets two sectors (joined by union).
+     - *Band* (four crossings): the doubled category sits on the diagonal, so each single-corner category is the half-plane cut off by the line joining its two adjacent crossings, and the doubled category is the convex strip between both cuts.
+   - **2-category saddles** (four edge crossings) — two intersecting dividing lines.
+   - **Fallback** — unresolved cells (4+ categories, lost brackets) share one local `(factor+1)²` sub-grid evaluation per cell across all layers, then marching squares on the sampled category field.
+   - **Crossing cache** — identical edge crossings are cached per worker across layers that share geometry.
+4. **Vector display** (`diagram/vectors.py`) — per layer, a fine categorical grid is assembled from base data, traced overrides, and exact dividing-line geometry. Fills come from **signed-distance fields** whose zero contour matches the traced segments: straight lines for 2-category cells, and per-region line bounds (min of half-planes) for triple/band cells, with disconnected pieces of one category combined by union. Boundary polylines are taken directly from the trace bundle. A despeckle pass removes isolated pixels from fallback regions.
 
-For display, regions are delivered as **vector polygons and boundary lines**, so they stay crisp at any zoom. Each region polygon carries its area so enclosed regions are painted in the correct front-to-back order. Only the base grid is packed for hover and per-point data.
+Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SPECIES`, default 4) while keeping explicit `-mol` output for species seen on boundaries.
 
 **Result metadata** (`adaptive_stats` in the packed JSON):
 
 | Field | Meaning |
 |-------|---------|
-| `refine_factor` | Subdivision factor actually used (may be downgraded if `MAX_ADAPTIVE_POINTS` would be exceeded) |
-| `fine_levels_ph`, `fine_levels_pe` | Fine category-grid dimensions used for contour extraction |
+| `refine_factor` | Display subdivision factor (`ADAPTIVE_REFINE_FACTOR`, default 5) |
 | `base_levels_ph`, `base_levels_pe` | Base grid dimensions (same as the user's plot resolution) |
 | `boundary_cells` | Number of base cells flagged as straddling a boundary |
-| `n_evaluated` | Total PHREEQC runs (base + boundary sub-cells) |
+| `n_evaluated` | Total PHREEQC runs (base grid + trace/fallback evaluations) |
+| `n_trace_evals` | On-demand PHREEQC evaluations during root-finding |
+| `n_fallback_evals` | PHREEQC evaluations in sampled fallback sub-grids |
+| `n_trace_segments` | Exact boundary line segments emitted |
+| `n_stability_segments` | Stability-limit segments (converged↔failed) |
+| `refinement_method` | Always `"trace"` in adaptive mode |
+| `display_mode` | `"traced"` when vector display is produced, else `"grid"` |
 
 Limits (`config.py`):
 
@@ -258,8 +278,12 @@ Limits (`config.py`):
 | `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
 | `MAX_GRID_POINTS` | 40,000 | Hard cap on `ph_levels × pe_levels` for the **base** grid |
 | `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI and API default for adaptive mode |
-| `ADAPTIVE_REFINE_FACTOR` | 5 | Boundary-cell subdivision factor (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
-| `MAX_ADAPTIVE_POINTS` | 120,000 | Max total PHREEQC evaluations in adaptive mode; refine factor is downgraded only if exceeded (env `PHASER_MAX_ADAPTIVE_POINTS`) |
+| `ADAPTIVE_REFINE_FACTOR` | 5 | Fine display raster + fallback sub-grid factor (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
+| `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evaluations in adaptive mode (env `PHASER_MAX_ADAPTIVE_POINTS`) |
+| `BOUNDARY_TRACE_TOLERANCE` | 1e-4 | Relative tolerance for `brentq` / 2D root finding (env `PHASER_BOUNDARY_TRACE_TOLERANCE`) |
+| `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N species per element during tracing (env `PHASER_TRACE_TOP_AQ_SPECIES`) |
+| `TOP_AQ_SPECIES_PER_ELEMENT` | 8 | Top-N species per element in the base grid sweep (env `PHASER_TOP_AQ_SPECIES`) |
+| `TRACE_CHUNK_MULTIPLIER` | 8 | Worker pool chunking multiplier (env `PHASER_TRACE_CHUNK_MULTIPLIER`) |
 | `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
 | `MAX_WORKERS` | 8 | Worker processes per sweep (capped by CPU count) |
 | `MAX_CONCURRENT_JOBS` | 1 | Max simultaneous sweeps server-wide |
@@ -306,7 +330,16 @@ After the sweep, each grid point has SI values and aqueous dominance data. The p
    - `solid_subsets` — predominance among solids + aqueous fallback per subset
    - `elements` — per-element aqueous species maps
 
-The UI (`static/index.html`) renders these layers as colored regions with Plotly. Display options (solid vs aqueous-by-element, Eh vs pe, boundaries, labels) are handled client-side.
+The UI (`static/index.html`) renders these layers as colored regions with Plotly. In adaptive mode, **display** polygons come from `diagram/vectors.py` instead; the packed grids remain for hover only.
+
+### Vector display (`vectors.py`)
+
+When boundary tracing is active, each plottable layer is converted into:
+
+- **Fill polygons** — per-category signed-distance fields built from exact dividing lines (2-category cells) and convex line-bounded regions (3-category triple/band cells), then contoured at zero. Multiple regions of the same category in one cell are combined by union.
+- **Boundary polylines** — taken directly from the trace bundle (not re-derived from fills).
+
+A despeckle pass removes isolated fallback pixels before contouring.
 
 ---
 
@@ -328,7 +361,7 @@ User settings (database, species, axes, phase selection, plot resolution, adapti
 | `localStorage` | `phaserLayout.v1` | Sidebar width |
 | `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
 | `sessionStorage` | `phaserActiveJob.v1` | Active compute job (`jobId` + cache key) for reconnect after refresh |
-| IndexedDB | `phaserResultCache.v2` / `results` | Packed diagram JSON (large results) |
+| IndexedDB | `phaserResultCache.v19` / `results` | Packed diagram JSON (large results) |
 
 Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or cache eviction.
 
@@ -336,7 +369,7 @@ Closing the tab or clearing site data resets settings. Cached diagrams persist u
 
 A single **plot resolution** slider in the Configuration panel sets both `ph_levels` and `pe_levels` sent to the compute API (e.g. 100 → 100×100 = 10,000 PHREEQC runs). The server default is `GRID_LEVELS` in `config.py`, exposed as `defaults.grid_levels` from `/api/config`.
 
-The **Adaptive boundaries** toggle evaluates that same selected grid in full, then subdivides only the cells on a phase boundary (by `ADAPTIVE_REFINE_FACTOR`, default 5×) so the rendered diagram has much sharper boundaries for a fraction of the runs a uniform fine grid would need. The Configuration panel shows an estimated run count and output resolution (e.g. *Base 100 × 100, boundaries refined 5× → up to 496 × 496 output*).
+The **Adaptive boundaries** toggle evaluates that same selected grid in full, then traces phase boundaries on mixed cells (`ADAPTIVE_REFINE_FACTOR`, default 5×) so the rendered diagram has smooth vector boundaries for far fewer PHREEQC runs than a uniform fine grid. The Configuration panel shows an estimated run count (base grid + traced boundary work).
 
 Phase/species **colors are persisted** in `colorByName` (localStorage). New phases get a stable hash-based palette color on first encounter.
 
@@ -368,7 +401,7 @@ While **running**, the progress bar and status text reflect the active phase:
 | Phase | Status text | Progress bar |
 |-------|-------------|--------------|
 | `grid` | Computing grid… X% | Determinate (base PHREEQC sweep) |
-| `boundaries` | Refining boundaries… X% | Determinate (adaptive boundary sub-cells only) |
+| `boundaries` | Tracing boundaries… X% | Determinate (root-finding + fallback sub-grids) |
 | `packing` | Packing diagram… | Indeterminate (server-side grid packing) |
 | *(after `done`)* | Downloading diagram result… X% | Determinate when `Content-Length` is available |
 | *(client)* | Caching diagram in this browser… | Indeterminate |
@@ -378,16 +411,16 @@ Adaptive mode deliberately **resets** the bar between the grid and boundaries ph
 
 ### Adaptive display vs hover
 
-When adaptive refinement is active (`refine_factor > 1`):
+When adaptive tracing is active:
 
 | Layer | Source | Role |
 |-------|--------|------|
-| **Packed grid** (`layers` in JSON) | Base grid only (e.g. 100×100) | Hover, per-point data (future: concentrations), never shown as colors |
-| **Vector display** (`display` in JSON) | Marching-squares contours of the fine category grid | Smooth colored filled polygons and thin boundary lines |
+| **Packed grid** (`layers` in JSON) | Base grid only (e.g. 100×100) | Hover, per-point data; never shown as colors |
+| **Vector display** (`display` in JSON) | Traced signed-distance fields + exact boundary segments | Smooth filled polygons and thin boundary lines |
 
-Each display layer is a list of region polygons (`{cat, area, x, y}`) plus a single `boundaries` polyline set. The browser sorts polygons by `area` (largest first) and fills each with `fill: "toself"`, so a region enclosed inside another is drawn on top; white `none` regions are painted explicitly.
+Each display layer is a list of region polygons (`{cat, area, x, y}`) plus a `boundaries` polyline set. The browser sorts polygons by `area` (largest first) and fills each with `fill: "toself"`, so a region enclosed inside another is drawn on top; white `none` regions are painted explicitly. Stability limits (converged↔failed edges) render as distinct lines.
 
-Uniform mode (or adaptive with `refine_factor = 1`) uses the base heatmap for both display and hover.
+Uniform mode uses the base heatmap for both display and hover.
 
 ### Display and layout
 
@@ -430,8 +463,8 @@ Key fields in the JSON body:
 | `phases` | auto-discover | Selected solid phase names |
 | `system_elements` | from totals | Explicit element list for layers |
 | `db_id` | server default | Database from registry |
-| `adaptive_boundaries` | `true` | Enable adaptive boundary refinement |
-| `adaptive_refine_factor` | server default (5) | Subdivision factor (optional; included in browser cache key) |
+| `adaptive_boundaries` | `true` | Enable adaptive boundary tracing |
+| `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
 
 ### Compute flow
 
@@ -442,8 +475,10 @@ sequenceDiagram
     participant Job as Compute service
     participant Reg as DB registry
     participant Sw as PHREEQC sweep
-    participant Ad as Adaptive refine
+    participant Ad as Adaptive trace
+    participant Tr as Boundary tracer
     participant Pack as Diagram packer
+    participant Vec as Vector display
 
     UI->>API: POST /api/compute
     API->>Job: enqueue job
@@ -451,12 +486,16 @@ sequenceDiagram
     Job->>Reg: resolve db_id to path
     alt adaptive_boundaries
         Job->>Sw: base grid sweep
-        Job->>Ad: boundary sub-cell sweep
+        Job->>Ad: flag boundary cells
+        Ad->>Tr: root-find boundaries (parallel)
+        Job->>Pack: pack_grid_results
+        Job->>Vec: pack_traced_display
     else uniform
         Job->>Sw: run_grid_sweep
     end
     Job->>Pack: pack_grid_results
     Pack-->>Job: layered grids
+    Vec-->>Job: vector display layers
     loop Poll while running or after page reload
         UI->>API: GET job status
         API-->>UI: progress and phase
@@ -478,8 +517,10 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Host / port | `PHASER_HOST`, `PHASER_PORT` | `0.0.0.0:8765` | Used by `run_server.py` and Docker |
 | Grid resolution | — | `GRID_LEVELS = 100` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
 | Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
-| Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Boundary subdivision in adaptive mode |
-| Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Total PHREEQC runs allowed in adaptive mode |
+| Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Display subdivision factor in adaptive mode |
+| Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft cap on total PHREEQC runs in adaptive mode |
+| Boundary trace tolerance | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-4` | Root-finding tolerance along cell edges |
+| Trace top-N species | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH species slots during tracing |
 | Max workers per sweep | — | `MAX_WORKERS = 8` | Capped by `os.cpu_count()` in `sweep.py` |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
@@ -508,12 +549,16 @@ PHASER can consume databases produced by external tools:
 - **WSL + Windows**: run the server in WSL; edit files on the Windows side; paths in `config.py` use `/mnt/c/...` when running under Linux.
 - **Networking**: with WSL2 **mirrored networking** (`networkingMode=mirrored` in `%UserProfile%\.wslconfig`), the app is reachable on your LAN at the machine's IP (e.g. `http://192.168.x.x:8765`). You may need a Windows Firewall inbound rule for TCP port 8765.
 - **Multi-user**: each browser session is isolated (local settings + IndexedDB cache). Compute jobs are independent but share the server queue and CPU pool. Orphaned jobs are reclaimed by the reaper after the configured TTLs.
-- **Tests**:
+- **Smoke check** (imports + registry):
   ```bash
   python scripts/smoke_check.py
-  # Adaptive boundary logic (no PHREEQC required):
-  python -m pytest tests/test_adaptive.py -q
   ```
+- **Local unit tests** (optional; `tests/` is gitignored and not shipped):
+  ```bash
+  python -m PHASER.tests.test_boundary_trace
+  python -m PHASER.tests.test_vectors
+  ```
+  From the parent of the `PHASER` folder, with the project venv active (WSL recommended).
 
 ---
 

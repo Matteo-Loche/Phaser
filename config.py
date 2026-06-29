@@ -97,16 +97,25 @@ MAX_GRID_POINTS = 40000  # 200 x 200
 MAX_WORKERS = 8
 MAX_CONCURRENT_JOBS = int(os.environ.get("PHASER_MAX_CONCURRENT_JOBS", "1"))
 
-# When enabled, compute evaluates the full selected grid first, then subdivides
-# only the cells that straddle a phase boundary and evaluates those sub-cells.
-# The diagram is rendered at the finer (subdivided) resolution.
+# When enabled, compute evaluates the full selected grid first, then traces
+# phase boundaries on mixed cells via root-finding (see boundary_trace.py).
 ADAPTIVE_BOUNDARIES_DEFAULT = True
-# How many times each boundary cell edge is subdivided during refinement.
+# Subdivision factor for the local fallback sub-grid inside unresolved cells and
+# for the fine display raster in diagram/vectors.py (exact line/region SDF fills).
 ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"))
-# Max total PHREEQC evaluations allowed in adaptive mode (base grid + boundary
-# sub-cells). Decoupled from MAX_GRID_POINTS so the requested refine factor is
-# honored; the factor is only downgraded if a diagram would exceed this.
+# Soft cap on total PHREEQC evaluations in adaptive mode (base grid + trace work).
 MAX_ADAPTIVE_POINTS = int(os.environ.get("PHASER_MAX_ADAPTIVE_POINTS", "120000"))
+# Aqueous species molalities punched per element (USER_PUNCH via SYS) for tracing.
+TOP_AQ_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_TOP_AQ_SPECIES", "8"))
+# Trace mode uses fewer USER_PUNCH slots; corner/boundary species stay on explicit -mol.
+BOUNDARY_TRACE_TOP_AQ_SPECIES = int(
+    os.environ.get("PHASER_TRACE_TOP_AQ_SPECIES", "4")
+)
+# Relative tolerance for 1D root finding along cell edges (trace mode).
+BOUNDARY_TRACE_TOLERANCE = float(os.environ.get("PHASER_BOUNDARY_TRACE_TOLERANCE", "1e-4"))
+# Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
+TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "8"))
+TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "8"))
 
 # Completed job results are dropped from server memory after this TTL if the
 # browser never fetched them (or after fetch + DELETE). Also used by the reaper.

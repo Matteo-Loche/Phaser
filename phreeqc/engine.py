@@ -26,6 +26,10 @@ class GridJobParams:
     system_elements: tuple[str, ...] = ()
     charge_species: str = "Na"
     units: str = config.DEFAULT_UNITS
+    # Extra aqueous species for SELECTED_OUTPUT -mol (boundary tracing).
+    aq_species_molality: tuple[str, ...] = ()
+    # Override TOP_AQ_SPECIES_PER_ELEMENT for this job (trace uses fewer).
+    top_aq_species_per_element: int | None = None
 
 
 @dataclass
@@ -37,6 +41,7 @@ class GridPointResult:
     dominant_solid: str = "aqueous"
     dominant_aq_by_element: dict[str, str] = field(default_factory=dict)
     aq_molality_by_element: dict[str, float] = field(default_factory=dict)
+    aq_molality_by_species: dict[str, float] = field(default_factory=dict)
     si: dict[str, float] = field(default_factory=dict)
 
 
@@ -114,23 +119,69 @@ def _dominant_from_si(si: dict[str, float], *, include: set[str] | None = None, 
     return phase if value >= 0.0 else default
 
 
-def _format_user_punch(elements: tuple[str, ...]) -> str:
+def _top_aq_species_per_element(params: GridJobParams) -> int:
+    if params.top_aq_species_per_element is not None:
+        return params.top_aq_species_per_element
+    return config.TOP_AQ_SPECIES_PER_ELEMENT
+
+
+def _format_user_punch(elements: tuple[str, ...], *, top_n: int) -> str:
     if not elements:
         return ""
     headings = []
     for elem in elements:
         headings.extend([f"dom_{elem}", f"m_dom_{elem}"])
+        for k in range(1, top_n + 1):
+            headings.extend([f"sp_{elem}_{k}", f"m_{elem}_{k}"])
     lines = ["USER_PUNCH", f"    -headings {' '.join(headings)}", "    -start"]
-    ln = 10
-    for elem in elements:
-        lines.append(f"{ln} t = SYS(\"{elem}\", n, nm$, ty$, mo)")
-        ln += 10
-        lines.append(f"{ln} IF n > 0 THEN PUNCH nm$(1) ELSE PUNCH \"none\"")
-        ln += 10
-        lines.append(f"{ln} IF n > 0 THEN PUNCH mo(1) ELSE PUNCH -999")
-        ln += 10
+    base = 1000
+    for idx, elem in enumerate(elements):
+        b = base + idx * 200
+        pad = b + 80
+        cont = b + 100
+        lines.extend(
+            [
+                f"{b} n = SYS(\"{elem}\", n, nm$, ty$, mo)",
+                f"{b + 10} IF n > 0 THEN PUNCH nm$(1) ELSE PUNCH \"none\"",
+                f"{b + 20} IF n > 0 THEN PUNCH mo(1) ELSE PUNCH -999",
+                f"{b + 30} FOR ii = 1 TO {top_n}",
+                f"{b + 40} IF ii > n THEN GOTO {pad}",
+                f"{b + 50} PUNCH nm$(ii)",
+                f"{b + 60} PUNCH mo(ii)",
+                f"{b + 70} GOTO {cont}",
+                f"{pad} PUNCH \"none\"",
+                f"{pad + 10} PUNCH -999",
+                f"{cont} NEXT ii",
+            ]
+        )
     lines.append("    -end")
     return "\n".join(lines) + "\n"
+
+
+def _mol_headers(species: str) -> list[str]:
+    """Candidate SELECTED_OUTPUT column names for a species molality."""
+    return [f"m_{species}", f"mol_{species}", f"Mola_{species}", species]
+
+
+def _parse_species_molalities(row: dict, params: GridJobParams) -> dict[str, float]:
+    """Merge USER_PUNCH top-species slots and explicit -mol species."""
+    out: dict[str, float] = {}
+    top_n = _top_aq_species_per_element(params)
+    for elem in params.system_elements:
+        for k in range(1, top_n + 1):
+            sp = _row_str(row, f"sp_{elem}_{k}", default="")
+            if not sp or sp == "none":
+                continue
+            m = _row_value(row, f"m_{elem}_{k}")
+            if m == m and m > 0:
+                out[sp] = m
+    for sp in params.aq_species_molality:
+        for key in _mol_headers(sp):
+            m = _row_value(row, key)
+            if m == m and m > 0:
+                out[sp] = m
+                break
+    return out
 
 
 def format_grid_input(
@@ -144,7 +195,17 @@ def format_grid_input(
     )
     si_list = " ".join(f'"{p}"' if " " in p or "(" in p else p for p in params.phases)
     charge = params.charge_species
-    user_punch = _format_user_punch(params.system_elements)
+    user_punch = _format_user_punch(
+        params.system_elements,
+        top_n=_top_aq_species_per_element(params),
+    )
+    mol_line = ""
+    if params.aq_species_molality:
+        mol_tokens = " ".join(
+            f'"{s}"' if " " in s or "(" in s or "-" in s else s
+            for s in params.aq_species_molality
+        )
+        mol_line = f"    -mol {mol_tokens}\n"
     return f"""
 TITLE Phase diagram
 SOLUTION 1
@@ -162,7 +223,7 @@ SELECTED_OUTPUT
     -pH true
     -pe true
     -si {si_list}
-
+{mol_line}
 {user_punch}END
 """
 
@@ -182,6 +243,7 @@ def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> G
 
         dominant_aq: dict[str, str] = {}
         mol_aq: dict[str, float] = {}
+        sp_mol = _parse_species_molalities(row, params)
         for elem in params.system_elements:
             species = _row_str(row, f"dom_{elem}", default="none")
             if species != "none":
@@ -189,6 +251,8 @@ def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> G
             m = _row_value(row, f"m_dom_{elem}")
             if m == m:
                 mol_aq[elem] = m
+                if species != "none" and species not in sp_mol:
+                    sp_mol[species] = m
 
         return GridPointResult(
             ph=ph,
@@ -199,6 +263,7 @@ def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> G
             dominant_solid=_dominant_from_si(si, include=solid_phases, default="aqueous"),
             dominant_aq_by_element=dominant_aq,
             aq_molality_by_element=mol_aq,
+            aq_molality_by_species=sp_mol,
         )
     except Exception:
         return base

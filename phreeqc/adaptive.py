@@ -1,17 +1,12 @@
-"""Adaptive boundary refinement for phase-diagram grid sweeps.
+"""Adaptive boundary tracing for phase-diagram grid sweeps.
 
-Strategy ("hunt and track boundaries"):
+Pipeline:
 
-1. Evaluate the full user-selected grid (the *base* grid). This guarantees no
-   phase region is missed, and the base grid is kept as hoverable data.
-2. Find base cells whose four corners are not all the same dominant category
-   (these straddle a phase boundary).
-3. Subdivide only those boundary cells by ``refine_factor`` and evaluate the
-   new sub-grid points with PHREEQC.
-4. Upscale the rest of the diagram from the base grid (block fill, no compute).
-
-The display is built as vector polygons (see ``diagram/vectors.py``); only the
-base grid is packed for hover and per-point data.
+1. Evaluate the full user-selected base grid (hover data + corner categories).
+2. Flag base cells whose corners differ across any plottable layer signature.
+3. Trace phase boundaries on those cells via root-finding (``boundary_trace.py``),
+   emitting exact line segments and convex fill regions for 3-category cells.
+4. Pack traced geometry into vector display layers (``diagram/vectors.py``).
 """
 from __future__ import annotations
 
@@ -33,14 +28,7 @@ def fine_axis_levels(base_levels: int, factor: int) -> int:
 
 
 def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
-    """Build a row -> signature function spanning every plottable layer.
-
-    The diagram renders one layer per solid-element subset (Fe, Cu, Fe-Cu, ...)
-    and one aqueous map per element. Refining only the full-system solid
-    predominance leaves the other layers blocky. The signature concatenates the
-    category each layer would show, so a base cell is treated as a boundary cell
-    when *any* layer changes across its corners.
-    """
+    """Build a row -> signature function spanning every plottable layer."""
     from ..db.parser import is_gas
     from ..diagram.packer import dominant_aq_in_subset, subsets_to_pack
     from ..diagram.phases import phase_element_map
@@ -48,8 +36,6 @@ def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
     phase_elements = phase_element_map(params.db_path)
     elements = params.system_elements
 
-    # Precompute the eligible solid phases for each subset once (independent of
-    # the grid point), so the per-point signature stays cheap on large grids.
     eligible_by_subset: list[tuple[set[str], tuple[str, ...]]] = []
     for subset in subsets_to_pack(params.system_elements):
         sset = set(subset)
@@ -81,10 +67,7 @@ def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
 
 
 def boundary_base_cells(categories: np.ndarray) -> list[tuple[int, int]]:
-    """Base cells (lower-left index i,j) whose 4 corners differ in category.
-
-    ``categories`` is indexed ``[j, i]`` (pe row, pH column).
-    """
+    """Base cells (lower-left index i,j) whose 4 corners differ in category."""
     n_pe, n_ph = categories.shape
     cells: list[tuple[int, int]] = []
     for j in range(n_pe - 1):
@@ -99,78 +82,6 @@ def boundary_base_cells(categories: np.ndarray) -> list[tuple[int, int]]:
     return cells
 
 
-def fine_nodes_for_cells(
-    cells: list[tuple[int, int]],
-    factor: int,
-    n_ph_fine: int,
-    n_pe_fine: int,
-) -> set[tuple[int, int]]:
-    """Fine-grid indices (fi, fj) covered by the given base cells."""
-    nodes: set[tuple[int, int]] = set()
-    for i, j in cells:
-        fi0 = i * factor
-        fj0 = j * factor
-        for fj in range(fj0, min(fj0 + factor, n_pe_fine - 1) + 1):
-            for fi in range(fi0, min(fi0 + factor, n_ph_fine - 1) + 1):
-                nodes.add((fi, fj))
-    return nodes
-
-
-def choose_refine_factor(
-    n_ph: int,
-    n_pe: int,
-    boundary_cell_count: int,
-    desired_factor: int,
-    budget: int,
-) -> int:
-    """Largest factor whose extra sub-cell evaluations fit the compute budget."""
-    for factor in range(max(2, desired_factor), 1, -1):
-        approx_new = boundary_cell_count * (factor + 1) * (factor + 1)
-        if approx_new <= budget:
-            return factor
-    return 1
-
-
-def estimate_adaptive_points(
-    ph_levels: int,
-    pe_levels: int,
-    *,
-    refine_factor: int | None = None,
-    boundary_fraction: float = 0.12,
-) -> int:
-    """Rough UI estimate: full base grid + sub-cells for ~boundary_fraction cells."""
-    n_ph = max(1, ph_levels)
-    n_pe = max(1, pe_levels)
-    factor = refine_factor or config.ADAPTIVE_REFINE_FACTOR
-    base = n_ph * n_pe
-    base_cells = max(0, (n_ph - 1) * (n_pe - 1))
-    boundary_cells = int(base_cells * boundary_fraction)
-    new_per_cell = (factor + 1) * (factor + 1) - 4
-    return min(config.MAX_ADAPTIVE_POINTS, base + boundary_cells * max(0, new_per_cell))
-
-
-def _clone_result_at(row: GridPointResult, ph: float, pe: float) -> GridPointResult:
-    return GridPointResult(
-        ph=ph,
-        pe=pe,
-        converged=row.converged,
-        dominant_phase=row.dominant_phase,
-        dominant_solid=row.dominant_solid,
-        dominant_aq_by_element=dict(row.dominant_aq_by_element),
-        aq_molality_by_element=dict(row.aq_molality_by_element),
-        si=dict(row.si),
-    )
-
-
-def _serialize_evaluated(
-    evaluated: dict[tuple[int, int], GridPointResult],
-) -> list[dict[str, Any]]:
-    return [
-        {"fi": fi, "fj": fj, "row": asdict(row)}
-        for (fi, fj), row in sorted(evaluated.items())
-    ]
-
-
 def run_adaptive_boundary_sweep(
     params: GridJobParams,
     *,
@@ -178,12 +89,9 @@ def run_adaptive_boundary_sweep(
     progress_cb=None,
     refine_factor: int | None = None,
 ) -> tuple[GridJobParams, dict[str, Any], list[GridPointResult], dict[str, Any] | None]:
-    """Full base grid + boundary subdivision.
+    """Full base grid sweep + boundary tracing.
 
-    Returns ``(base_params, stats, base_rows, refine_bundle)`` where
-    ``base_params``/``base_rows`` are the user grid (packed for hover/data), and
-    ``refine_bundle`` (when refinement runs) carries the evaluated fine nodes
-    inside boundary cells, which the display packer turns into vector polygons.
+    Returns ``(base_params, stats, base_rows, trace_bundle)``.
     """
     base_ph, base_pe = build_grid(params)
     n_ph = params.ph_levels
@@ -195,9 +103,6 @@ def run_adaptive_boundary_sweep(
             "Reduce ph_levels or pe_levels."
         )
 
-    # Progress is reported per phase ("grid" then "boundaries") so the bar
-    # reflects the actual adaptive work. It deliberately resets between phases
-    # rather than faking a single monotonic estimate.
     desired = refine_factor or config.ADAPTIVE_REFINE_FACTOR
 
     def report(done: int, total: int, phase: str) -> None:
@@ -223,11 +128,8 @@ def run_adaptive_boundary_sweep(
             base_result_ij[(i, j)] = row
 
     cells = boundary_base_cells(categories)
-    budget = max(0, config.MAX_ADAPTIVE_POINTS - base_total)
-    factor = choose_refine_factor(n_ph, n_pe, len(cells), desired, budget)
 
-    # No boundaries or no budget: nothing to refine, return base grid as-is.
-    if factor <= 1 or not cells:
+    if not cells:
         report(base_total, base_total, "grid")
         stats = {
             "n_evaluated": base_total,
@@ -235,64 +137,49 @@ def run_adaptive_boundary_sweep(
             "n_filled": 0,
             "base_levels_ph": n_ph,
             "base_levels_pe": n_pe,
-            "fine_levels_ph": n_ph,
-            "fine_levels_pe": n_pe,
             "refine_factor": 1,
-            "boundary_cells": len(cells),
+            "boundary_cells": 0,
             "n_boundary_evaluated": 0,
+            "refinement_method": "trace",
             "display_mode": "grid",
         }
         return params, stats, base_rows, None
 
-    n_ph_fine = fine_axis_levels(n_ph, factor)
-    n_pe_fine = fine_axis_levels(n_pe, factor)
-    fine_ph = np.linspace(params.ph_min, params.ph_max, n_ph_fine)
-    fine_pe = np.linspace(params.pe_min, params.pe_max, n_pe_fine)
+    from .boundary_trace import _chunk_cells, run_boundary_trace
 
-    # Seed fine grid with base results at aligned nodes.
-    evaluated: dict[tuple[int, int], GridPointResult] = {}
-    for (i, j), row in base_result_ij.items():
-        fi, fj = i * factor, j * factor
-        evaluated[(fi, fj)] = _clone_result_at(row, float(fine_ph[fi]), float(fine_pe[fj]))
+    workers = max_workers or min(config.MAX_WORKERS, 4)
+    n_progress = max(1, len(_chunk_cells(cells, workers=workers)))
+    report(0, n_progress, "boundaries")
+    trace_bundle, trace_stats = run_boundary_trace(
+        params,
+        db_path=params.db_path,
+        base_ph=base_ph,
+        base_pe=base_pe,
+        base_ij=base_result_ij,
+        cells=cells,
+        refine_factor=desired,
+        max_workers=max_workers,
+        progress_cb=(
+            (lambda d, t: report(d, t, "boundaries")) if progress_cb else None
+        ),
+    )
+    report(n_progress, n_progress, "boundaries")
 
-    refine_nodes = fine_nodes_for_cells(cells, factor, n_ph_fine, n_pe_fine)
-    to_eval = [(fi, fj) for (fi, fj) in sorted(refine_nodes) if (fi, fj) not in evaluated]
-    refine_points = [(float(fine_ph[fi]), float(fine_pe[fj])) for fi, fj in to_eval]
-    eval_total = base_total + len(refine_points)
-    n_refine = len(refine_points)
-
-    if refine_points:
-        # Second phase: report progress within the boundary-refinement pass.
-        report(0, n_refine, "boundaries")
-        refine_rows = run_point_sweep(
-            params,
-            refine_points,
-            max_workers=max_workers,
-            progress_cb=(lambda d, _t: report(d, n_refine, "boundaries")) if progress_cb else None,
-        )
-        refine_by_key = {_point_key(r.ph, r.pe): r for r in refine_rows}
-        for (fi, fj), (ph, pe) in zip(to_eval, refine_points, strict=True):
-            evaluated[(fi, fj)] = refine_by_key[_point_key(ph, pe)]
-
-    report(n_refine, n_refine, "boundaries")
-
+    n_trace = trace_stats.n_trace_evals + trace_stats.n_fallback_evals
     stats = {
-        "n_evaluated": base_total + len(refine_points),
+        "n_evaluated": base_total + n_trace,
         "n_total": base_total,
         "n_filled": 0,
         "base_levels_ph": n_ph,
         "base_levels_pe": n_pe,
-        "fine_levels_ph": n_ph_fine,
-        "fine_levels_pe": n_pe_fine,
-        "refine_factor": factor,
+        "refine_factor": desired,
         "boundary_cells": len(cells),
-        "n_boundary_evaluated": len(refine_points),
-        "display_mode": "vectors",
+        "n_boundary_evaluated": n_trace,
+        "n_trace_evals": trace_stats.n_trace_evals,
+        "n_fallback_evals": trace_stats.n_fallback_evals,
+        "n_trace_segments": trace_stats.n_segments,
+        "n_stability_segments": trace_stats.n_stability_segments,
+        "refinement_method": "trace",
+        "display_mode": "traced",
     }
-    refine_bundle = {
-        "factor": factor,
-        "evaluated": _serialize_evaluated(evaluated),
-        "fine_ph": fine_ph.tolist(),
-        "fine_pe": fine_pe.tolist(),
-    }
-    return params, stats, base_rows, refine_bundle
+    return params, stats, base_rows, trace_bundle
