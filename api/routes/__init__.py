@@ -1,7 +1,7 @@
 """Aggregate API route modules."""
 from fastapi import APIRouter
 
-from . import compute, config_routes, databases, elements, health, phases
+from . import compute, config_routes, databases, elements, health, phases, stats
 
 router = APIRouter()
 router.include_router(health.router)
@@ -10,3 +10,4 @@ router.include_router(databases.router)
 router.include_router(elements.router)
 router.include_router(phases.router)
 router.include_router(compute.router)
+router.include_router(stats.router)

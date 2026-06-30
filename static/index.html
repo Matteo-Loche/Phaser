@@ -272,26 +272,95 @@
     #phaseDiagramMain, #statsMain { display: none; }
     .app.mode-phase-diagram #phaseDiagramMain { display: flex; }
     .app.mode-stats #statsMain { display: flex; }
+    /* Statistics mode has no sidebar, so collapse the grid to a single full-width
+       column (otherwise the sidebar/resizer columns stay reserved and squeeze
+       the dashboard into the right third of the screen). */
+    .app.mode-stats {
+      grid-template-columns: 1fr;
+      grid-template-areas: "header" "main";
+    }
     .app.mode-stats aside,
     .app.mode-stats .sidebar-resizer,
     .app.mode-stats #menuBtn { display: none !important; }
+    /* The compute button has display:inline-flex, so the [hidden] attribute
+       alone cannot hide it; drive visibility from the active mode instead. */
+    .app.mode-stats #computeBtn { display: none !important; }
     .stats-workspace {
       flex: 1; padding: var(--space);
       overflow-y: auto;
+      display: flex; flex-direction: column;
     }
-    .stats-panel {
-      max-width: 52rem; margin: 0 auto;
+    .stats-dashboard {
+      width: 100%; max-width: 1600px; margin: 0 auto;
+      display: flex; flex-direction: column; gap: 1.1rem;
+    }
+    #statsBody { display: flex; flex-direction: column; gap: 1.1rem; }
+    .stats-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 0.75rem; flex-wrap: wrap;
+    }
+    .stats-head h2 { margin: 0; font-size: 1.25rem; font-weight: 700; }
+    .stats-updated { font-size: 0.78rem; color: var(--muted); }
+    .stats-kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1.1rem;
+    }
+    .stats-kpi {
       border: 1px solid var(--border); border-radius: var(--radius);
-      background: var(--panel); padding: clamp(1rem, 2vw, 1.6rem);
+      background: var(--panel); padding: 0.85rem 0.95rem;
     }
-    .stats-panel h2 {
-      margin: 0 0 0.65rem; font-size: 1.15rem; font-weight: 700;
+    .stats-kpi .value { color: var(--kpi-accent, inherit); }
+    .stats-kpi .label {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); font-weight: 600; margin-bottom: 0.35rem;
     }
-    .stats-panel .meta { line-height: 1.45; margin: 0.45rem 0; }
-    .stats-placeholder {
-      margin-top: 1rem; padding: 1rem;
-      border: 1px dashed var(--border); border-radius: 8px;
-      background: var(--panel-2); color: var(--muted); font-size: 0.84rem;
+    .stats-kpi .value { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
+    .stats-kpi .sub { font-size: 0.76rem; color: var(--muted); margin-top: 0.25rem; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.1rem;
+    }
+    .stats-card {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--panel); padding: 0.95rem 1rem;
+      min-height: 0;
+    }
+    .stats-card h3 {
+      margin: 0 0 0.75rem; font-size: 0.82rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--card-accent, var(--muted));
+    }
+    .stats-bars { display: flex; flex-direction: column; gap: 0.55rem; }
+    .stats-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+    .stats-bar-label {
+      font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .stats-bar-count { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .stats-bar-track {
+      grid-column: 1 / -1; height: 8px; border-radius: 999px;
+      background: var(--panel-2); border: 1px solid var(--border); overflow: hidden;
+    }
+    .stats-bar-fill {
+      height: 100%; border-radius: 999px;
+      background: var(--card-accent, var(--accent));
+      min-width: 2px;
+    }
+    /* time-series charts */
+    .stats-charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 1.1rem;
+    }
+    .stats-plot { width: 100%; height: 200px; }
+    .stats-empty, .stats-error {
+      padding: 1.25rem; border: 1px dashed var(--border); border-radius: var(--radius);
+      background: var(--panel-2); color: var(--muted); font-size: 0.88rem; line-height: 1.45;
+    }
+    .stats-error { border-color: var(--err); color: var(--err); }
+    .stats-footnote {
+      font-size: 0.76rem; color: var(--muted); line-height: 1.4;
     }
 
     /* Narrow screens: hide the wordy status, but keep the progress bar visible
@@ -668,8 +737,8 @@
             <span class="mode-desc">pH–pe / Eh predominance maps</span>
           </button>
           <button type="button" role="menuitem" data-mode="stats">
-            Stats
-            <span class="mode-desc">Server usage metrics (coming soon)</span>
+            Statistics
+            <span class="mode-desc">Server usage metrics and activity</span>
           </button>
         </div>
       </div>
@@ -840,13 +909,18 @@
         </div>
       </main>
       <div id="statsMain" class="mode-panel stats-workspace" hidden>
-        <div class="stats-panel">
-          <h2>Server statistics</h2>
-          <p class="meta">Per-server usage metrics will appear here: diagrams computed, database usage, compute times, and layer-mode breakdowns.</p>
-          <p class="meta">This route validates the mode navigation shell. The stats API and charts will be wired in a later pass.</p>
-          <div class="stats-placeholder">
-            Placeholder — no compute on this page. Switch back to <b>Saturation Predominance</b> from the header mode menu to run PHREEQC jobs.
+        <div class="stats-dashboard" id="statsDashboard">
+          <div class="stats-head">
+            <h2>Server statistics</h2>
+            <span class="stats-updated" id="statsUpdated">Loading…</span>
           </div>
+          <div id="statsBody">
+            <div class="stats-empty">Loading statistics…</div>
+          </div>
+          <p class="stats-footnote">
+            Counts successful server computes for Saturation Predominance only.
+            Browser cache hits are not included. Refreshes automatically every 3 minutes while this page is open.
+          </p>
         </div>
       </div>
     </div>
@@ -875,6 +949,7 @@
     const DEFAULT_MODE_ID = "phase-diagram";
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
     const RESULT_CACHE_MAX = 24;
+    const STATS_POLL_MS = 3 * 60 * 1000;
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
     const LOG_K_O2_25 = 20.75;
     const LOG_K_O2_DT = 0.0018;
@@ -974,6 +1049,7 @@
       hasResult: false,
       computeStartedAt: null,
       modeMenuOpen: false,
+      statsPollTimer: null,
     };
 
     const MODES = {
@@ -988,8 +1064,8 @@
       },
       stats: {
         id: "stats",
-        label: "Stats",
-        title: "PHASER — Stats",
+        label: "Statistics",
+        title: "PHASER — Statistics",
         hasCompute: false,
         emptyHint: null,
       },
@@ -1070,6 +1146,11 @@
         } else if (!runtime.hasResult) {
           $("plotEmpty").style.display = "";
         }
+        stopStatsPolling();
+      } else if (activeModeId === "stats") {
+        startStatsPolling();
+      } else {
+        stopStatsPolling();
       }
     }
 
@@ -1101,6 +1182,188 @@
         runtime.lastResult = result;
         runtime.hasResult = true;
         if (activeModeId === "phase-diagram") drawDiagram(result);
+      }
+    }
+
+    /* ---------------- stats dashboard ---------------- */
+    function stopStatsPolling() {
+      if (runtime.statsPollTimer) {
+        clearInterval(runtime.statsPollTimer);
+        runtime.statsPollTimer = null;
+      }
+    }
+
+    function startStatsPolling() {
+      stopStatsPolling();
+      loadStats();
+      runtime.statsPollTimer = setInterval(loadStats, STATS_POLL_MS);
+    }
+
+    function formatStatsDuration(ms) {
+      if (ms == null || !Number.isFinite(ms)) return "—";
+      const s = ms / 1000;
+      if (s < 60) return `${s.toFixed(1)} s`;
+      const m = Math.floor(s / 60);
+      const rem = Math.round(s % 60);
+      return `${m}m ${rem}s`;
+    }
+
+    function statsCssVar(name, fallback) {
+      const v = getComputedStyle(document.body).getPropertyValue(name).trim();
+      return v || fallback;
+    }
+
+    function drawStatsCharts(buckets) {
+      const actEl = $("statsActivityPlot");
+      const waitEl = $("statsWaitPlot");
+      if (!window.Plotly || !actEl || !waitEl) return;
+      const list = buckets || [];
+      const x = list.map(b => new Date(b.bucket_start));
+      const counts = list.map(b => b.count || 0);
+      const waitS = list.map(b => (b.avg_wait_ms != null ? b.avg_wait_ms / 1000 : null));
+
+      const muted = statsCssVar("--muted", "#888");
+      const border = statsCssVar("--border", "#444");
+      const base = {
+        margin: { l: 38, r: 12, t: 6, b: 28 },
+        height: 200,
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(0,0,0,0)",
+        font: { size: 11, color: muted },
+        showlegend: false,
+        hovermode: "x unified",
+        xaxis: { type: "date", gridcolor: border, zerolinecolor: border, tickformat: "%H:%M", color: muted, nticks: 6 },
+        yaxis: { gridcolor: border, zerolinecolor: border, color: muted, rangemode: "tozero" },
+      };
+      const config = { displayModeBar: false, responsive: true };
+
+      Plotly.react(actEl, [{
+        x, y: counts, type: "scatter", mode: "lines",
+        line: { color: "#00DDFF", width: 1.5, shape: "linear" },
+        fill: "tozeroy", fillcolor: "rgba(0,221,255,0.16)",
+        hovertemplate: "%{y} diagram(s)<extra></extra>",
+      }], { ...base, yaxis: { ...base.yaxis, dtick: 1, tickformat: "d" } }, config);
+
+      Plotly.react(waitEl, [{
+        x, y: waitS, type: "scatter", mode: "lines",
+        connectgaps: false,
+        line: { color: "#FF9900", width: 1.5, shape: "linear" },
+        fill: "tozeroy", fillcolor: "rgba(255,153,0,0.14)",
+        hovertemplate: "%{y:.1f} s wait<extra></extra>",
+      }], base, config);
+    }
+
+    function statsBarList(items, labelKey, countKey) {
+      if (!items?.length) {
+        return `<div class="stats-empty" style="margin:0;padding:0.75rem">No data yet.</div>`;
+      }
+      const max = Math.max(...items.map(it => it[countKey] || 0), 1);
+      return `<div class="stats-bars">${items.map(it => {
+        const label = String(it[labelKey] ?? "—");
+        const count = it[countKey] || 0;
+        const pct = Math.max(2, Math.round((count / max) * 100));
+        const safe = label.replace(/</g, "&lt;");
+        return `<div class="stats-bar-row">
+          <span class="stats-bar-label" title="${safe}">${safe}</span>
+          <span class="stats-bar-count">${count}</span>
+          <div class="stats-bar-track"><div class="stats-bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      }).join("")}</div>`;
+    }
+
+    function renderStats(data) {
+      const body = $("statsBody");
+      const updated = $("statsUpdated");
+      if (!body) return;
+      updated.textContent = `Updated ${new Date().toLocaleTimeString()} · auto-refresh every 3 min`;
+
+      if (!data || !data.total_diagrams) {
+        body.innerHTML = `<div class="stats-empty">
+          No server computes recorded yet. Run a Saturation Predominance diagram to populate these statistics.
+          Browser cache hits are not counted.
+        </div>`;
+        return;
+      }
+
+      const adapt = data.adaptive_vs_uniform || {};
+      const adaptTotal = (adapt.adaptive || 0) + (adapt.uniform || 0);
+      const adaptPct = adaptTotal ? Math.round((adapt.adaptive / adaptTotal) * 100) : 0;
+      const activity = data.activity_24h || [];
+      const activityTotal = activity.reduce((sum, b) => sum + (b.count || 0), 0);
+      const gridItems = (data.top_grid_sizes || []).map(r => ({
+        label: `${r.grid_levels}×${r.grid_levels}`,
+        count: r.count,
+      }));
+
+      body.innerHTML = `
+        <div class="stats-kpis">
+          <div class="stats-kpi" style="--kpi-accent:#0066FF">
+            <div class="label">Diagrams</div>
+            <div class="value">${data.total_diagrams}</div>
+            <div class="sub">server computes</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#00DDFF">
+            <div class="label">Avg compute</div>
+            <div class="value">${formatStatsDuration(data.avg_compute_ms)}</div>
+            <div class="sub">wall time</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#00FFB2">
+            <div class="label">Avg queue</div>
+            <div class="value">${data.avg_queue_position != null ? data.avg_queue_position.toFixed(1) : "—"}</div>
+            <div class="sub">jobs ahead at start (0 = immediate)</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#FFB300">
+            <div class="label">Avg wait</div>
+            <div class="value">${formatStatsDuration(data.avg_queue_wait_ms)}</div>
+            <div class="sub">queued before compute</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#FF4D00">
+            <div class="label">Adaptive</div>
+            <div class="value">${adaptPct}%</div>
+            <div class="sub">${adapt.adaptive || 0} adaptive · ${adapt.uniform || 0} uniform</div>
+          </div>
+        </div>
+        <div class="stats-charts">
+          <section class="stats-card" style="--card-accent:#00DDFF">
+            <h3>Activity — last 24 hours (${activityTotal} ${activityTotal === 1 ? "diagram" : "diagrams"})</h3>
+            <div id="statsActivityPlot" class="stats-plot"></div>
+          </section>
+          <section class="stats-card" style="--card-accent:#FF9900">
+            <h3>Avg wait time — last 24 hours (seconds)</h3>
+            <div id="statsWaitPlot" class="stats-plot"></div>
+          </section>
+        </div>
+        <div class="stats-grid">
+          <section class="stats-card" style="--card-accent:#0066FF">
+            <h3>Top databases</h3>
+            ${statsBarList(data.top_databases, "db_id", "count")}
+          </section>
+          <section class="stats-card" style="--card-accent:#00FFB2">
+            <h3>Top grid sizes</h3>
+            ${statsBarList(gridItems, "label", "count")}
+          </section>
+          <section class="stats-card" style="--card-accent:#39FF14">
+            <h3>Layer configurations</h3>
+            ${statsBarList(data.top_layer_configs, "label", "count")}
+          </section>
+          <section class="stats-card" style="--card-accent:#FF4D00">
+            <h3>Element pairs</h3>
+            ${statsBarList(data.top_element_pairs, "pair", "count")}
+          </section>
+        </div>`;
+
+      drawStatsCharts(activity);
+    }
+
+    async function loadStats() {
+      const body = $("statsBody");
+      if (!body || activeModeId !== "stats") return;
+      try {
+        const data = await api("/api/stats");
+        renderStats(data);
+      } catch (e) {
+        $("statsUpdated").textContent = "Update failed";
+        body.innerHTML = `<div class="stats-error">${e.message || "Could not load statistics."}</div>`;
       }
     }
 

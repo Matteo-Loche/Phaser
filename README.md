@@ -4,7 +4,7 @@
 
 <p align="center"><em>pH–pe / pH–Eh predominance diagrams from PHREEQC</em></p>
 
-PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams** from PHREEQC thermodynamic databases. Users define a chemical system (total concentrations), select solid phases, and the server evaluates a grid of PHREEQC solutions in parallel to determine which phase or aqueous species is dominant at each point.
+PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams** from PHREEQC thermodynamic databases. Users define a chemical system (total concentrations), select solid phases, and the server evaluates a grid of PHREEQC solutions in parallel to determine which phase or aqueous species is dominant at each point. The application ships as a **Docker image** (Linux IPhreeqc and PHREEQC databases bundled) or can be run from source on Linux/WSL.
 
 Key behaviours:
 
@@ -16,13 +16,26 @@ Key behaviours:
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** — single-page shell with **mode navigation** (Saturation Predominance · Stats), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
+- **Server usage statistics** — successful Saturation Predominance computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats` and the **Statistics** UI mode (diagram counts, queue timing, 24 h activity).
+- **Plotly UI** — single-page shell with **mode navigation** (Saturation Predominance · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
 
 ---
 
 ## Quick start
 
-### Linux / WSL (recommended for PHREEQC)
+### Docker (recommended)
+
+Bundles Linux IPhreeqc and the PHREEQC database directory from the official USGS source build — no local compiler required.
+
+```bash
+cd /path/to/PHASER
+cp .env.example .env
+docker compose up --build phaser
+```
+
+Open [http://localhost:8765](http://localhost:8765). For a production host pulling a pre-built image from GHCR, see [Deployment](#deployment).
+
+### From source (Linux / WSL)
 
 ```bash
 cd /path/to/Software_dev/PHASER
@@ -34,11 +47,11 @@ pip install -r requirements.txt
 python run_server.py
 ```
 
-Open [http://localhost:8765](http://localhost:8765) in your browser.
+Open [http://localhost:8765](http://localhost:8765).
 
 ### Windows
 
-Windows Python cannot load Linux `libiphreeqc.so`. Use **WSL** for compute, or install a matching Windows `IPhreeqc` DLL and run natively.
+Windows Python cannot load Linux `libiphreeqc.so`. Use **WSL** or **Docker** for compute, or install a matching Windows `IPhreeqc` DLL and run natively.
 
 ---
 
@@ -55,7 +68,8 @@ PHASER/
 │   └── routes/            # One module per API concern
 ├── db/                    # PHREEQC database handling
 │   ├── registry.py        # Server-side database catalog (trusted paths)
-│   └── catalog_store.py   # SQLite PHREEQC catalog (elements/phases/species/collisions)
+│   ├── catalog_store.py   # SQLite PHREEQC catalog (elements/phases/species/collisions)
+│   └── stats_store.py     # SQLite per-server compute usage statistics
 ├── phreeqc/               # PHREEQC solver integration
 │   ├── catalog.py         # SYS probes + PHASES-block parse -> catalog snapshot
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
@@ -68,6 +82,7 @@ PHASER/
 │   └── vectors.py         # Signed-distance vector display from traced boundaries
 ├── services/              # Orchestration logic
 │   ├── compute.py         # FIFO compute queue + background grid jobs
+│   ├── stats.py           # Per-server usage statistics recording
 │   └── species.py         # Species picker suggestions
 ├── Icon/                  # Branding assets (served at /icons/)
 │   ├── phaser_logo.svg        # Animated header logo (in-app)
@@ -77,9 +92,12 @@ PHASER/
 │   └── index.html         # Single-page web UI
 ├── docker-compose.yml     # Local dev: build from source
 ├── docker-compose.prod.yml # Server: pull GHCR image
+├── Dockerfile             # Multi-stage: build IPhreeqc + Python app
 ├── .github/workflows/
 │   └── docker-publish.yml # Build & push to GHCR on main / tags
 └── data/
+    ├── catalog.sqlite     # Auto-created PHREEQC catalog cache (gitignored)
+    ├── stats.sqlite       # Auto-created per-server usage log (gitignored)
     └── databases/
         └── generated/     # User-generated .dat files (+ optional .meta.json)
 ```
@@ -101,11 +119,13 @@ flowchart TB
 
     subgraph services [services layer]
         Compute[compute jobs]
+        StatsSvc[usage statistics]
     end
 
     subgraph db_layer [db layer]
         Registry[database registry]
         Catalog[SQLite catalog store]
+        StatsStore[SQLite stats store]
     end
 
     subgraph solver [phreeqc layer]
@@ -135,6 +155,9 @@ flowchart TB
     Compute --> Packer
     Compute --> Vectors
     Compute --> Catalog
+    Compute --> StatsSvc
+    StatsSvc --> StatsStore
+    Routes --> StatsSvc
     Phases --> Catalog
     Engine -->|phreeqpy| IPhreeqc[IPhreeqc library]
     Packer --> UI
@@ -146,8 +169,8 @@ flowchart TB
 | Layer | Role |
 |-------|------|
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
-| **services** | FIFO compute queue, job lifecycle, and species helpers. No PHREEQC math here. |
-| **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`). |
+| **services** | FIFO compute queue, job lifecycle, species helpers, and usage-statistics recording. No PHREEQC math here. |
+| **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`); persist per-server compute events (`stats_store.py`). |
 | **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps, optional adaptive boundary tracing. |
 | **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers. |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
@@ -226,6 +249,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_BUILTIN_DB_DIRS` | Extra builtin scan dirs (`os.pathsep`-separated) |
 | `PHASER_GENERATED_DB_DIR` | Override generated database directory |
 | `PHASER_CATALOG_DB` | SQLite catalog cache path (default `data/catalog.sqlite`) |
+| `PHASER_STATS_DB` | Per-server usage statistics SQLite path (default `data/stats.sqlite`) |
 | `PHASER_CATALOG_PROBE_AMOUNT` | Total concentration per element for catalog SYS probes (default `1.0` in `mmol/kgw`) |
 | `PHASER_IPHREEQC_LIB` | Path to `libiphreeqc.so` / `IPhreeqc.dll` |
 | `PHASER_HOST` | Bind address (default `0.0.0.0`) |
@@ -354,6 +378,7 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
 7. **Page reload during compute:** the UI stores the active `job_id` in `sessionStorage` and resumes polling on load. If the job finished while the tab was away, the result is fetched automatically.
 8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h) and queued jobs that were never started after `JOB_QUEUE_TTL_SEC` (default 2 h). Polls update `last_seen_at` on each job.
+9. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
 
 Job statuses: `queued` → `running` → `done` | `error`.
 
@@ -460,7 +485,7 @@ In `diagram/vectors.py` the gas limits become real overlay geometry: O₂/H₂ r
 
 ## Web UI (`static/index.html`)
 
-Single-page app served at `/`. A fixed **header** is shared across all modes: logo, **mode switcher**, compute control, progress, status line, and **database selector**. The default mode — **Saturation Predominance** — uses the familiar three-panel layout: chemistry and axis settings in the **left sidebar**, the **diagram** in the centre, and **display options** in a resizable panel on the **right**. A **Stats** route is a placeholder for future per-server metrics (no compute on that page).
+Single-page app served at `/`. A fixed **header** is shared across all modes: logo, **mode switcher**, compute control, progress, status line, and **database selector**. The default mode — **Saturation Predominance** — uses the familiar three-panel layout: chemistry and axis settings in the **left sidebar**, the **diagram** in the centre, and **display options** in a resizable panel on the **right**. **Statistics** is a read-only server usage dashboard (no compute on that page).
 
 ### Modes and routing
 
@@ -469,10 +494,10 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 | Route | Label | Compute |
 |-------|-------|---------|
 | `#/phase-diagram` | Saturation Predominance | Yes — `/api/compute` |
-| `#/stats` | Stats | No — placeholder panel |
+| `#/stats` | Statistics | No — server usage dashboard (`GET /api/stats`) |
 
 - **Mode switcher** — dropdown beside the logo (`Mode · Saturation Predominance ▼`). The active mode is shown on the button and highlighted in the menu; the document title updates per mode.
-- **Compute dispatch** — the header **Compute diagram** button calls the active mode's handler. On **Stats**, only the button is hidden; **progress and status stay visible** if a job is still running.
+- **Compute dispatch** — the header **Compute diagram** button calls the active mode's handler. On **Statistics**, only the button is hidden; **progress and status stay visible** if a job is still running.
 - **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored per mode; switching back to Saturation Predominance restores the diagram from memory or IndexedDB.
 - **Cache keys** include `mode_id` plus the request body. Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
 
@@ -506,7 +531,26 @@ Future compute modes (e.g. mineral stability) can register in the same `MODES` t
 - **≤760px** — header status text hides (progress bar stays).
 - **≤560px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
 
-**Stats mode** hides the sidebar and diagram workspace; only the stats placeholder panel is shown. The mode switcher and database control remain in the header.
+**Statistics mode** hides the sidebar and diagram workspace; only the statistics dashboard is shown. The mode switcher and database control remain in the header. Data refreshes automatically every **3 minutes** while the page is open (no manual refresh control).
+
+### Statistics dashboard (`#/stats`)
+
+Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB`, gitignored like other `*.sqlite` files). Recorded **only on successful server computes** for Saturation Predominance — browser IndexedDB cache hits are excluded.
+
+| Metric | Description |
+|--------|-------------|
+| **Diagram count** | Total successful server jobs |
+| **Top databases** | Most-used `db_id` values |
+| **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) |
+| **Layer configurations** | Solid / aqueous / per-element subset combinations |
+| **Element pairs** | Unordered pairs from each job's `system_elements` |
+| **Avg compute time** | Wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds) |
+| **Avg queue at start** | Mean number of jobs ahead when each job began running, captured at enqueue time (`0` = started immediately) |
+| **Avg wait time** | Mean time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
+| **Adaptive vs uniform** | Breakdown of boundary-tracing mode usage |
+| **24h activity** | Compute counts in 5-minute buckets for the trailing 24 hours (`activity_24h`, each `{bucket_start, count, avg_wait_ms}`), rendered as a live Plotly time-series. A companion graph plots the average queue wait (seconds) per bucket. |
+
+Schema and queries live in `db/stats_store.py`; events are written from `services/compute.py` after each successful job.
 
 ### Header: database
 
@@ -648,6 +692,7 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 | `POST` | `/api/phases` | Discover phases for a chemical system |
 | `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}` |
 | `GET` | `/api/job/{job_id}` | Job status (`queued` \| `running` \| `done` \| `error`), `progress`, `phase`, queue position |
+| `GET` | `/api/stats` | Per-server compute usage summary (diagram counts, top DBs, grid sizes, layers, element pairs, timing, queue, `activity_24h`) |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
 | `DELETE` | `/api/job/{job_id}` | Release job/result from server memory (called by UI after fetch) |
 
@@ -723,6 +768,8 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Setting | Env override | Default | Notes |
 |---------|--------------|---------|-------|
 | Host / port | `PHASER_HOST`, `PHASER_PORT` | `0.0.0.0:8765` | Used by `run_server.py` and Docker |
+| Catalog SQLite | `PHASER_CATALOG_DB` | `data/catalog.sqlite` | PHREEQC element/phase/species index |
+| Stats SQLite | `PHASER_STATS_DB` | `data/stats.sqlite` | Per-server compute event log |
 | Grid resolution | — | `GRID_LEVELS = 100` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
 | Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
 | Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Display subdivision factor in adaptive mode |
@@ -916,6 +963,7 @@ See also [Docker](#docker) (build from source) and [Cloudflare Tunnel](#cloudfla
 ### Deployment checklist
 
 1. Mount persistent storage for `data/databases/generated` (`PHASER_DATA_DIR`).
-2. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
-3. Expose via Cloudflare Tunnel or a reverse proxy if needed.
-4. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register`.
+2. Catalog and stats SQLite files are created automatically on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` if you want them to survive container recreation.
+3. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
+4. Expose via Cloudflare Tunnel or a reverse proxy if needed.
+5. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register`.
