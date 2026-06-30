@@ -14,7 +14,7 @@ Key behaviours:
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** with resizable sidebar, square diagram, solid/aqueous display layers, **Eh / pe / log fO₂** redox-axis toggle, animated header logo during compute, and **phase color persistence** across refreshes.
+- **Plotly UI** — three-panel desktop layout (controls · diagram · display options), unified header progress bar, **Eh / pe / log fO₂** redox-axis toggle, O₂/H₂ gas-limit configuration, vector predominance display, and browser-side settings/result cache.
 
 ---
 
@@ -432,92 +432,118 @@ In `diagram/vectors.py` the gas limits become real overlay geometry: O₂/H₂ r
 
 ## Web UI (`static/index.html`)
 
-### Chemistry defaults
+Single-page app served at `/`. All chemistry and axis settings live in the **left sidebar**; the **diagram** fills the centre; **display options** sit in a resizable panel on the **right**. A fixed **header** carries the logo, compute control, progress, and short status messages.
 
-- Default units: **`mmol/kgw`** (PHREEQC input always uses mmol/kgw). The UI also offers **mol/kgw** and **µmol/kgw**; concentrations are converted to mmol/kgw before each compute job.
-- Changing units in the UI auto-converts species concentrations between mol, mmol, and µmol.
-- **Charge balance:** `Cl⁻` in the acidic seed, `Na⁺` from NaOH titration (*"Charge balance: Cl⁻ or Na⁺"* in the UI). See [Single-point evaluation](#single-point-evaluation-enginepy).
+### Layout
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  [☰]  PHASER   [Compute] [▓▓▓▓░░ 42%]  status…        DB pill │
+├──────────────┬──────────────────────────────┬───┬───────────────┤
+│  Sidebar     │                              │ ║ │  Plot panel   │
+│  (controls)  │       Phase diagram          │ ║ │  (display)    │
+│              │       (Plotly)               │ ║ │               │
+└──────────────┴──────────────────────────────┴───┴───────────────┘
+```
+
+| Region | Role |
+|--------|------|
+| **Header** | Animated PHASER logo (rainbow scan while computing), **Compute diagram** button, unified spectrum progress bar, short status line, database health pill |
+| **Left sidebar** | Database, chemical system, axes, phases, configuration — collapsible cards |
+| **Diagram** | Square-ish Plotly canvas (`fitPlotBox` allows up to **1:1.2** aspect so the plot grows on narrow windows instead of shrinking to a tiny square) |
+| **Right plot panel** | Display mode, solid-element subset, labels/boundaries toggles, diagram metadata |
+| **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets width. Widths persist in `phaserLayout.v1` |
+
+**Responsive behaviour**
+
+- **≤1100px** — plot panel moves **above** the diagram as a horizontal toolbar; the panel resizer is hidden.
+- **≤900px** — sidebar becomes a slide-out drawer (☰ menu).
+- **≤760px** — header status text hides (progress bar stays).
+- **≤560px** — compute button label shortens to **Run**; progress bar compacts; health pill hides.
+
+### Left sidebar
+
+| Card | Contents |
+|------|----------|
+| **Database** | `db_id` selector, catalog status, reload elements |
+| **Chemical system** | Species picker with concentrations, unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature. Charge balance note: *Cl⁻ or Na⁺* (fixed titration recipe — see [Single-point evaluation](#single-point-evaluation-enginepy)) |
+| **Axes** | pH min/max; redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
+| **Phases** | Searchable checklist of catalog solids; select all/none |
+| **Configuration** | Plot resolution slider (`ph_levels` = `pe_levels`), **Adaptive boundaries** toggle, **O₂/H₂ stability limits** (atm), estimated PHREEQC run count |
+
+Changing units auto-converts species concentrations. Editing settings marks the diagram **stale** until recomputed.
+
+### Header: compute and progress
+
+**Compute diagram** enqueues a server job (or loads an identical request from the browser cache). While a job runs:
+
+- The logo animates (`.is-computing` on the brand link).
+- A **single unified progress bar** advances through the whole pipeline — one 0–100% fill, not per-phase resets.
+- A short **status line** names the current step (`Computing grid…`, `Refining boundaries…`, etc.).
+
+**Queued** jobs show status text only — the bar stays hidden until the job starts running.
+
+**Done** messages are compact, e.g. `Done · 40k runs · 8.2s`. Cache hits show **`Cached`**.
+
+The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
+
+**Unified progress budget** (adaptive mode):
+
+| Step | Bar range |
+|------|-----------|
+| Grid sweep | 0–20% |
+| Boundary refinement | 20–90% |
+| Packing | 90–95% |
+| Download / cache / render | 95–100% |
+
+Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement slice), then the same packing and tail segments.
+
+### Right plot panel
+
+| Control | Effect |
+|---------|--------|
+| **Display** | *Solid predominance* (subset of elements) or *Aqueous species (by element)* |
+| **Solid elements** | Checkboxes for which element subsets appear as solid fields (solid mode only) |
+| **Labels only** | Region labels without fill colours |
+| **Boundaries** | Phase and gas-limit boundary polylines |
+| **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
+
+Phase/species **colours** persist in `colorByName` (localStorage). New phases get a stable hash-based palette colour on first encounter.
+
+Non-convergent / `none` cells render **white**; aqueous species use light grey in solid predominance view. O₂/H₂ over-pressure regions render as white gas-domain fills with labelled boundaries (see [Gas management](#gas-management-water-stability--component-gases)).
+
+### Diagram rendering
+
+| Mode | Display | Hover |
+|------|---------|-------|
+| **Adaptive** (default) | Vector polygons + exact boundary lines from `diagram/vectors.py` | Base grid heatmap (invisible layer) |
+| **Uniform** | Coloured heatmap | Same heatmap |
+
+Vector polygons are sorted by area (largest first) so nested regions paint correctly. Stability limits (converged↔failed) render as distinct dashed lines.
+
+Redox axis choice (**Eh / pe / log fO₂**) is display-only: the packed grid is always in `pe`; vertices are transformed per-point when plotting (`mapPlotXY`).
 
 ### Settings persistence
-
-User settings (database, species, axes, phase selection, plot resolution, adaptive boundaries, display options, **phase colors**) are stored in the browser:
 
 | Storage | Key / store | Contents |
 |---------|-------------|----------|
 | `localStorage` | `phaseDiagramState.v7` | UI settings (auto-saved on every edit) |
-| `localStorage` | `phaserLayout.v1` | Sidebar width |
+| `localStorage` | `phaserLayout.v1` | Sidebar width and plot-panel width |
 | `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
-| `sessionStorage` | `phaserActiveJob.v1` | Active compute job (`jobId` + cache key) for reconnect after refresh |
-| IndexedDB | `phaserResultCache.v20` / `results` | Packed diagram JSON (large results) |
+| `sessionStorage` | `phaserActiveJob.v1` | Active compute job for reconnect after refresh |
+| IndexedDB | `phaserResultCache.v20` / `results` | Packed diagram JSON |
 
-Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or cache eviction.
+Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or eviction (**12 results max**, **12-hour TTL**).
 
-### Plot resolution
+### Result cache and reconnect
 
-A single **plot resolution** slider in the Configuration panel sets both `ph_levels` and `pe_levels` sent to the compute API (e.g. 100 → 100×100 = 10,000 PHREEQC runs). The server default is `GRID_LEVELS` in `config.py`, exposed as `defaults.grid_levels` from `/api/config`.
+Identical compute requests (including `adaptive_boundaries`, `adaptive_refine_factor`, gas limits) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
 
-The **Adaptive boundaries** toggle evaluates that same selected grid in full, then traces phase boundaries on mixed cells (`ADAPTIVE_REFINE_FACTOR`, default 5×) so the rendered diagram has smooth vector boundaries for far fewer PHREEQC runs than a uniform fine grid. The Configuration panel shows an estimated run count (base grid + traced boundary work).
+On **cache miss**, the job is enqueued; the result is stored in IndexedDB after download and the server job is **`DELETE`**d to free memory.
 
-Phase/species **colors are persisted** in `colorByName` (localStorage). New phases get a stable hash-based palette color on first encounter.
+If you refresh during a **queued** or **running** job, polling resumes from `phaserActiveJob.v1`. A job that finished while you were away is fetched and rendered automatically.
 
-### Result cache
-
-Identical compute requests are served from the browser cache when possible. The cache key includes `adaptive_boundaries` and `adaptive_refine_factor`, so toggling adaptive mode or changing the refine factor forces a fresh compute.
-
-1. The browser hashes the compute request and checks **IndexedDB**.
-2. On **cache hit**, the diagram loads from the browser without starting a server job.
-3. On **cache miss**, the job is enqueued; when the result is fetched it is stored in IndexedDB.
-4. The browser calls **`DELETE /api/job/{job_id}`** to release the result from server memory.
-
-Cache limits: **12 results max**, **12-hour TTL** per entry.
-
-On page load, if the tab session still references a cached result, the diagram is restored from IndexedDB without recomputing.
-
-### Compute reconnect
-
-If you refresh or close and reopen the tab while a job is **queued** or **running**, the UI resumes polling from `sessionStorage` (`phaserActiveJob.v1`). If the job finished while you were away, the result is downloaded, cached, and rendered automatically.
-
-Starting a **new** compute abandons the previous job (server `DELETE`). Running PHREEQC sweeps are not interrupted mid-run — they continue on the server until completion or TTL cleanup.
-
-### Progress and queue feedback
-
-While a job is **queued**, the status line shows **"Queued — position N of M"**.
-
-While **running**, the progress bar and status text reflect the active phase:
-
-| Phase | Status text | Progress bar |
-|-------|-------------|--------------|
-| `grid` | Computing grid… X% | Determinate (base PHREEQC sweep) |
-| `boundaries` | Tracing boundaries… X% | Determinate (root-finding + fallback sub-grids) |
-| `packing` | Packing diagram… X% | Determinate (server-side grid packing + vector display packing when adaptive) |
-| *(after `done`)* | Downloading diagram result… X% | Determinate when `Content-Length` is available |
-| *(client)* | Caching diagram in this browser… | Indeterminate |
-| *(client)* | Rendering diagram… | Indeterminate (Plotly) |
-
-Adaptive mode deliberately **resets** the bar between the grid and boundaries phases so each PHREEQC pass reports 0→100% accurately. Packing has its own layer-based counter; adaptive jobs count both base grid packing and traced vector-display packing. Post-compute stages (download, cache, render) are tracked separately so a large JSON transfer or slow render does not look like a stuck compute. Very short packing phases can still finish between browser polls, in which case the UI may jump straight from tracing to result download.
-
-### Adaptive display vs hover
-
-When adaptive tracing is active:
-
-| Layer | Source | Role |
-|-------|--------|------|
-| **Packed grid** (`layers` in JSON) | Base grid only (e.g. 100×100) | Hover, per-point data; never shown as colors |
-| **Vector display** (`display` in JSON) | Traced signed-distance fields + exact boundary segments | Smooth filled polygons and thin boundary lines |
-
-Each display layer is a list of region polygons (`{cat, area, x, y}`) plus a `boundaries` polyline set. The browser sorts polygons by `area` (largest first) and fills each with `fill: "toself"`, so a region enclosed inside another is drawn on top; white `none` regions are painted explicitly. Stability limits (converged↔failed edges) render as distinct lines.
-
-Uniform mode uses the base heatmap for both display and hover.
-
-### Display and layout
-
-- **Solid predominance** vs **aqueous species (by element)** display modes.
-- **Eh / pe / log fO₂** redox-axis toggle (default **Eh**); see [Redox axis](#redox-axis-log-fo₂--eh--pe).
-- Non-convergent / `none` cells render **white**; aqueous species use light grey in solid predominance view (`aqueous_names` on each layer — bare colliding names like `FeO` are aqueous; their solid twin is `FeO(s)` with a phase color).
-- Resizable left sidebar (desktop); double-click the divider to reset width.
-- Square phase diagram area (`aspect-ratio: 1 / 1`).
-- **Header logo** — animated inline SVG (`phaser_logo.svg`) with a rainbow scan while computing (`animation-play-state` toggled via `.is-computing` on the brand link).
-- **Favicon** — square spectrum **P** (`phaser_favicon.svg`, served at `/icons/`). The README uses the static PNG wordmark because GitHub cannot render the animated SVG logo.
+Starting a **new** compute abandons the previous server job reference (running sweeps continue until completion or TTL cleanup).
 
 ### Redox axis (log fO₂ / Eh / pe)
 
