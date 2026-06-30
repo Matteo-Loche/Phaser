@@ -5,7 +5,7 @@ Pipeline:
 1. Evaluate the full user-selected base grid (hover data + corner categories).
 2. Use catalog-derived solid/aqueous collision labels; colliding solids are suffixed
    ``<name>(s)`` on ``GridJobParams`` before tracing.
-3. Flag base cells whose corners differ across any plottable layer signature.
+3. Flag base cells whose corners differ across any **enabled** plottable layer signature (solid and/or aqueous, respecting `layer_elements`).
 4. Trace phase boundaries on those cells via root-finding (``boundary_trace.py``),
    emitting exact line segments and convex fill regions for 3-category cells.
 5. Pack traced geometry into vector display layers (``diagram/vectors.py``).
@@ -32,14 +32,13 @@ def fine_axis_levels(base_levels: int, factor: int) -> int:
 def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
     """Build a row -> signature function spanning every plottable layer."""
     from ..phreeqc.catalog import is_gas
-    from ..diagram.packer import dominant_aq_in_subset, solid_label, subset_key, subsets_to_pack
+    from ..diagram.packer import dominant_aq_in_subset, dominant_aq_species_subset, solid_label, subset_key, subsets_for_job
 
-    elements = params.system_elements
     collisions = frozenset(params.solid_aqueous_collisions)
     subset_map = params.phase_names_by_subset
 
     eligible_by_subset: list[tuple[set[str], tuple[str, ...]]] = []
-    for subset in subsets_to_pack(params.system_elements):
+    for subset in subsets_for_job(params):
         sset = set(subset)
         elig = tuple(
             p for p in params.phases
@@ -51,18 +50,19 @@ def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
         if not row.get("converged"):
             return ("__none__",)
         parts: list[str] = []
-        aq = row.get("dominant_aq_by_element") or {}
-        for elem in elements:
-            parts.append(aq.get(elem, "none"))
         si = row.get("si") or {}
-        for sset, elig in eligible_by_subset:
-            finite = [(p, si[p]) for p in elig if p in si and si[p] == si[p]]
-            if finite:
-                phase, value = max(finite, key=lambda kv: kv[1])
-                if value >= 0.0:
-                    parts.append(solid_label(phase, collisions))
-                    continue
-            parts.append(dominant_aq_in_subset(row, sset))
+        if params.layer_solids:
+            for sset, elig in eligible_by_subset:
+                finite = [(p, si[p]) for p in elig if p in si and si[p] == si[p]]
+                if finite:
+                    phase, value = max(finite, key=lambda kv: kv[1])
+                    if value >= 0.0:
+                        parts.append(solid_label(phase, collisions))
+                        continue
+                parts.append(dominant_aq_in_subset(row, sset))
+        if params.layer_aqueous:
+            for sset, _elig in eligible_by_subset:
+                parts.append(dominant_aq_species_subset(row, sset))
         return tuple(parts)
 
     return signature

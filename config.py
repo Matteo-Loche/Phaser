@@ -105,8 +105,12 @@ ADAPTIVE_BOUNDARIES_DEFAULT = True
 ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"))
 # Soft cap on total PHREEQC evaluations in adaptive mode (base grid + trace work).
 MAX_ADAPTIVE_POINTS = int(os.environ.get("PHASER_MAX_ADAPTIVE_POINTS", "120000"))
-# Aqueous species molalities punched per element (USER_PUNCH via SYS) for tracing.
-TOP_AQ_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_TOP_AQ_SPECIES", "8"))
+# Aqueous species molalities punched per element (USER_PUNCH via SYS) for
+# predominance and tracing. High count so minor species are not missed.
+TOP_AQ_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_TOP_AQ_SPECIES", "64"))
+# Top species kept PER ELEMENT at each grid point for context-filtered hover.
+# Bounded per element so subset filtering stays exact without bloating JSON.
+HOVER_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_HOVER_SPECIES_PER_ELEMENT", "4"))
 # Trace mode uses fewer USER_PUNCH slots; corner/boundary species stay on explicit -mol.
 BOUNDARY_TRACE_TOP_AQ_SPECIES = int(
     os.environ.get("PHASER_TRACE_TOP_AQ_SPECIES", "4")

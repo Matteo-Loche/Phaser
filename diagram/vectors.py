@@ -30,9 +30,11 @@ from ..phreeqc.gas_limits import (
 )
 from .packer import (
     category_solid_subset,
+    count_layer_pack_steps,
+    dominant_aq_species_subset,
     label_is_solid,
     subset_key,
-    subsets_to_pack,
+    subsets_for_job,
 )
 
 
@@ -599,8 +601,8 @@ def pack_traced_display(
     subset_map = params.phase_names_by_subset
     job_phases = params.phases
     solid_set = set(job_phases)
-    subset_list = subsets_to_pack(params.system_elements)
-    pack_steps = len(subset_list) + len(params.system_elements)
+    subset_list = subsets_for_job(params)
+    pack_steps = count_layer_pack_steps(params)
     step = 0
 
     def tick() -> None:
@@ -622,49 +624,52 @@ def pack_traced_display(
     )
 
     solid_subsets: dict[str, Any] = {}
-    for subset in subset_list:
-        key = subset_key(subset)
+    aqueous_subsets: dict[str, Any] = {}
+    if params.layer_solids:
+        for subset in subset_list:
+            key = subset_key(subset)
+            eligible = frozenset(subset_map.get(key, ()))
 
-        eligible = frozenset(subset_map.get(key, ()))
+            def cat_fn(row: dict, subset: tuple[str, ...] = subset, elig: frozenset[str] = eligible) -> str:
+                return category_solid_subset(
+                    row, subset, eligible_phases=elig,
+                    job_phases=job_phases, collision_names=collisions,
+                )
 
-        def cat_fn(row: dict, subset: tuple[str, ...] = subset, elig: frozenset[str] = eligible) -> str:
-            return category_solid_subset(
-                row, subset, eligible_phases=elig,
-                job_phases=job_phases, collision_names=collisions,
+            _layer = trace_layers.get(f"solid:{key}", {})
+            names_preview = sorted(
+                {cat_fn(r) for r in base_rows}
+                | set(_layer.get("node_cat") or [])
+                | {c for r in (_layer.get("cell_lines") or []) for c in (r["pos"], r["neg"])}
             )
+            solid_subsets[key] = _pack_one_layer(
+                layer_nodes=trace_layers.get(f"solid:{key}", {}),
+                cat_fn=cat_fn,
+                extra={
+                    "elements": list(subset),
+                    "aqueous_names": [
+                        n for n in names_preview
+                        if not label_is_solid(n, solid_set, collisions)
+                    ],
+                },
+                **common,
+            )
+            tick()
 
-        _layer = trace_layers.get(f"solid:{key}", {})
-        names_preview = sorted(
-            {cat_fn(r) for r in base_rows}
-            | set(_layer.get("node_cat") or [])
-            | {c for r in (_layer.get("cell_lines") or []) for c in (r["pos"], r["neg"])}
-        )
-        solid_subsets[key] = _pack_one_layer(
-            layer_nodes=trace_layers.get(f"solid:{key}", {}),
-            cat_fn=cat_fn,
-            extra={
-                "elements": list(subset),
-                "aqueous_names": [
-                    n for n in names_preview
-                    if not label_is_solid(n, solid_set, collisions)
-                ],
-            },
-            **common,
-        )
-        tick()
+    if params.layer_aqueous:
+        for subset in subset_list:
+            key = subset_key(subset)
 
-    elements: dict[str, Any] = {}
-    for elem in params.system_elements:
+            def aq_cat_fn(row: dict, s: set[str] = set(subset)) -> str:
+                return dominant_aq_species_subset(row, s)
 
-        def elem_cat(row: dict, e: str = elem) -> str:
-            return row.get("dominant_aq_by_element", {}).get(e, "none") or "none"
-
-        elements[elem] = _pack_one_layer(
-            layer_nodes=trace_layers.get(f"element:{elem}", {}),
-            cat_fn=elem_cat,
-            **common,
-        )
-        tick()
+            aqueous_subsets[key] = _pack_one_layer(
+                layer_nodes=trace_layers.get(f"aqueous:{key}", {}),
+                cat_fn=aq_cat_fn,
+                extra={"elements": list(subset)},
+                **common,
+            )
+            tick()
 
     stability_segments = (trace_bundle.get("stability_limits") or {}).get("segments") or []
 
@@ -675,6 +680,6 @@ def pack_traced_display(
         "stability_limits": _segments_to_boundary_lines(stability_segments),
         "layers": {
             "solid_subsets": solid_subsets,
-            "elements": elements,
+            "aqueous_subsets": aqueous_subsets,
         },
     }

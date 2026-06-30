@@ -22,7 +22,7 @@ from scipy.optimize import brentq, least_squares, root
 from skimage.measure import find_contours
 
 from .. import config
-from ..diagram.packer import label_is_solid, phase_from_label, subset_key, subsets_to_pack
+from ..diagram.packer import label_is_solid, phase_from_label, subset_key
 from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc
 from .sweep import _point_key
 
@@ -129,31 +129,31 @@ class PointEvaluator:
 
 def layer_specs(params: GridJobParams, db_path: str | None = None) -> list[LayerSpec]:
     del db_path
-    from ..diagram.packer import category_solid_subset
+    from ..diagram.packer import category_solid_subset, dominant_aq_species_subset, subsets_for_job
 
     job_phases = params.phases
     collisions = frozenset(params.solid_aqueous_collisions)
     subset_map = params.phase_names_by_subset
     specs: list[LayerSpec] = []
 
-    for subset in subsets_to_pack(params.system_elements):
+    for subset in subsets_for_job(params):
         key = subset_key(subset)
         eligible = frozenset(subset_map.get(key, ()))
 
-        def solid_cat(row: dict, subset: tuple[str, ...] = subset, elig: frozenset[str] = eligible) -> str:
-            return category_solid_subset(
-                row, subset, eligible_phases=elig,
-                job_phases=job_phases, collision_names=collisions,
-            )
+        if params.layer_solids:
+            def solid_cat(row: dict, subset: tuple[str, ...] = subset, elig: frozenset[str] = eligible) -> str:
+                return category_solid_subset(
+                    row, subset, eligible_phases=elig,
+                    job_phases=job_phases, collision_names=collisions,
+                )
 
-        specs.append(LayerSpec(layer_id=f"solid:{key}", cat_fn=solid_cat))
+            specs.append(LayerSpec(layer_id=f"solid:{key}", cat_fn=solid_cat))
 
-    for elem in params.system_elements:
+        if params.layer_aqueous:
+            def aq_subset_cat(row: dict, s: set[str] = set(subset)) -> str:
+                return dominant_aq_species_subset(row, s)
 
-        def aq_cat(row: dict, e: str = elem) -> str:
-            return row.get("dominant_aq_by_element", {}).get(e, "none") or "none"
-
-        specs.append(LayerSpec(layer_id=f"element:{elem}", cat_fn=aq_cat))
+            specs.append(LayerSpec(layer_id=f"aqueous:{key}", cat_fn=aq_subset_cat))
 
     return specs
 

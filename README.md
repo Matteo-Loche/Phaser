@@ -10,11 +10,13 @@ Key behaviours:
 
 - **Server-side PHREEQC** with multiprocessing grid sweeps and a **CPU queue** (one sweep at a time by default).
 - **Adaptive boundary tracing** — optional mode that evaluates the full selected grid, then locates phase boundaries by root-finding on mixed cells and builds smooth vector fills from exact line geometry (no uniform fine-grid sweep).
+- **Selectable diagram layers** — compute solid predominance, aqueous predominance, and/or per-element subset maps independently (`layer_solids`, `layer_aqueous`, `layer_elements`); boundary tracing and packing honour the same toggles.
+- **Per-element aqueous hover** — grid sweep punches the top species per element via PHREEQC `SYS`; hover tooltips show up to four ranked species filtered to the active display context.
 - **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB.
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** — three-panel desktop layout (controls · diagram · display options), unified header progress bar, **Eh / pe / log fO₂** redox-axis toggle, O₂/H₂ gas-limit configuration, vector predominance display, and browser-side settings/result cache.
+- **Plotly UI** — three-panel desktop layout (controls · diagram · display options), unified header progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
 
 ---
 
@@ -256,9 +258,9 @@ Each grid point `(pH, pe)` is equilibrated by a **two-step titration** (`format_
 
 3. **Charge balance** — `Cl⁻` balances the acidic seed; `Na⁺` from NaOH titration balances the equilibrated solution. The UI labels this *"Charge balance: Cl⁻ or Na⁺"*.
 
-4. **`SELECTED_OUTPUT`** — saturation indices (`si`) for selected solid phases and any component trace gases, plus **`USER_PUNCH`** for dominant aqueous species per element. Titration produces one output row per reaction step; `evaluate_point` uses the **last** row (the equilibrated state at the target pH and O₂ fugacity).
+4. **`SELECTED_OUTPUT`** — saturation indices (`si`) for selected solid phases and any component trace gases, plus **`USER_PUNCH`** for dominant aqueous species and the **top-N ranked species per element** (`TOP_AQ_SPECIES_PER_ELEMENT`, default 64). For each element, `SYS("Fe", count, name$, type$, moles)` returns the element's total moles as its value and sets `count` by reference; the punch loop must not assign the return value back into `count` (that would break the species loop). `moles(i)` is the element's stoichiometric moles in each species, so multi-element complexes (e.g. `FeHCO3+`) appear under every element they contain. Titration produces one output row per reaction step; `evaluate_point` uses the **last** row (the equilibrated state at the target pH and O₂ fugacity).
 
-5. **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point, and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, gas SI/domain).
+5. **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point, and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain).
 
 6. **`validate_phreeqc_setup`** — loads library and database once before worker spawn (fail-fast with clear errors).
 
@@ -281,7 +283,7 @@ The optional **Adaptive boundaries** mode evaluates the full user-selected grid,
 
 1. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
 2. **Collision detection** — `solid_aqueous_collisions` scans the base results for phase names that also appear as aqueous species; colliding solids are labelled `"<name>(s)"` on `GridJobParams` before tracing.
-3. **Boundary detection** — for each base point a composite signature is built across *every* plottable layer (using the suffixed solid labels). A base cell is flagged when this signature differs across its four corners.
+3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners.
 4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with dynamic chunking). For each layer and cell:
    - **2-category cells** — `scipy.optimize.brentq` along cell edges locates crossings of a continuous scalar whose zero is the boundary:
      - solid↔solid: `SI_A − SI_B`
@@ -325,7 +327,8 @@ Limits (`config.py`):
 | `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evaluations in adaptive mode (env `PHASER_MAX_ADAPTIVE_POINTS`) |
 | `BOUNDARY_TRACE_TOLERANCE` | 1e-4 | Relative tolerance for `brentq` / 2D root finding (env `PHASER_BOUNDARY_TRACE_TOLERANCE`) |
 | `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N species per element during tracing (env `PHASER_TRACE_TOP_AQ_SPECIES`) |
-| `TOP_AQ_SPECIES_PER_ELEMENT` | 8 | Top-N species per element in the base grid sweep (env `PHASER_TOP_AQ_SPECIES`) |
+| `TOP_AQ_SPECIES_PER_ELEMENT` | 64 | Top-N species per element in the base grid sweep (env `PHASER_TOP_AQ_SPECIES`) |
+| `HOVER_SPECIES_PER_ELEMENT` | 4 | Species kept per element in packed hover data (env `PHASER_HOVER_SPECIES_PER_ELEMENT`) |
 | `TRACE_CHUNK_MULTIPLIER` | 8 | Worker pool chunking multiplier (env `PHASER_TRACE_CHUNK_MULTIPLIER`) |
 | `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
 | `MAX_WORKERS` | 8 | Worker processes per sweep (capped by CPU count) |
@@ -367,16 +370,37 @@ Before compute:
 After the sweep, each grid point has SI values and aqueous dominance data. The packer:
 
 1. Builds axis arrays in `pe` (Eh and log fO₂ applied at plot time; see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
-2. For each **element subset** of the system, assigns a category per point:
-   - **Dominant solid** — highest SI ≥ 0 among eligible phases in that subset.
-   - **Otherwise** — dominant aqueous species in the subset (highest molality among elements in the subset).
+2. For each **element subset** enabled by the layer toggles, assigns a category per point:
+   - **Solid predominance** (`layer_solids`) — highest SI ≥ 0 among eligible phases in that subset; otherwise dominant aqueous species in the subset.
+   - **Aqueous predominance** (`layer_aqueous`) — highest-ranked aqueous species containing an element from the subset (from `aq_species_by_element`; multi-element complexes such as `FeHCO3+` are valid candidates).
 3. **Solid/aqueous name collisions** — some databases define a solid phase and an aqueous complex with the same name (e.g. `FeO`, `CuCO3`). Collisions are detected at **catalog scan time** and stored in SQLite; compute receives them on `GridJobParams.solid_aqueous_collisions`. The precipitated solid is then labelled `"<name>(s)"` (e.g. `FeO(s)`); the aqueous complex keeps the bare name.
 4. Produces integer category grids mapping each `(pH, y)` cell to a phase/species index.
-5. Builds **layers**:
-   - `solid_subsets` — predominance among solids + aqueous fallback per subset (`aqueous_names` lists categories rendered grey in solid view)
-   - `elements` — per-element aqueous species maps
+5. Builds **layers** (only the families requested on the compute job):
+   - `solid_subsets` — solid predominance maps (`aqueous_names` lists categories rendered grey in solid view)
+   - `aqueous_subsets` — aqueous species predominance maps
+6. Packs **`hover_species`** — per grid cell, top `HOVER_SPECIES_PER_ELEMENT` (default 4) species **per element**, stored as `[name, element_moles, element]` so the client can filter to any active element subset.
+
+**Per-element subsets** (`layer_elements`):
+
+| Toggle | Maps computed | Example (Fe–C system) |
+|--------|---------------|------------------------|
+| **On** | One map per non-empty element subset | `Fe`, `C`, `Fe-C` (7 subsets for 3 elements) |
+| **Off** | One combined map over the full system | `Fe-C` only |
+
+The packed JSON records which toggles were used: `layer_solids`, `layer_aqueous`, `layer_elements`.
 
 The UI (`static/index.html`) renders these layers as colored regions with Plotly. In adaptive mode, **display** polygons come from `diagram/vectors.py` instead; the packed grids remain for hover only.
+
+### Hover tooltips
+
+Hover uses an invisible heatmap over the base grid. At each point the tooltip shows the active predominance category plus up to four aqueous species ranked for the **current display context**:
+
+- In **aqueous predominance** view with per-element subsets enabled, species are filtered to the checked element(s).
+- In **solid predominance** view, species are filtered the same way when per-element subsets were computed.
+- With per-element subsets off, all system elements contribute to the hover pool.
+- Multi-element species appear once in the tooltip (deduplicated by name after filtering).
+
+Species molalities in hover are PHREEQC's per-element moles (`stoichiometry × species molality`), matching the `SYS` ranking used for predominance.
 
 ### Vector display (`vectors.py`)
 
@@ -469,9 +493,9 @@ Single-page app served at `/`. All chemistry and axis settings live in the **lef
 | **Chemical system** | Species picker with concentrations, unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature. Charge balance note: *Cl⁻ or Na⁺* (fixed titration recipe — see [Single-point evaluation](#single-point-evaluation-enginepy)) |
 | **Axes** | pH min/max; redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
-| **Configuration** | Plot resolution slider (`ph_levels` = `pe_levels`), **Adaptive boundaries** toggle, **O₂/H₂ stability limits** (atm), estimated PHREEQC run count |
+| **Configuration** | Plot resolution slider (`ph_levels` = `pe_levels`), **Adaptive boundaries** toggle, **Compute layers** (solid / aqueous / per-element subsets), **O₂/H₂ stability limits** (atm), estimated PHREEQC run count (scales with enabled layer families and subsets) |
 
-Changing units auto-converts species concentrations. Editing settings marks the diagram **stale** until recomputed.
+Changing units auto-converts species concentrations. Editing chemistry, axes, phases, or layer toggles marks the diagram **stale** until recomputed. Layer toggles in Configuration apply to the **next** compute; display controls in the plot panel always reflect the **currently plotted** result (see below).
 
 ### Header: compute and progress
 
@@ -500,13 +524,19 @@ Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement 
 
 ### Right plot panel
 
+Display controls describe the **plotted result**, not pending Configuration toggles. Recompute after changing layer options to update them.
+
 | Control | Effect |
 |---------|--------|
-| **Display** | *Solid predominance* (subset of elements) or *Aqueous species (by element)* |
-| **Solid elements** | Checkboxes for which element subsets appear as solid fields (solid mode only) |
+| **Display** | *Solid predominance* and/or *Aqueous predominance* — only modes that were actually computed appear in the dropdown |
+| **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
 | **Labels only** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
+
+**Configuration vs display.** The sidebar **Compute layers** checkboxes set what the next job will pack and trace. The plot panel dropdown and element filter read from the cached result (`layer_solids`, `layer_aqueous`, `layer_elements` in the packed JSON). Toggling layers before recomputing shows the **stale** pill but does not change the plot or its display options until **Compute diagram** finishes.
+
+At least one of **Solid** or **Aqueous** predominance must stay enabled; the UI prevents unchecking both.
 
 Phase/species **colours** persist in `colorByName` (localStorage). New phases get a stable hash-based palette colour on first encounter.
 
@@ -516,8 +546,8 @@ Non-convergent / `none` cells render **white**; aqueous species use light grey i
 
 | Mode | Display | Hover |
 |------|---------|-------|
-| **Adaptive** (default) | Vector polygons + exact boundary lines from `diagram/vectors.py` | Base grid heatmap (invisible layer) |
-| **Uniform** | Coloured heatmap | Same heatmap |
+| **Adaptive** (default) | Vector polygons + exact boundary lines from `diagram/vectors.py` | Invisible base-grid heatmap with phase name + top aqueous species |
+| **Uniform** | Coloured heatmap | Same hover layer |
 
 Vector polygons are sorted by area (largest first) so nested regions paint correctly. Stability limits (converged↔failed) render as distinct dashed lines.
 
@@ -531,13 +561,13 @@ Redox axis choice (**Eh / pe / log fO₂**) is display-only: the packed grid is 
 | `localStorage` | `phaserLayout.v1` | Sidebar width and plot-panel width |
 | `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
 | `sessionStorage` | `phaserActiveJob.v1` | Active compute job for reconnect after refresh |
-| IndexedDB | `phaserResultCache.v20` / `results` | Packed diagram JSON |
+| IndexedDB | `phaserResultCache.v23` / `results` | Packed diagram JSON |
 
 Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or eviction (**12 results max**, **12-hour TTL**).
 
 ### Result cache and reconnect
 
-Identical compute requests (including `adaptive_boundaries`, `adaptive_refine_factor`, gas limits) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
+Identical compute requests (including `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, and **layer toggles**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
 
 On **cache miss**, the job is enqueued; the result is stored in IndexedDB after download and the server job is **`DELETE`**d to free memory.
 
@@ -605,6 +635,9 @@ Key fields in the JSON body:
 | `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
 | `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm) — see [Gas management](#gas-management-water-stability--component-gases) |
 | `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
+| `layer_solids` | `true` | Pack and trace solid predominance maps |
+| `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
+| `layer_elements` | `true` | When `true`, one map per element subset; when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
 
 Grid bounds and results use **`pe`** as the redox coordinate. Charge balance follows the titration recipe (`Cl⁻` seed, `Na⁺` titrant); see [Single-point evaluation](#single-point-evaluation-enginepy).
 
@@ -663,6 +696,8 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft cap on total PHREEQC runs in adaptive mode |
 | Boundary trace tolerance | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-4` | Root-finding tolerance along cell edges |
 | Trace top-N species | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH species slots during tracing |
+| Grid top-N species | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH species slots in base grid sweep |
+| Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `4` | Species kept per element in packed hover JSON |
 | Max workers per sweep | — | `MAX_WORKERS = 8` | Capped by `os.cpu_count()` in `sweep.py` |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
@@ -702,6 +737,7 @@ PHASER can consume databases produced by external tools:
   ```bash
   python -m PHASER.tests.test_boundary_trace
   python -m PHASER.tests.test_vectors
+  python -m PHASER.tests.test_layer_toggles
   ```
   From the parent of the `PHASER` folder, with the project venv active (WSL recommended).
 

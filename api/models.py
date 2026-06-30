@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .. import config
 from ..chemistry.units import is_valid_unit, normalize_unit
@@ -41,6 +41,9 @@ class ComputeRequest(BaseModel):
     adaptive_refine_factor: int | None = None
     o2_limit_atm: float = config.O2_FUGACITY_LIMIT_ATM
     h2_limit_atm: float = config.H2_FUGACITY_LIMIT_ATM
+    layer_solids: bool = True
+    layer_aqueous: bool = True
+    layer_elements: bool = True
 
     @field_validator("units")
     @classmethod
@@ -52,6 +55,15 @@ class ComputeRequest(BaseModel):
                 f"Use one of: {', '.join(config.UNIT_OPTIONS)}."
             )
         return unit
+
+    @model_validator(mode="after")
+    def _at_least_one_layer(self) -> ComputeRequest:
+        if not (self.layer_solids or self.layer_aqueous):
+            raise ValueError(
+                "Enable at least one predominance family "
+                "(layer_solids or layer_aqueous)."
+            )
+        return self
 
 
 class RegisterDatabaseRequest(BaseModel):

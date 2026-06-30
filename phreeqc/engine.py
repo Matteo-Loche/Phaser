@@ -40,6 +40,10 @@ class GridJobParams:
     o2_limit_atm: float = config.O2_FUGACITY_LIMIT_ATM
     h2_limit_atm: float = config.H2_FUGACITY_LIMIT_ATM
     component_gas_limit_atm: float = config.COMPONENT_GAS_FUGACITY_LIMIT_ATM
+    # Which diagram layer families to pack / trace (all on by default).
+    layer_solids: bool = True
+    layer_aqueous: bool = True
+    layer_elements: bool = True
 
 
 _TUPLE_FIELDS = (
@@ -76,6 +80,10 @@ class GridPointResult:
     dominant_aq_by_element: dict[str, str] = field(default_factory=dict)
     aq_molality_by_element: dict[str, float] = field(default_factory=dict)
     aq_molality_by_species: dict[str, float] = field(default_factory=dict)
+    aq_species_element: dict[str, str] = field(default_factory=dict)
+    # Full per-element ranking {elem: [[species, element_moles], ...]}; a
+    # multi-element species appears under each element it contains.
+    aq_species_by_element: dict[str, list] = field(default_factory=dict)
     si: dict[str, float] = field(default_factory=dict)
     gas_si: dict[str, float] = field(default_factory=dict)
     gas_domain: dict[str, str] = field(default_factory=dict)
@@ -175,9 +183,13 @@ def _format_user_punch(elements: tuple[str, ...], *, top_n: int) -> str:
         b = base + idx * 200
         pad = b + 80
         cont = b + 100
+        # SYS returns total element moles as its VALUE and the species count via
+        # the 2nd (by-ref) argument. Keep them in separate variables: clobbering
+        # the count with the return value would break the FOR-loop bound. moles()
+        # is the element's stoichiometric moles per species (sorted descending).
         lines.extend(
             [
-                f"{b} n = SYS(\"{elem}\", n, nm$, ty$, mo)",
+                f"{b} et = SYS(\"{elem}\", n, nm$, ty$, mo)",
                 f"{b + 10} IF n > 0 THEN PUNCH nm$(1) ELSE PUNCH \"none\"",
                 f"{b + 20} IF n > 0 THEN PUNCH mo(1) ELSE PUNCH -999",
                 f"{b + 30} FOR ii = 1 TO {top_n}",
@@ -199,25 +211,43 @@ def _mol_headers(species: str) -> list[str]:
     return [f"m_{species}", f"mol_{species}", f"Mola_{species}", species]
 
 
-def _parse_species_molalities(row: dict, params: GridJobParams) -> dict[str, float]:
-    """Merge USER_PUNCH top-species slots and explicit -mol species."""
+def _parse_species_molalities(
+    row: dict, params: GridJobParams,
+) -> tuple[dict[str, float], dict[str, str], dict[str, list[list]]]:
+    """Merge USER_PUNCH top-species slots and explicit -mol species.
+
+    Returns ``(out, species_elem, by_element)`` where ``out`` maps each species
+    to its max element-moles (flat, for the trace ``-mol`` set), ``species_elem``
+    maps a species to its first-seen element, and ``by_element`` keeps the full
+    per-element ranking ``{elem: [[species, moles], ...]}``. A species containing
+    several elements (e.g. ``FeHCO3+``) legitimately appears under each of them,
+    each with that element's stoichiometric moles, so per-element hover/ranking is
+    exact.
+    """
     out: dict[str, float] = {}
+    species_elem: dict[str, str] = {}
+    by_element: dict[str, list[list]] = {}
     top_n = _top_aq_species_per_element(params)
     for elem in params.system_elements:
+        ranked: list[list] = []
         for k in range(1, top_n + 1):
             sp = _row_str(row, f"sp_{elem}_{k}", default="")
             if not sp or sp == "none":
                 continue
             m = _row_value(row, f"m_{elem}_{k}")
             if m == m and m > 0:
-                out[sp] = m
+                out[sp] = max(out.get(sp, 0.0), m)
+                species_elem.setdefault(sp, elem)
+                ranked.append([sp, m])
+        if ranked:
+            by_element[elem] = ranked
     for sp in params.aq_species_molality:
         for key in _mol_headers(sp):
             m = _row_value(row, key)
             if m == m and m > 0:
                 out[sp] = m
                 break
-    return out
+    return out, species_elem, by_element
 
 
 def _si_output_phases(params: GridJobParams) -> tuple[str, ...]:
@@ -270,7 +300,7 @@ def _parse_grid_row(
 
     dominant_aq: dict[str, str] = {}
     mol_aq: dict[str, float] = {}
-    sp_mol = _parse_species_molalities(row, params)
+    sp_mol, sp_elem, sp_by_elem = _parse_species_molalities(row, params)
     for elem in params.system_elements:
         species = _row_str(row, f"dom_{elem}", default="none")
         if species != "none":
@@ -280,6 +310,11 @@ def _parse_grid_row(
             mol_aq[elem] = m
             if species != "none" and species not in sp_mol:
                 sp_mol[species] = m
+                sp_elem.setdefault(species, elem)
+            # Seed the per-element ranking from the dominant when the SYS loop
+            # returned nothing for this element (keeps hover non-empty).
+            if species != "none" and elem not in sp_by_elem:
+                sp_by_elem[elem] = [[species, m]]
 
     return GridPointResult(
         ph=ph,
@@ -293,6 +328,8 @@ def _parse_grid_row(
         dominant_aq_by_element=dominant_aq,
         aq_molality_by_element=mol_aq,
         aq_molality_by_species=sp_mol,
+        aq_species_element=sp_elem,
+        aq_species_by_element=sp_by_elem,
     )
 
 

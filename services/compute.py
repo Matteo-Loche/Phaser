@@ -12,7 +12,7 @@ from .. import config
 from ..api.dependencies import dll_path, resolve_db_record
 from ..api.models import ComputeRequest
 from ..chemistry.units import is_valid_unit, normalize_unit, totals_to_mmol_kgw
-from ..diagram.packer import pack_grid_results, subsets_to_pack
+from ..diagram.packer import pack_grid_results, count_layer_pack_steps
 from ..diagram.vectors import pack_traced_display
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
 from ..phreeqc.engine import GridJobParams, validate_phreeqc_setup
@@ -257,6 +257,9 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
             trace_gas_phases=trace_gases,
             o2_limit_atm=body.o2_limit_atm,
             h2_limit_atm=body.h2_limit_atm,
+            layer_solids=body.layer_solids,
+            layer_aqueous=body.layer_aqueous,
+            layer_elements=body.layer_elements,
         )
 
         def progress(done: int, total: int, phase: str = "compute"):
@@ -284,8 +287,7 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
             compute_mode = "uniform"
 
         rows = [asdict(r) for r in base_results]
-        subset_list = subsets_to_pack(pack_params.system_elements)
-        pack_layers = len(subset_list) + len(pack_params.system_elements)
+        pack_layers = count_layer_pack_steps(pack_params)
         # Adaptive jobs pack the base hover grids and then the traced vector
         # display, each with the same layer count. Budget both passes so the
         # reported packing fraction is monotonic and never exceeds 100%.

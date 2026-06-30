@@ -12,11 +12,82 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .. import config
 from ..phreeqc.engine import GridJobParams
 from ..phreeqc.catalog import is_gas
 
 
 SOLID_SUFFIX = "(s)"
+HOVER_SPECIES_PER_ELEMENT = config.HOVER_SPECIES_PER_ELEMENT
+
+
+def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEMENT) -> list[list]:
+    """Top species per element as ``[name, element_moles, element]`` for a point.
+
+    Keeps the top ``per_element`` species for *each* element so the client can
+    filter to any element subset and still rank correctly. A species containing
+    several elements (e.g. ``FeHCO3+``) emits one entry per element it contains,
+    each tagged with that element's moles, so an element-filtered hover shows it;
+    the client de-duplicates by name after filtering. Sorted by moles descending.
+    """
+    if not row.get("converged"):
+        return []
+    by_elem: dict[str, list] = row.get("aq_species_by_element") or {}
+    if by_elem:
+        entries: list[list] = []
+        for elem, lst in by_elem.items():
+            ranked = sorted(
+                ([sp, m] for sp, m in lst if m == m and m > 0),
+                key=lambda kv: kv[1], reverse=True,
+            )
+            for sp, m in ranked[:per_element]:
+                entries.append([sp, m, elem])
+        entries.sort(key=lambda e: e[1], reverse=True)
+        return entries
+
+    # Legacy results: reconstruct from the flat species map / dominant fallback.
+    mols: dict[str, float] = dict(row.get("aq_molality_by_species") or {})
+    elem_map: dict[str, str] = dict(row.get("aq_species_element") or {})
+    if not mols:
+        for elem, sp in (row.get("dominant_aq_by_element") or {}).items():
+            if not sp or sp == "none":
+                continue
+            m = (row.get("aq_molality_by_element") or {}).get(elem)
+            if m is not None and m == m and m > 0:
+                mols.setdefault(sp, m)
+                elem_map.setdefault(sp, elem)
+    if not mols:
+        return []
+    legacy_by_elem: dict[str, list[tuple[str, float]]] = {}
+    for sp, m in mols.items():
+        if not (m == m) or m <= 0:
+            continue
+        legacy_by_elem.setdefault(elem_map.get(sp, ""), []).append((sp, m))
+    entries = []
+    for elem, lst in legacy_by_elem.items():
+        lst.sort(key=lambda kv: kv[1], reverse=True)
+        for sp, m in lst[:per_element]:
+            entries.append([sp, m, elem])
+    entries.sort(key=lambda e: e[1], reverse=True)
+    return entries
+
+
+def pack_hover_species_grid(
+    rows: list[dict],
+    *,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+) -> list[list[list]]:
+    grid: list[list[list]] = [[[] for _ in range(ph_levels)] for _ in range(pe_levels)]
+    for row in rows:
+        ix = ph_lookup.get(round(float(row["ph"]), 12))
+        iy = pe_lookup.get(round(float(row["pe"]), 12))
+        if ix is None or iy is None:
+            continue
+        grid[iy][ix] = top_species_entries(row)
+    return grid
 
 
 def solid_label(phase: str, collision_names: frozenset[str]) -> str:
@@ -88,6 +159,30 @@ def subsets_to_pack(elements: tuple[str, ...]) -> list[tuple[str, ...]]:
     return out
 
 
+def subsets_for_job(params: GridJobParams) -> list[tuple[str, ...]]:
+    """Element subsets to actually pack/trace for this job.
+
+    With the per-element filter ON, every element subset is computed so the UI
+    can filter the predominance map by element without recomputing. With it OFF,
+    only the single full-system map is computed (the "main predominance").
+    """
+    if params.layer_elements:
+        return subsets_to_pack(params.system_elements)
+    full = tuple(sorted(params.system_elements))
+    return [full] if full else []
+
+
+def count_layer_pack_steps(params: GridJobParams) -> int:
+    """Number of pack/trace layer passes enabled for this job."""
+    n_subsets = len(subsets_for_job(params))
+    n = 0
+    if params.layer_solids:
+        n += n_subsets
+    if params.layer_aqueous:
+        n += n_subsets
+    return max(n, 1)
+
+
 def dominant_aq_in_subset(row: dict, subset: set[str]) -> str:
     aq = row.get("dominant_aq_by_element") or {}
     mols = row.get("aq_molality_by_element") or {}
@@ -120,6 +215,62 @@ def category_solid_subset(
         if value >= 0.0:
             return solid_label(phase, collision_names)
     return dominant_aq_in_subset(row, set(subset))
+
+
+def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
+    """Predominant aqueous species among those containing an element in ``subset``.
+
+    Ranks by the per-element moles reported by PHREEQC's ``SYS`` so a species
+    that contains a subset element (even alongside others, e.g. ``FeHCO3+`` for
+    ``Fe``) is a valid candidate. Mirrors ``category_solid_subset`` for
+    aqueous-only predominance maps."""
+    if not row.get("converged"):
+        return "none"
+    by_elem = row.get("aq_species_by_element")
+    if by_elem:
+        best_sp, best_m = "none", -1.0
+        for elem in subset:
+            for sp, m in by_elem.get(elem, ()):
+                if m > best_m:
+                    best_m, best_sp = m, sp
+        if best_sp != "none":
+            return best_sp
+        return dominant_aq_in_subset(row, subset)
+    # Legacy results (no per-element ranking): fall back to flat species map.
+    mols = row.get("aq_molality_by_species") or {}
+    elem_map = row.get("aq_species_element") or {}
+    best_sp, best_m = "none", -1.0
+    for sp, m in mols.items():
+        if elem_map.get(sp) in subset and m > best_m:
+            best_m, best_sp = m, sp
+    if best_sp != "none":
+        return best_sp
+    return dominant_aq_in_subset(row, subset)
+
+
+def pack_custom_category_grid(
+    rows: list[dict],
+    *,
+    cat_fn: Callable[[dict], str],
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+) -> dict[str, Any]:
+    categories: set[str] = set()
+    for row in rows:
+        categories.add(cat_fn(row) or "none")
+    names = sorted(categories)
+    index = {name: i for i, name in enumerate(names)}
+    grid = np.full((pe_levels, ph_levels), -1, dtype=int)
+    for row in rows:
+        ix = ph_lookup.get(round(float(row["ph"]), 12))
+        iy = pe_lookup.get(round(float(row["pe"]), 12))
+        if ix is None or iy is None:
+            continue
+        cat = cat_fn(row) or "none"
+        grid[iy, ix] = index.get(cat, -1)
+    return {"names": names, "grid": grid.tolist()}
 
 
 def pack_category_grid(
@@ -216,8 +367,8 @@ def pack_grid_results(
     ph_lookup = {round(float(value), 12): i for i, value in enumerate(ph)}
     pe_lookup = {round(float(value), 12): i for i, value in enumerate(pe)}
 
-    subset_list = subsets_to_pack(params.system_elements)
-    pack_steps = len(subset_list) + len(params.system_elements)
+    subset_list = subsets_for_job(params)
+    pack_steps = count_layer_pack_steps(params)
     step = 0
 
     collisions = frozenset(params.solid_aqueous_collisions)
@@ -230,50 +381,78 @@ def pack_grid_results(
             progress_cb(step, pack_steps)
 
     solid_subsets: dict[str, Any] = {}
-    for subset in subset_list:
-        key = subset_key(subset)
-        eligible = frozenset(subset_map.get(key, ()))
-        solid_subsets[key] = pack_subset_grid(
-            rows,
-            subset=subset,
-            eligible_phases=eligible,
-            job_phases=params.phases,
-            ph_lookup=ph_lookup,
-            pe_lookup=pe_lookup,
-            pe_levels=params.pe_levels,
-            ph_levels=params.ph_levels,
-            collision_names=collisions,
-        )
-        tick()
+    if params.layer_solids:
+        for subset in subset_list:
+            key = subset_key(subset)
+            eligible = frozenset(subset_map.get(key, ()))
+            solid_subsets[key] = pack_subset_grid(
+                rows,
+                subset=subset,
+                eligible_phases=eligible,
+                job_phases=params.phases,
+                ph_lookup=ph_lookup,
+                pe_lookup=pe_lookup,
+                pe_levels=params.pe_levels,
+                ph_levels=params.ph_levels,
+                collision_names=collisions,
+            )
+            tick()
+
+    aqueous_subsets: dict[str, Any] = {}
+    if params.layer_aqueous:
+        for subset in subset_list:
+            key = subset_key(subset)
+            sset = set(subset)
+
+            def aq_cat(row: dict, s: set[str] = sset) -> str:
+                return dominant_aq_species_subset(row, s)
+
+            layer = pack_custom_category_grid(
+                rows,
+                cat_fn=aq_cat,
+                ph_lookup=ph_lookup,
+                pe_lookup=pe_lookup,
+                pe_levels=params.pe_levels,
+                ph_levels=params.ph_levels,
+            )
+            layer["elements"] = list(subset)
+            aqueous_subsets[key] = layer
+            tick()
 
     layers: dict[str, Any] = {
         "solid_subsets": solid_subsets,
-        "elements": {},
+        "aqueous_subsets": aqueous_subsets,
     }
-    for elem in params.system_elements:
-        layers["elements"][elem] = pack_category_grid(
-            rows,
-            field="",
-            element_key=elem,
-            ph_lookup=ph_lookup,
-            pe_lookup=pe_lookup,
-            pe_levels=params.pe_levels,
-            ph_levels=params.ph_levels,
-        )
-        tick()
 
     default_key = subset_key(params.system_elements)
-    default_layer = solid_subsets.get(default_key) or next(
-        iter(solid_subsets.values()), {"names": [], "grid": []}
-    )
+    if params.layer_solids and default_key in solid_subsets:
+        default_layer = solid_subsets[default_key]
+    elif params.layer_aqueous and default_key in aqueous_subsets:
+        default_layer = aqueous_subsets[default_key]
+    elif solid_subsets:
+        default_layer = next(iter(solid_subsets.values()))
+    elif aqueous_subsets:
+        default_layer = next(iter(aqueous_subsets.values()))
+    else:
+        default_layer = {"names": [], "grid": []}
 
     return {
         "ph": ph.tolist(),
         "pe": pe.tolist(),
         "system_elements": list(params.system_elements),
+        "layer_solids": params.layer_solids,
+        "layer_aqueous": params.layer_aqueous,
+        "layer_elements": params.layer_elements,
         "layers": layers,
         "phase_names": default_layer["names"],
         "grid": default_layer["grid"],
+        "hover_species": pack_hover_species_grid(
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
+            pe_levels=params.pe_levels,
+            ph_levels=params.ph_levels,
+        ),
         "n_converged": sum(1 for r in rows if r.get("converged")),
         "n_total": len(rows),
         "temp_c": params.temp_c,

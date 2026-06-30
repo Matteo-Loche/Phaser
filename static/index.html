@@ -438,8 +438,7 @@
         align-items: center;
         overflow: visible;
       }
-      .plot-toolbar > #displayMode,
-      .plot-toolbar > #targetElement { width: auto; }
+      .plot-toolbar > #displayMode { width: auto; }
     }
     .meta { font-size: 0.76rem; color: var(--muted); }
     .empty {
@@ -602,6 +601,19 @@
             <input type="checkbox" id="adaptiveBoundaries" />
             Adaptive boundaries <span class="meta">(root-find phase edges)</span>
           </label>
+          <div style="margin-top:0.65rem;font-size:0.82rem">
+            <div class="meta" style="margin-bottom:0.35rem">Compute layers</div>
+            <label class="toggle" style="display:block;margin-bottom:0.3rem">
+              <input type="checkbox" id="layerSolids" checked /> Solid predominance
+            </label>
+            <label class="toggle" style="display:block;margin-bottom:0.3rem">
+              <input type="checkbox" id="layerAqueous" checked /> Aqueous predominance
+            </label>
+            <label class="toggle" style="display:block">
+              <input type="checkbox" id="layerElements" checked /> Per-element subsets
+              <span class="meta">(filter map by element; off = one combined map)</span>
+            </label>
+          </div>
           <div class="grid2" style="margin-top:0.55rem">
             <div>
               <label for="o2LimitAtm">O₂ stability limit (atm)</label>
@@ -638,13 +650,12 @@
         <label style="font-size:0.78rem;color:var(--muted)">Display</label>
         <select id="displayMode" style="min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
           <option value="solid">Solid predominance</option>
-          <option value="element">Aqueous species (by element)</option>
+          <option value="aqueous">Aqueous predominance</option>
         </select>
         <span id="solidSubsetWrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.6rem;font-size:0.78rem">
-          <span style="color:var(--muted)">Solid elements:</span>
+          <span id="subsetLabel" style="color:var(--muted)">Elements:</span>
           <span id="solidSubsetBoxes"></span>
         </span>
-        <select id="targetElement" style="display:none;min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)"></select>
         <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
         <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
         <div class="spacer" style="flex:1"></div>
@@ -668,7 +679,7 @@
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
     const LS_KEY = "phaseDiagramState.v7";
-    const RESULT_DB = "phaserResultCache.v20";
+    const RESULT_DB = "phaserResultCache.v23";
     const RESULT_STORE = "results";
     const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v1";
@@ -749,7 +760,9 @@
       adaptiveBoundaries: true,
       displayMode: "solid",
       solidSubsetElements: [],
-      targetElement: "Fe",
+      layerSolids: true,
+      layerAqueous: true,
+      layerElements: true,
       labelsOnly: false,
       showBoundaries: true,
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
@@ -906,60 +919,137 @@
       });
     }
 
-    function refreshTargetElementOptions(result) {
-      const sel = $("targetElement");
-      const elems = result?.system_elements || result?.layers?.elements
-        ? Object.keys(result.layers.elements)
-        : systemElements();
-      sel.innerHTML = elems.map(e => `<option value="${e}">${e}</option>`).join("");
-      if (elems.includes(state.targetElement)) sel.value = state.targetElement;
-      else if (elems.length) { state.targetElement = elems[0]; sel.value = elems[0]; }
+    // Which predominance families exist in a computed result.
+    function availableFamilies(result) {
+      const g = result?.layers || {};
+      const d = result?.display?.layers || {};
+      return {
+        solid: Object.keys(g.solid_subsets || {}).length > 0
+          || Object.keys(d.solid_subsets || {}).length > 0,
+        aqueous: Object.keys(g.aqueous_subsets || {}).length > 0
+          || Object.keys(d.aqueous_subsets || {}).length > 0,
+      };
     }
 
-    function syncDisplayControls() {
-      const isElement = state.displayMode === "element";
-      $("targetElement").style.display = isElement ? "inline-block" : "none";
-      $("solidSubsetWrap").style.display = isElement ? "none" : "inline-flex";
+    // Layer families / per-element subsets that were actually computed for a result.
+    function displayLayerConfig(result) {
+      if (!result) {
+        return {
+          solids: !!state.layerSolids,
+          aqueous: !!state.layerAqueous,
+          elements: !!state.layerElements,
+        };
+      }
+      if (result.layer_solids != null) {
+        return {
+          solids: !!result.layer_solids,
+          aqueous: !!result.layer_aqueous,
+          elements: !!result.layer_elements,
+        };
+      }
+      const fam = availableFamilies(result);
+      const keys = new Set([
+        ...Object.keys(result.layers?.solid_subsets || {}),
+        ...Object.keys(result.layers?.aqueous_subsets || {}),
+        ...Object.keys(result.display?.layers?.solid_subsets || {}),
+        ...Object.keys(result.display?.layers?.aqueous_subsets || {}),
+      ]);
+      return {
+        solids: fam.solid,
+        aqueous: fam.aqueous,
+        elements: keys.size > 1,
+      };
+    }
+
+    // Refresh display-only controls from the plotted result (not pending config toggles).
+    function syncDisplayFromPlot() {
+      const result = runtime.lastResult;
+      populateDisplayModeOptions(result);
+      syncDisplayControls(result);
+      if (result) renderSolidSubsetBoxes(result);
+    }
+
+    // Show only the display modes that were actually computed for this result.
+    function populateDisplayModeOptions(result) {
+      const sel = $("displayMode");
+      const avail = displayLayerConfig(result);
+      const opts = [];
+      if (avail.solids) opts.push(["solid", "Solid predominance"]);
+      if (avail.aqueous) opts.push(["aqueous", "Aqueous predominance"]);
+      if (!opts.length) opts.push(["solid", "Solid predominance"]);
+      sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+      if (!opts.some(([v]) => v === state.displayMode)) {
+        state.displayMode = opts[0][0];
+      }
+      sel.value = state.displayMode;
+    }
+
+    function syncDisplayControls(result = runtime.lastResult) {
+      const mode = state.displayMode;
+      const cfg = displayLayerConfig(result);
+      $("solidSubsetWrap").style.display = cfg.elements ? "inline-flex" : "none";
+      const lbl = $("subsetLabel");
+      if (lbl) lbl.textContent = mode === "aqueous" ? "Aqueous elements:" : "Solid elements:";
+    }
+
+    // Subset key for the active display: the selected element subset when
+    // per-element subsets were computed, otherwise the full system set.
+    function activeSubsetKey(elems, result = runtime.lastResult) {
+      const cfg = displayLayerConfig(result);
+      if (cfg.elements && state.solidSubsetElements.length) {
+        return subsetKey(state.solidSubsetElements);
+      }
+      return subsetKey(elems);
+    }
+
+    function subsetLabelText(elems, result = runtime.lastResult) {
+      const cfg = displayLayerConfig(result);
+      const used = cfg.elements && state.solidSubsetElements.length
+        ? state.solidSubsetElements : elems;
+      return [...used].sort().join(", ");
     }
 
     function activeLayer(result, source = null) {
       const src = source || result;
       const layers = src.layers || {};
       const elems = src.system_elements || result.system_elements || systemElements();
-      if (state.displayMode === "element" && layers.elements) {
-        const elem = state.targetElement;
-        const layer = layers.elements[elem];
-        if (layer) return { grid: layer.grid, names: layer.names, label: `${elem} aqueous species`, aqueous: [] };
+      const key = activeSubsetKey(elems, result);
+      if (state.displayMode === "aqueous") {
+        const aqSubsets = layers.aqueous_subsets || {};
+        const layer = aqSubsets[key] || aqSubsets[subsetKey(elems)];
+        if (layer) {
+          return { grid: layer.grid, names: layer.names, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
+        }
       }
-      const key = subsetKey(state.solidSubsetElements);
       const solidSubsets = layers.solid_subsets || {};
-      const layer = solidSubsets[key];
+      const layer = solidSubsets[key] || solidSubsets[subsetKey(elems)];
       if (layer) {
-        const label = `Solids (${state.solidSubsetElements.sort().join(", ")}) + fluid species`;
+        const label = `Solids (${subsetLabelText(elems, result)}) + fluid species`;
         return { grid: layer.grid, names: layer.names, label, aqueous: layer.aqueous_names || [] };
       }
-      const fallback = solidSubsets[subsetKey(elems)];
-      if (fallback) return { grid: fallback.grid, names: fallback.names, label: "Solid predominance", aqueous: fallback.aqueous_names || [] };
-      return { grid: src.grid || result.grid, names: src.phase_names || result.phase_names, label: "Solid predominance", aqueous: [] };
+      return { grid: src.grid || result.grid, names: src.phase_names || result.phase_names, label: "Predominance", aqueous: [] };
     }
 
     function activeVectorLayer(result) {
       const layers = result.display?.layers || {};
       const elems = result.system_elements || systemElements();
-      if (state.displayMode === "element" && layers.elements) {
-        const elem = state.targetElement;
-        const layer = layers.elements[elem];
-        if (layer) return { ...layer, label: `${elem} aqueous species`, aqueous: [] };
-      }
-      const key = subsetKey(state.solidSubsetElements);
+      const key = activeSubsetKey(elems, result);
+      const aqSubsets = layers.aqueous_subsets || {};
       const solidSubsets = layers.solid_subsets || {};
-      const layer = solidSubsets[key];
-      if (layer) {
-        const label = `Solids (${state.solidSubsetElements.sort().join(", ")}) + fluid species`;
-        return { ...layer, label, aqueous: layer.aqueous_names || [] };
+      const aqLayer = aqSubsets[key] || aqSubsets[subsetKey(elems)];
+      const solidLayer = solidSubsets[key] || solidSubsets[subsetKey(elems)];
+      // Prefer the selected family, but fall back to whichever was computed so a
+      // mode/layer mismatch can never crash the render.
+      if (state.displayMode === "aqueous" && aqLayer) {
+        return { ...aqLayer, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
       }
-      const fallback = solidSubsets[subsetKey(elems)];
-      if (fallback) return { ...fallback, label: "Solid predominance", aqueous: fallback.aqueous_names || [] };
+      if (solidLayer) {
+        const label = `Solids (${subsetLabelText(elems, result)}) + fluid species`;
+        return { ...solidLayer, label, aqueous: solidLayer.aqueous_names || [] };
+      }
+      if (aqLayer) {
+        return { ...aqLayer, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
+      }
       return null;
     }
 
@@ -1200,6 +1290,12 @@
         state.dbId = legacy?.id || "";
         delete state.dbPath;
       }
+      if (state.displayMode === "element") state.displayMode = "aqueous";
+      if (!["solid", "aqueous"].includes(state.displayMode)) state.displayMode = "solid";
+      delete state.targetElement;
+      state.layerSolids ??= true;
+      state.layerAqueous ??= true;
+      state.layerElements ??= true;
     }
 
     function selectedDatabase() {
@@ -1403,12 +1499,41 @@
     function adaptiveFactor() {
       return (runtime.cfg && runtime.cfg.adaptive_refine_factor) || 5;
     }
+    // Number of element subsets packed/traced, mirroring diagram.packer.subsets_to_pack.
+    function countSubsets(nEl) {
+      if (nEl <= 0) return 0;
+      if (nEl <= 7) return Math.pow(2, nEl) - 1;
+      return nEl + (nEl * (nEl - 1)) / 2 + 1;
+    }
+
+    // Predominance maps actually computed for the current toggles.
+    function layerMapCount() {
+      const nEl = systemElements().length || 1;
+      const nSub = state.layerElements ? countSubsets(nEl) : 1;
+      const families = (state.layerSolids ? 1 : 0) + (state.layerAqueous ? 1 : 0);
+      return Math.max(1, families * nSub);
+    }
+
+    // Fraction of base cells expected on a boundary, scaled by how many layer
+    // maps are active. Normalized so the all-on case ≈ the original 0.12, and it
+    // shrinks as families/subsets are disabled. Saturating (boundaries overlap).
+    function boundaryFraction() {
+      const nEl = systemElements().length || 1;
+      const kAll = 2 * countSubsets(nEl); // both families × all subsets
+      const k = layerMapCount();
+      const p = 0.1;
+      const raw = (x) => 1 - Math.pow(1 - p, x);
+      const denom = raw(kAll) || 1;
+      const weight = Math.min(1, raw(k) / denom);
+      return 0.12 * weight;
+    }
+
     function estimateAdaptiveRuns(n) {
       const factor = adaptiveFactor();
       const cap = (runtime.cfg && runtime.cfg.max_adaptive_points) || 120000;
       const base = n * n;
       const baseCells = Math.max(0, (n - 1) * (n - 1));
-      const boundaryCells = Math.round(baseCells * 0.12); // typical ~12% on a boundary
+      const boundaryCells = Math.round(baseCells * boundaryFraction());
       const newPerCell = (factor + 1) * (factor + 1) - 4;
       return Math.min(cap, base + boundaryCells * Math.max(0, newPerCell));
     }
@@ -1657,6 +1782,21 @@
         renderGridMeta();
         commit();
       });
+      function onLayerToggle(key, el) {
+        state[key] = el.checked;
+        // Solid / Aqueous are mutually required: silently keep the box checked
+        // when the user tries to clear the last predominance family.
+        if (!state.layerSolids && !state.layerAqueous) {
+          state[key] = true;
+          el.checked = true;
+        }
+        renderGridMeta();
+        commit();
+        markStale();
+      }
+      $("layerSolids").addEventListener("change", e => onLayerToggle("layerSolids", e.target));
+      $("layerAqueous").addEventListener("change", e => onLayerToggle("layerAqueous", e.target));
+      $("layerElements").addEventListener("change", e => onLayerToggle("layerElements", e.target));
 
       document.querySelectorAll("#yAxisSeg button").forEach(b => {
         b.addEventListener("click", () => {
@@ -1673,12 +1813,7 @@
 
       $("displayMode").addEventListener("change", e => {
         state.displayMode = e.target.value;
-        syncDisplayControls();
-        persist();
-        if (runtime.lastResult) drawDiagram(runtime.lastResult);
-      });
-      $("targetElement").addEventListener("change", e => {
-        state.targetElement = e.target.value;
+        syncDisplayControls(runtime.lastResult);
         persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       });
@@ -1715,6 +1850,9 @@
       $("phMax").value = roundPh(state.ph.max);
       $("gridLevels").value = state.gridLevels;
       $("adaptiveBoundaries").checked = !!state.adaptiveBoundaries;
+      $("layerSolids").checked = !!state.layerSolids;
+      $("layerAqueous").checked = !!state.layerAqueous;
+      $("layerElements").checked = !!state.layerElements;
       $("o2LimitAtm").value = state.o2LimitAtm;
       $("h2LimitAtm").value = state.h2LimitAtm;
       $("yMin").value = state.y.axis === "eh"
@@ -1728,7 +1866,7 @@
           ? roundLogFO2(displayYMax())
           : roundPe(state.y.peMax);
       $("displayMode").value = state.displayMode;
-      syncDisplayControls();
+      syncDisplayFromPlot();
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
     }
@@ -1917,6 +2055,12 @@
       const sel = selectedPhases();
       if (!Object.keys(totals).length) { setStatus("Add at least one species with a concentration.", "err"); return; }
       if (!sel.length) { setStatus("Select at least one phase.", "err"); return; }
+      if (!state.layerSolids && !state.layerAqueous) {
+        setStatus("Enable Solid and/or Aqueous predominance.", "err"); return;
+      }
+      // Pick a display mode that matches the layers about to be computed.
+      if (!state.layerSolids && state.layerAqueous) state.displayMode = "aqueous";
+      else if (state.layerSolids && !state.layerAqueous) state.displayMode = "solid";
 
       const t = state.tempC;
 
@@ -1933,6 +2077,9 @@
         system_elements: systemElements(),
         exclude_gases: true,
         adaptive_boundaries: !!state.adaptiveBoundaries,
+        layer_solids: !!state.layerSolids,
+        layer_aqueous: !!state.layerAqueous,
+        layer_elements: !!state.layerElements,
       };
       if (state.adaptiveBoundaries) {
         // Include the factor so the cache key reflects it (changing the factor
@@ -2270,6 +2417,56 @@
       };
     }
 
+    function hoverCellHtml(phase, speciesHtml) {
+      const p = phase ? `<b>${phase}</b>` : "—";
+      if (!speciesHtml) return p;
+      return `${p}<br><span style="color:#cbd5e1;font-size:0.92em">${speciesHtml}</span>`;
+    }
+
+    function fmtHoverMol(m) {
+      if (!Number.isFinite(m) || m <= 0) return "—";
+      if (m >= 0.01) return String(Number(m.toPrecision(3)));
+      return m.toExponential(1);
+    }
+
+    function hoverElementsFilter(result) {
+      const elems = result.system_elements || systemElements();
+      const cfg = displayLayerConfig(result);
+      if (cfg.elements && state.solidSubsetElements.length) {
+        return new Set(state.solidSubsetElements);
+      }
+      return new Set(elems);
+    }
+
+    function formatHoverSpecies(entries, filterElems, n = 4) {
+      let pool = entries || [];
+      if (filterElems) pool = pool.filter(e => filterElems.has(e[2]));
+      // A multi-element species (e.g. FeHCO3+) appears once per element it
+      // contains; entries are sorted by molality desc, so keep the first hit.
+      const seen = new Set();
+      const deduped = [];
+      for (const e of pool) {
+        if (seen.has(e[0])) continue;
+        seen.add(e[0]);
+        deduped.push(e);
+      }
+      const top = deduped.slice(0, n);
+      if (!top.length) return "";
+      return top.map(([sp, m]) => `${sp} (${fmtHoverMol(m)})`).join("<br>");
+    }
+
+    function buildHoverCustomData(hGrid, hNames, result) {
+      const speciesGrid = result.hover_species;
+      const filterElems = hoverElementsFilter(result);
+      return hGrid.map((row, iy) => row.map((v, ix) => {
+        const phase = v < 0 ? "—" : hNames[v];
+        const sp = speciesGrid
+          ? formatHoverSpecies(speciesGrid[iy]?.[ix], filterElems)
+          : "";
+        return hoverCellHtml(phase, sp);
+      }));
+    }
+
     function adaptiveStatusSuffix(result) {
       if (result.compute_mode !== "adaptive" || !result.adaptive_stats) return "";
       const s = result.adaptive_stats;
@@ -2286,9 +2483,7 @@
     function drawDiagram(result) {
       runtime.lastResult = result;
       $("plotEmpty").style.display = "none";
-      refreshTargetElementOptions(result);
-      renderSolidSubsetBoxes(result);
-      syncDisplayControls();
+      syncDisplayFromPlot();
 
       const vectorMode = usesVectorDisplay(result);
       const vectorLayer = vectorMode ? activeVectorLayer(result) : null;
@@ -2337,7 +2532,7 @@
         zmin: -0.5, zmax: Math.max(hn - 0.5, 0.5),
         colorscale: INVISIBLE_COLORSCALE,
         showscale: false, xgap: 0, ygap: 0,
-        customdata: hGrid.map(r => r.map(v => (v < 0 ? "—" : hNames[v]))),
+        customdata: buildHoverCustomData(hGrid, hNames, result),
         hovertemplate: vectorMode ? baseHoverTpl : hoverTpl,
       });
 
@@ -2423,7 +2618,7 @@
       renderSpecies();
       syncAxisUI();
       renderGridMeta();
-      syncDisplayControls();
+      syncDisplayFromPlot();
       refreshPhases();
     }
 
