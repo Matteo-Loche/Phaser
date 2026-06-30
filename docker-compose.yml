@@ -1,24 +1,45 @@
+# PHASER server deployment
+#
+# First run:   cp .env.example .env && docker compose pull && docker compose up -d
+# Update:      docker compose pull && docker compose up -d
+# Build image locally (dev/CI only): docker compose up --build -d
+
+x-phaser-runtime: &phaser-runtime
+  PHASER_HOST: ${PHASER_HOST:-0.0.0.0}
+  PHASER_PORT: ${PHASER_PORT:-8765}
+  PHASER_MAX_WORKERS: ${PHASER_MAX_WORKERS:-8}
+  PHASER_MAX_CONCURRENT_JOBS: ${PHASER_MAX_CONCURRENT_JOBS:-1}
+  PHASER_ADAPTIVE_REFINE_FACTOR: ${PHASER_ADAPTIVE_REFINE_FACTOR:-5}
+  PHASER_MAX_ADAPTIVE_POINTS: ${PHASER_MAX_ADAPTIVE_POINTS:-120000}
+  PHASER_JOB_RESULT_TTL_SEC: ${PHASER_JOB_RESULT_TTL_SEC:-3600}
+  PHASER_JOB_QUEUE_TTL_SEC: ${PHASER_JOB_QUEUE_TTL_SEC:-7200}
+  PHASER_JOB_REAPER_INTERVAL_SEC: ${PHASER_JOB_REAPER_INTERVAL_SEC:-60}
+  PHASER_IPHREEQC_LIB: ${PHASER_IPHREEQC_LIB:-/usr/local/lib/libiphreeqc.so}
+  PHASER_BUILTIN_DB_DIRS: ${PHASER_BUILTIN_DB_DIRS:-/opt/phreeqc/database}
+  PHASER_GENERATED_DB_DIR: ${PHASER_GENERATED_DB_DIR:-/app/PHASER/data/databases/generated}
+  PHASER_DEFAULT_DB_ID: ${PHASER_DEFAULT_DB_ID:-}
+  PHASER_CATALOG_DB: ${PHASER_CATALOG_DB:-/app/PHASER/data/catalog.sqlite}
+  PHASER_STATS_DB: ${PHASER_STATS_DB:-/app/PHASER/data/stats.sqlite}
+
 services:
   phaser:
+    image: ghcr.io/matteo-loche/phaser:latest
     build:
       context: .
       args:
         PYTHON_VERSION: "3.13-slim"
         IPHREEQC_VERSION: "3.8.6-17100"
     environment:
-      PHASER_HOST: ${PHASER_HOST:-0.0.0.0}
-      PHASER_PORT: ${PHASER_PORT:-8765}
-      PHASER_IPHREEQC_LIB: ${PHASER_IPHREEQC_LIB:-/usr/local/lib/libiphreeqc.so}
-      PHASER_BUILTIN_DB_DIRS: ${PHASER_BUILTIN_DB_DIRS:-/opt/phreeqc/database}
-      PHASER_GENERATED_DB_DIR: ${PHASER_GENERATED_DB_DIR:-/app/PHASER/data/databases/generated}
-      PHASER_DEFAULT_DB_ID: ${PHASER_DEFAULT_DB_ID:-}
+      <<: *phaser-runtime
     ports:
       - "${PHASER_PORT:-8765}:8765"
     volumes:
-      # Host side defaults to a folder next to this file. On a server/NAS with a
-      # dedicated dataset, set PHASER_DATA_DIR in a .env file, e.g.
-      #   PHASER_DATA_DIR=/mnt/pool/phaser/generated
       - ${PHASER_DATA_DIR:-./data/databases/generated}:/app/PHASER/data/databases/generated
+    deploy:
+      resources:
+        limits:
+          cpus: "${PHASER_CPU_LIMIT:-8}"
+          memory: ${PHASER_MEMORY_LIMIT:-8G}
     restart: unless-stopped
 
   cloudflared:
@@ -29,3 +50,12 @@ services:
     restart: unless-stopped
     profiles:
       - tunnel
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    command: --interval ${WATCHTOWER_INTERVAL:-3600} --cleanup
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    profiles:
+      - watchtower

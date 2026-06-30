@@ -62,6 +62,7 @@ def get_config():
         "species_suggestions": species_suggestions(db_elements),
         "max_phases": config.MAX_PHASES_PER_JOB,
         "max_grid_points": config.MAX_GRID_POINTS,
+        "max_workers": config.MAX_WORKERS,
         "max_concurrent_jobs": config.MAX_CONCURRENT_JOBS,
         "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
         "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,

@@ -17,10 +17,11 @@ env/
 # Local runtime
 *.log
 
-# Environment/secrets
+# Environment/secrets — keep .env.example templates for GitHub
 .env
 .env.*
 !.env.example
+!**/.env.example
 
 # OS/editor
 .DS_Store
@@ -48,8 +49,9 @@ error.out
 selected.out
 phreeqc.log
 
-# Docker/local build cache
+# Docker/local overrides
 docker-data/
+docker-compose.override.yml
 
 # Local dev tests (not part of the shipped package)
 tests/

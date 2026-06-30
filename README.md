@@ -23,17 +23,24 @@ Key behaviours:
 
 ## Quick start
 
-### Docker (recommended)
+### Docker (server / local test)
 
-Bundles Linux IPhreeqc and the PHREEQC database directory from the official USGS source build — no local compiler required.
+Pull the pre-built image from GHCR — no local compiler required:
 
 ```bash
 cd /path/to/PHASER
-cp .env.example .env
-docker compose up --build phaser
+cp .env.example .env          # Windows: copy .env.example .env
+docker compose pull
+docker compose up -d
 ```
 
-Open [http://localhost:8765](http://localhost:8765). For a production host pulling a pre-built image from GHCR, see [Deployment](#deployment).
+Open [http://localhost:8765](http://localhost:8765). See [Deployment](#deployment) for VPS setup, runtime tuning, and optional Cloudflare Tunnel / Watchtower profiles.
+
+To **build the image from source** instead of pulling (developers / CI only):
+
+```bash
+docker compose up --build -d
+```
 
 ### From source (Linux / WSL)
 
@@ -90,9 +97,8 @@ PHASER/
 │   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
 ├── static/
 │   └── index.html         # Single-page web UI
-├── docker-compose.yml     # Local dev: build from source
-├── docker-compose.prod.yml # Server: pull GHCR image
-├── Dockerfile             # Multi-stage: build IPhreeqc + Python app
+├── docker-compose.yml     # Server deployment (pull GHCR; optional local build)
+├── Dockerfile             # Image build (used by GitHub Actions and compose --build)
 ├── .github/workflows/
 │   └── docker-publish.yml # Build & push to GHCR on main / tags
 └── data/
@@ -254,6 +260,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_IPHREEQC_LIB` | Path to `libiphreeqc.so` / `IPhreeqc.dll` |
 | `PHASER_HOST` | Bind address (default `0.0.0.0`) |
 | `PHASER_PORT` | Listen port (default `8765`) |
+| `PHASER_MAX_WORKERS` | Parallel PHREEQC worker processes per grid sweep (default `8`; set via compose `.env`, no rebuild) |
 | `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | Display subdivision factor in adaptive mode (default `5`) |
 | `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
@@ -779,6 +786,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Grid top-N species | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH species slots in base grid sweep |
 | Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `4` | Species kept per element in packed hover JSON |
 | Max workers per sweep | — | `MAX_WORKERS = 8` | Capped by `os.cpu_count()` in `sweep.py` |
+| Max workers per sweep | `PHASER_MAX_WORKERS` | `8` | ProcessPool size for grid/trace work |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
 | Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
@@ -825,53 +833,37 @@ PHASER can consume databases produced by external tools:
 
 ## Docker
 
-The container builds Linux IPhreeqc from the official USGS source tarball, installs Python dependencies, and includes the PHREEQC database directory from that source package.
+The **`Dockerfile`** builds a Linux image with IPhreeqc (USGS source tarball) and PHREEQC databases. **GitHub Actions** pushes it to GHCR; servers run it via **`docker-compose.yml`**.
 
-For production servers that pull a pre-built image from GHCR, see [Deployment](#deployment).
-
-Build and run locally:
+### Server (default)
 
 ```bash
 cp .env.example .env
-docker compose up --build phaser
+docker compose pull
+docker compose up -d
 ```
 
-Open:
+Generated databases persist on the host at `PHASER_DATA_DIR` (default `./data/databases/generated`). Runtime tuning is via `.env` — no image rebuild. See [Deployment](#deployment).
 
-```text
-http://localhost:8765
-```
-
-Generated databases are mounted into the container:
-
-```text
-./data/databases/generated -> /app/PHASER/data/databases/generated
-```
-
-The container defaults are:
-
-```env
-PHASER_IPHREEQC_LIB=/usr/local/lib/libiphreeqc.so
-PHASER_BUILTIN_DB_DIRS=/opt/phreeqc/database
-PHASER_GENERATED_DB_DIR=/app/PHASER/data/databases/generated
-PHASER_MAX_CONCURRENT_JOBS=1
-PHASER_ADAPTIVE_REFINE_FACTOR=5
-PHASER_MAX_ADAPTIVE_POINTS=120000
-PHASER_JOB_RESULT_TTL_SEC=3600
-PHASER_JOB_QUEUE_TTL_SEC=7200
-```
-
-Run a smoke check inside the image:
+Smoke check inside the running container:
 
 ```bash
-docker compose run --rm phaser python scripts/smoke_check.py
+docker compose exec phaser python scripts/smoke_check.py
 ```
 
-Stop services:
+Stop:
 
 ```bash
 docker compose down
 ```
+
+### Build from source (developers)
+
+```bash
+docker compose up --build -d
+```
+
+Uses the same `docker-compose.yml`; Compose builds locally and tags `ghcr.io/matteo-loche/phaser:latest`.
 
 ---
 
@@ -896,7 +888,7 @@ For Docker Compose with a named Cloudflare tunnel:
 4. Start PHASER plus the tunnel:
 
    ```bash
-   docker compose --profile tunnel up --build
+   docker compose --profile tunnel up -d
    ```
 
 The tunnel container connects to the internal Compose service (`phaser:8765`), so no router port forwarding is required.
@@ -907,12 +899,7 @@ Never commit the real tunnel token.
 
 ## Deployment
 
-PHASER ships as a **Docker image**. Two compose files cover the two common workflows:
-
-| File | Use |
-|------|-----|
-| `docker-compose.yml` | **Local development** — builds the image from source on your machine |
-| `docker-compose.prod.yml` | **Server deployment** — pulls the pre-built image from GitHub Container Registry (GHCR) |
+PHASER ships as a **Docker image** on GHCR. One compose file — **`docker-compose.yml`** — covers server deployment (and optional local build).
 
 ### Image publishing (GitHub Actions)
 
@@ -934,36 +921,73 @@ On a VPS, NAS, or home server:
 cp .env.example .env
 # Optional: PHASER_DATA_DIR=/path/to/persistent/generated/databases
 
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+docker compose pull
+docker compose up -d
 ```
 
 Generated databases persist via `PHASER_DATA_DIR` (host path) → container `data/databases/generated`. Built-in PHREEQC databases ship inside the image.
 
-**Optional profiles** (same file):
+**Runtime tuning (no image rebuild)** — edit `.env` beside `docker-compose.yml`:
+
+| Variable | Layer | Purpose |
+|----------|-------|---------|
+| `PHASER_CPU_LIMIT` | Docker cgroup | Max CPUs for the container |
+| `PHASER_MEMORY_LIMIT` | Docker cgroup | Max RAM for the container |
+| `PHASER_MAX_WORKERS` | App | PHREEQC worker processes per sweep |
+| `PHASER_MAX_CONCURRENT_JOBS` | App | Simultaneous diagram jobs |
+| `PHASER_ADAPTIVE_REFINE_FACTOR` | App | Adaptive display subdivision |
+| `PHASER_MAX_ADAPTIVE_POINTS` | App | Soft cap on adaptive PHREEQC evals |
+| `PHASER_JOB_*_TTL_SEC` | App | Job memory / queue retention |
+
+Set **`PHASER_CPU_LIMIT` and `PHASER_MAX_WORKERS` to the same value**. Defaults: **8 CPUs / 8 workers / 8 GB RAM**. After editing `.env`: `docker compose up -d`.
+
+Verify: `GET /api/config` returns `max_workers` and `max_concurrent_jobs`.
+
+**Optional profiles:**
 
 ```bash
 # Cloudflare Tunnel
-docker compose -f docker-compose.prod.yml --profile tunnel up -d
+docker compose --profile tunnel up -d
 
-# Auto-pull new :latest once per day (Watchtower)
-docker compose -f docker-compose.prod.yml --profile watchtower up -d
+# Auto-pull new :latest when GHCR has a newer image (Watchtower, default check every 1 h)
+docker compose --profile watchtower up -d
 ```
 
-### Local development vs production
+Watchtower only **restarts** PHASER when `:latest` on GHCR is newer than the running image; otherwise the hourly check is a lightweight pull/metadata comparison. For a personal or low-traffic server, **1 h** is a reasonable default. On a busy shared host, consider **6–24 h** (`WATCHTOWER_INTERVAL=21600` or `86400` in `.env`) to reduce the chance of restarting during an active compute.
 
-| | Local (`docker-compose.yml`) | Production (`docker-compose.prod.yml`) |
-|--|------------------------------|--------------------------------------|
-| Image | `build: .` from source | `image: ghcr.io/.../phaser:latest` |
-| When to update | `docker compose up --build` | `pull` after a merge to `main` |
-| Data volume | `PHASER_DATA_DIR` (optional `.env`) | same |
+See also [Docker](#docker) and [Cloudflare Tunnel](#cloudflare-tunnel).
 
-See also [Docker](#docker) (build from source) and [Cloudflare Tunnel](#cloudflare-tunnel).
+### Network access (LAN & Tailscale)
+
+PHASER already listens on **`0.0.0.0:8765`** inside the container (`PHASER_HOST` default). Docker publishes **`8765:8765`** on the host, so no compose change is required for LAN or Tailscale testing.
+
+| Access | URL | Notes |
+|--------|-----|-------|
+| **This machine** | `http://localhost:8765` | Default |
+| **Local network (LAN)** | `http://<host-LAN-IP>:8765` | Same Wi‑Fi / subnet (e.g. phone or laptop) |
+| **Tailscale** | `http://<host-tailscale-IP>:8765` | Any device on your tailnet (e.g. `100.x.x.x`) |
+| **Public internet** | Cloudflare Tunnel profile | See [Cloudflare Tunnel](#cloudflare-tunnel) |
+
+**LAN (Windows + Docker Desktop)**
+
+1. Find the PC’s LAN address: `ipconfig` → IPv4 (e.g. `192.168.1.42`).
+2. From another device on the same network: `http://192.168.1.42:8765`.
+3. If it fails, allow inbound **TCP 8765** in Windows Defender Firewall (Private profile).
+
+**Tailscale**
+
+1. Install [Tailscale](https://tailscale.com/download) on the machine running Docker (and on clients).
+2. Note the host’s Tailscale IP (`100.x.x.x`) in the Tailscale admin or tray menu.
+3. From any tailnet device: `http://100.x.x.x:8765`.
+4. No router port forwarding; traffic stays on the WireGuard mesh. Use Tailscale ACLs to restrict who can reach the host.
+
+Tailscale and LAN work **alongside** localhost — no extra PHASER config. For HTTPS or a stable hostname on the tailnet, use [Tailscale Serve](https://tailscale.com/kb/1312/serve) in front of `http://localhost:8765` (optional; not part of this compose file).
 
 ### Deployment checklist
 
 1. Mount persistent storage for `data/databases/generated` (`PHASER_DATA_DIR`).
 2. Catalog and stats SQLite files are created automatically on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` if you want them to survive container recreation.
-3. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
-4. Expose via Cloudflare Tunnel or a reverse proxy if needed.
-5. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register`.
+3. Set `PHASER_CPU_LIMIT`, `PHASER_MEMORY_LIMIT`, and `PHASER_MAX_WORKERS` in `.env` to match the host (defaults: 8 CPUs, 8 workers, 8 GB).
+4. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
+5. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use Cloudflare Tunnel or a reverse proxy.
+6. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register`.
