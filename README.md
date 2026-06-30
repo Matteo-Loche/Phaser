@@ -16,7 +16,7 @@ Key behaviours:
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** — three-panel desktop layout (controls · diagram · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
+- **Plotly UI** — single-page shell with **mode navigation** (Saturation Predominance · Stats), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
 
 ---
 
@@ -460,23 +460,39 @@ In `diagram/vectors.py` the gas limits become real overlay geometry: O₂/H₂ r
 
 ## Web UI (`static/index.html`)
 
-Single-page app served at `/`. Chemistry and axis settings live in the **left sidebar**; the **diagram** fills the centre; **display options** sit in a resizable panel on the **right**. A fixed **header** carries the logo, compute control, progress, status line, and **database selector**.
+Single-page app served at `/`. A fixed **header** is shared across all modes: logo, **mode switcher**, compute control, progress, status line, and **database selector**. The default mode — **Saturation Predominance** — uses the familiar three-panel layout: chemistry and axis settings in the **left sidebar**, the **diagram** in the centre, and **display options** in a resizable panel on the **right**. A **Stats** route is a placeholder for future per-server metrics (no compute on that page).
 
-### Layout
+### Modes and routing
+
+Modes are client-side hash routes inside the same `index.html` shell (no extra backend routes):
+
+| Route | Label | Compute |
+|-------|-------|---------|
+| `#/phase-diagram` | Saturation Predominance | Yes — `/api/compute` |
+| `#/stats` | Stats | No — placeholder panel |
+
+- **Mode switcher** — dropdown beside the logo (`Mode · Saturation Predominance ▼`). The active mode is shown on the button and highlighted in the menu; the document title updates per mode.
+- **Compute dispatch** — the header **Compute diagram** button calls the active mode's handler. On **Stats**, only the button is hidden; **progress and status stay visible** if a job is still running.
+- **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored per mode; switching back to Saturation Predominance restores the diagram from memory or IndexedDB.
+- **Cache keys** include `mode_id` plus the request body. Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
+
+Future compute modes (e.g. mineral stability) can register in the same `MODES` table with their own request builders and renderers without duplicating header, database, or progress logic.
+
+### Layout (Saturation Predominance)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  [☰]  PHASER   [Compute] [▓▓▓▓░░ 42%]  status…     Database [▼] ●      │
+│  [☰]  PHASER  [Mode ▼]  [Compute] [▓▓▓▓░░ 42%]  status…   Database [▼] ●│
 ├──────────────┬──────────────────────────────┬───┬───────────────────────┤
 │  Sidebar     │                              │ ║ │  Plot panel           │
-│  (controls)  │       Phase diagram          │ ║ │  (display)            │
+│  (controls)  │   Saturation predominance    │ ║ │  (display)            │
 │              │       (Plotly)               │ ║ │                       │
 └──────────────┴──────────────────────────────┴───┴───────────────────────┘
 ```
 
 | Region | Role |
 |--------|------|
-| **Header** | Animated PHASER logo (rainbow scan while computing), **Compute diagram** button, unified spectrum progress bar, short status line, **Database** label + selector + status dot |
+| **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **Compute diagram** button, unified spectrum progress bar, short status line, **Database** label + selector + status dot |
 | **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below) |
 | **Diagram** | Square-ish Plotly canvas (`fitPlotBox` allows up to **1:1.2** aspect so the plot grows on narrow windows instead of shrinking to a tiny square) |
 | **Right plot panel** | Display mode, element subset filter, labels/boundaries toggles, diagram metadata |
@@ -484,11 +500,13 @@ Single-page app served at `/`. Chemistry and axis settings live in the **left si
 
 **Responsive behaviour**
 
-- **≤1100px** — plot panel moves **above** the diagram as a horizontal toolbar; the panel resizer is hidden.
+- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · compute · database; row 2 = mode switcher under the logo. Plot panel moves **above** the diagram as a horizontal toolbar; the panel resizer is hidden.
 - **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card).
 - **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
 - **≤760px** — header status text hides (progress bar stays).
 - **≤560px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
+
+**Stats mode** hides the sidebar and diagram workspace; only the stats placeholder panel is shown. The mode switcher and database control remain in the header.
 
 ### Header: database
 
@@ -522,7 +540,7 @@ Changing units auto-converts species concentrations. Editing chemistry, axes, ph
 
 **Queued** jobs show status text only — the bar stays hidden until the job starts running.
 
-**Done** messages are compact, e.g. `Done · 40k runs · 8.2s`. Cache hits show **`Cached`**.
+**Done** messages are compact, e.g. `Done · Saturation Predominance · 40k runs · 8.2s`. Cache hits show **`Cached`**.
 
 The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
 
@@ -575,18 +593,18 @@ Redox axis choice (**Eh / pe / log fO₂**) is display-only: the packed grid is 
 | `localStorage` | `phaseDiagramState.v7` | UI settings (auto-saved on every edit) |
 | `localStorage` | `phaserLayout.v1` | Sidebar width and plot-panel width |
 | `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
-| `sessionStorage` | `phaserActiveJob.v1` | Active compute job for reconnect after refresh |
+| `sessionStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`) for reconnect after refresh |
 | IndexedDB | `phaserResultCache.v23` / `results` | Packed diagram JSON |
 
 Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or eviction (**24 results max**, **12-hour TTL**).
 
 ### Result cache and reconnect
 
-Identical compute requests (including `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, and **layer toggles**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
+Identical compute requests (including `mode_id`, `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, and **layer toggles**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
 
 On **cache miss**, the job is enqueued; the result is stored in IndexedDB after download and the server job is **`DELETE`**d to free memory.
 
-If you refresh during a **queued** or **running** job, polling resumes from `phaserActiveJob.v1`. A job that finished while you were away is fetched and rendered automatically.
+If you refresh during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2`. A job that finished while you were away is fetched and rendered automatically (into the mode that started it).
 
 Starting a **new** compute abandons the previous server job reference (running sweeps continue until completion or TTL cleanup).
 
