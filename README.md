@@ -908,10 +908,10 @@ The workflow `.github/workflows/docker-publish.yml` builds and pushes to **GHCR*
 ```text
 ghcr.io/matteo-loche/phaser:latest     # newest main
 ghcr.io/matteo-loche/phaser:sha-<commit>
-ghcr.io/matteo-loche/phaser:1.2.3      # when you tag a release
+ghcr.io/matteo-loche/phaser:1.2.3      # version tags
 ```
 
-**Recommended git workflow:** develop on a `dev` branch (or feature branches); merge to `main` only when you want a new production image. Pushes to `dev` do **not** rebuild `:latest`.
+Pushes to **`main`** and tags matching **`v*`** trigger a build; other branches do not update `:latest`.
 
 ### Production server
 
@@ -953,7 +953,7 @@ docker compose --profile tunnel up -d
 docker compose --profile watchtower up -d
 ```
 
-Watchtower only **restarts** PHASER when `:latest` on GHCR is newer than the running image; otherwise the hourly check is a lightweight pull/metadata comparison. For a personal or low-traffic server, **1 h** is a reasonable default. On a busy shared host, consider **6–24 h** (`WATCHTOWER_INTERVAL=21600` or `86400` in `.env`) to reduce the chance of restarting during an active compute.
+Watchtower **restarts** PHASER only when `:latest` on GHCR is newer than the running image; otherwise each check is a lightweight pull/metadata comparison. Default interval: **3600 s** (`WATCHTOWER_INTERVAL` in `.env`).
 
 See also [Docker](#docker) and [Cloudflare Tunnel](#cloudflare-tunnel).
 
@@ -986,7 +986,7 @@ Tailscale and LAN work **alongside** localhost — no extra PHASER config. For H
 ### Deployment checklist
 
 1. Mount persistent storage for `data/databases/generated` (`PHASER_DATA_DIR`).
-2. Catalog and stats SQLite files are created automatically on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` if you want them to survive container recreation.
+2. Catalog and stats SQLite files are created on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` for persistence across container recreation.
 3. Set `PHASER_CPU_LIMIT`, `PHASER_MEMORY_LIMIT`, and `PHASER_MAX_WORKERS` in `.env` to match the host (defaults: 8 CPUs, 8 workers, 8 GB).
 4. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
 5. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use Cloudflare Tunnel or a reverse proxy.
