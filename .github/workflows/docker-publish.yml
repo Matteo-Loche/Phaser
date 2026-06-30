@@ -1,0 +1,63 @@
+# Builds the Docker image and publishes it to GitHub Container Registry (GHCR)
+# automatically on every push to `main` and on every version tag (v1.2.3).
+#
+# Resulting image: ghcr.io/matteo-loche/phaser
+#   - tag `latest`            -> newest commit on main
+#   - tag `sha-<commit>`      -> the exact commit it was built from
+#   - tag `v1.2.3` / `1.2`    -> when you push a git tag like v1.2.3
+name: Publish Docker image
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  # Lets you trigger a build by hand from the GitHub "Actions" tab.
+  workflow_dispatch:
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read       # read your source code
+      packages: write      # push the image to GHCR
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      # Computes the image name + tags for us (and lowercases the name,
+      # which GHCR requires).
+      - name: Work out image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      # Enables advanced build features + layer caching.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Logs in to GHCR. GITHUB_TOKEN is provided automatically by GitHub;
+      # you do NOT need to create any secret yourself.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Cache layers between runs so rebuilds are fast.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
