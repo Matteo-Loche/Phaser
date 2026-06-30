@@ -16,7 +16,7 @@ Key behaviours:
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Plotly UI** — three-panel desktop layout (controls · diagram · display options), unified header progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
+- **Plotly UI** — three-panel desktop layout (controls · diagram · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
 
 ---
 
@@ -75,6 +75,10 @@ PHASER/
 │   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
 ├── static/
 │   └── index.html         # Single-page web UI
+├── docker-compose.yml     # Local dev: build from source
+├── docker-compose.prod.yml # Server: pull GHCR image
+├── .github/workflows/
+│   └── docker-publish.yml # Build & push to GHCR on main / tags
 └── data/
     └── databases/
         └── generated/     # User-generated .dat files (+ optional .meta.json)
@@ -456,40 +460,51 @@ In `diagram/vectors.py` the gas limits become real overlay geometry: O₂/H₂ r
 
 ## Web UI (`static/index.html`)
 
-Single-page app served at `/`. All chemistry and axis settings live in the **left sidebar**; the **diagram** fills the centre; **display options** sit in a resizable panel on the **right**. A fixed **header** carries the logo, compute control, progress, and short status messages.
+Single-page app served at `/`. Chemistry and axis settings live in the **left sidebar**; the **diagram** fills the centre; **display options** sit in a resizable panel on the **right**. A fixed **header** carries the logo, compute control, progress, status line, and **database selector**.
 
 ### Layout
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  [☰]  PHASER   [Compute] [▓▓▓▓░░ 42%]  status…        DB pill │
-├──────────────┬──────────────────────────────┬───┬───────────────┤
-│  Sidebar     │                              │ ║ │  Plot panel   │
-│  (controls)  │       Phase diagram          │ ║ │  (display)    │
-│              │       (Plotly)               │ ║ │               │
-└──────────────┴──────────────────────────────┴───┴───────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  [☰]  PHASER   [Compute] [▓▓▓▓░░ 42%]  status…     Database [▼] ●      │
+├──────────────┬──────────────────────────────┬───┬───────────────────────┤
+│  Sidebar     │                              │ ║ │  Plot panel           │
+│  (controls)  │       Phase diagram          │ ║ │  (display)            │
+│              │       (Plotly)               │ ║ │                       │
+└──────────────┴──────────────────────────────┴───┴───────────────────────┘
 ```
 
 | Region | Role |
 |--------|------|
-| **Header** | Animated PHASER logo (rainbow scan while computing), **Compute diagram** button, unified spectrum progress bar, short status line, database health pill |
-| **Left sidebar** | Database, chemical system, axes, phases, configuration — collapsible cards |
+| **Header** | Animated PHASER logo (rainbow scan while computing), **Compute diagram** button, unified spectrum progress bar, short status line, **Database** label + selector + status dot |
+| **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below) |
 | **Diagram** | Square-ish Plotly canvas (`fitPlotBox` allows up to **1:1.2** aspect so the plot grows on narrow windows instead of shrinking to a tiny square) |
-| **Right plot panel** | Display mode, solid-element subset, labels/boundaries toggles, diagram metadata |
+| **Right plot panel** | Display mode, element subset filter, labels/boundaries toggles, diagram metadata |
 | **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets width. Widths persist in `phaserLayout.v1` |
 
 **Responsive behaviour**
 
 - **≤1100px** — plot panel moves **above** the diagram as a horizontal toolbar; the panel resizer is hidden.
-- **≤900px** — sidebar becomes a slide-out drawer (☰ menu).
+- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card).
+- **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
 - **≤760px** — header status text hides (progress bar stays).
-- **≤560px** — compute button label shortens to **Run**; progress bar compacts; health pill hides.
+- **≤560px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
+
+### Header: database
+
+The active PHREEQC database is chosen from the **header** on desktop:
+
+- **Label** — `Database` (or `DB` on very narrow screens).
+- **Selector** — dropdown of catalog-ready databases (`db_id`). Changing it reloads species suggestions, element counts, and phase lists automatically.
+- **Status dot** — green = catalog ready, red = missing/offline. Hover for details; on mobile, tap to open the drawer to the database card.
+
+Elements no longer need a manual reload button — everything refreshes when the database changes.
 
 ### Left sidebar
 
 | Card | Contents |
 |------|----------|
-| **Database** | `db_id` selector, catalog status, reload elements |
+| **Database** | *(narrow screens only)* Same `db_id` selector as the header, plus filename / source / catalog-status meta |
 | **Chemical system** | Species picker with concentrations, unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature. Charge balance note: *Cl⁻ or Na⁺* (fixed titration recipe — see [Single-point evaluation](#single-point-evaluation-enginepy)) |
 | **Axes** | pH min/max; redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
@@ -563,7 +578,7 @@ Redox axis choice (**Eh / pe / log fO₂**) is display-only: the packed grid is 
 | `sessionStorage` | `phaserActiveJob.v1` | Active compute job for reconnect after refresh |
 | IndexedDB | `phaserResultCache.v23` / `results` | Packed diagram JSON |
 
-Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or eviction (**12 results max**, **12-hour TTL**).
+Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or eviction (**24 results max**, **12-hour TTL**).
 
 ### Result cache and reconnect
 
@@ -747,7 +762,9 @@ PHASER can consume databases produced by external tools:
 
 The container builds Linux IPhreeqc from the official USGS source tarball, installs Python dependencies, and includes the PHREEQC database directory from that source package.
 
-Build and run:
+For production servers that pull a pre-built image from GHCR, see [Deployment](#deployment).
+
+Build and run locally:
 
 ```bash
 cp .env.example .env
@@ -823,17 +840,64 @@ Never commit the real tunnel token.
 
 ---
 
-## Deployment Notes
+## Deployment
 
-The Docker image is the deployment unit. A typical deployment path is:
+PHASER ships as a **Docker image**. Two compose files cover the two common workflows:
 
-1. Build the Docker image on a VPS or container platform.
-2. Mount persistent storage for `data/databases/generated`.
-3. Expose the app through Cloudflare Tunnel or a reverse proxy.
+| File | Use |
+|------|-----|
+| `docker-compose.yml` | **Local development** — builds the image from source on your machine |
+| `docker-compose.prod.yml` | **Server deployment** — pulls the pre-built image from GitHub Container Registry (GHCR) |
 
-The main deployment decisions:
+### Image publishing (GitHub Actions)
 
-- Built-in PHREEQC databases can live inside the image.
-- User-generated databases should live in a persistent mounted volume.
-- Set `PHASER_MAX_CONCURRENT_JOBS` based on available CPU/RAM (default `1` is safe for shared hosts).
-- A PyGCC service can copy `.dat` files into that volume or call `/api/databases/register` after generating them.
+The workflow `.github/workflows/docker-publish.yml` builds and pushes to **GHCR** on every push to **`main`** and on version tags (`v1.2.3`):
+
+```text
+ghcr.io/matteo-loche/phaser:latest     # newest main
+ghcr.io/matteo-loche/phaser:sha-<commit>
+ghcr.io/matteo-loche/phaser:1.2.3      # when you tag a release
+```
+
+**Recommended git workflow:** develop on a `dev` branch (or feature branches); merge to `main` only when you want a new production image. Pushes to `dev` do **not** rebuild `:latest`.
+
+### Production server
+
+On a VPS, NAS, or home server:
+
+```bash
+cp .env.example .env
+# Optional: PHASER_DATA_DIR=/path/to/persistent/generated/databases
+
+docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Generated databases persist via `PHASER_DATA_DIR` (host path) → container `data/databases/generated`. Built-in PHREEQC databases ship inside the image.
+
+**Optional profiles** (same file):
+
+```bash
+# Cloudflare Tunnel
+docker compose -f docker-compose.prod.yml --profile tunnel up -d
+
+# Auto-pull new :latest once per day (Watchtower)
+docker compose -f docker-compose.prod.yml --profile watchtower up -d
+```
+
+### Local development vs production
+
+| | Local (`docker-compose.yml`) | Production (`docker-compose.prod.yml`) |
+|--|------------------------------|--------------------------------------|
+| Image | `build: .` from source | `image: ghcr.io/.../phaser:latest` |
+| When to update | `docker compose up --build` | `pull` after a merge to `main` |
+| Data volume | `PHASER_DATA_DIR` (optional `.env`) | same |
+
+See also [Docker](#docker) (build from source) and [Cloudflare Tunnel](#cloudflare-tunnel).
+
+### Deployment checklist
+
+1. Mount persistent storage for `data/databases/generated` (`PHASER_DATA_DIR`).
+2. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
+3. Expose via Cloudflare Tunnel or a reverse proxy if needed.
+4. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register`.

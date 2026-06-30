@@ -176,6 +176,30 @@
     .header-status.err { color: var(--err); }
     .header-status.warn { color: var(--warn); }
 
+    /* Header database control (top-right). The <select> is relocated here on
+       wide screens and into the sidebar drawer on narrow screens. */
+    .header-db { display: inline-flex; align-items: center; gap: 0.45rem; min-width: 0; }
+    .header-db-label {
+      font-size: 0.78rem; font-weight: 600; color: var(--muted);
+      white-space: nowrap; flex: none;
+    }
+    .db-label-short { display: none; }
+    .header-db select {
+      width: auto; min-height: 0;
+      max-width: clamp(120px, 18vw, 260px);
+      padding: 0.3rem 0.5rem; border-radius: 8px;
+      font-size: 0.82rem;
+      text-overflow: ellipsis;
+    }
+    .db-dot {
+      flex: none; width: 11px; height: 11px; padding: 0;
+      border-radius: 50%; border: 1px solid var(--border);
+      background: var(--muted); cursor: default;
+    }
+    .db-dot.ok { background: var(--ok); border-color: var(--ok); }
+    .db-dot.err { background: var(--err); border-color: var(--err); }
+    .db-dot.warn { background: var(--warn); border-color: var(--warn); }
+
     /* Narrow screens: hide the wordy status, but keep the progress bar visible
        by compacting the button (short label) and shrinking the bar. */
     @media (max-width: 760px) {
@@ -185,7 +209,19 @@
       .btn-full { display: none; }
       .btn-short { display: inline; }
       .progress { width: clamp(72px, 30vw, 150px); }
-      #healthPill { display: none; }
+      .db-label-full { display: none; }
+      .db-label-short { display: inline; }
+    }
+    /* Narrow screens: the DB selector lives in the left drawer to save header
+       space; only the status dot stays in the header (tap it to open controls). */
+    @media (max-width: 900px) {
+      .header-db select { display: none; }
+      .db-dot { cursor: pointer; width: 13px; height: 13px; }
+    }
+    /* Wide screens: the selector sits in the header, so the sidebar's own
+       Database card is redundant and hidden. */
+    @media (min-width: 901px) {
+      #dbCard { display: none; }
     }
     .icon-btn {
       display: none;
@@ -510,22 +546,26 @@
         <span class="header-status" id="statusMsg"></span>
       </div>
       <div class="spacer"></div>
-      <span class="pill" id="healthPill">…</span>
+      <div class="header-db" id="headerDbSlot">
+        <span class="header-db-label" id="headerDbLabel">
+          <span class="db-label-full">Database</span><span class="db-label-short">DB</span>
+        </span>
+        <button class="db-dot" id="dbDot" type="button" title="Database status" aria-label="Database status"></button>
+      </div>
     </header>
 
     <div class="backdrop" id="backdrop"></div>
 
     <aside id="sidebar">
-      <details class="card">
+      <details class="card" id="dbCard">
         <summary>Database <span class="chev">›</span></summary>
         <div class="body">
           <div>
             <label for="dbSelect">PHREEQC database</label>
-            <select id="dbSelect"></select>
+            <div id="sidebarDbSlot">
+              <select id="dbSelect"></select>
+            </div>
             <div class="meta" id="dbMeta" style="margin-top:0.35rem"></div>
-          </div>
-          <div class="btn-row">
-            <button class="btn secondary" id="loadElementsBtn">Reload elements</button>
           </div>
         </div>
       </details>
@@ -684,7 +724,7 @@
     const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v1";
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-    const RESULT_CACHE_MAX = 12;
+    const RESULT_CACHE_MAX = 24;
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
     const LOG_K_O2_25 = 20.75;
     const LOG_K_O2_DT = 0.0018;
@@ -1178,9 +1218,10 @@
       return `${m}m ${ss}s`;
     }
     function setHealth(text, kind) {
-      const el = $("healthPill");
-      el.textContent = text;
-      el.className = "pill" + (kind ? " " + kind : "");
+      const dot = $("dbDot");
+      if (!dot) return;
+      dot.className = "db-dot" + (kind ? " " + kind : "");
+      dot.title = text || "Database status";
     }
     async function api(path, opts = {}) {
       const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -1332,9 +1373,23 @@
       }
 
       const current = selectedDatabase();
-      $("dbMeta").textContent = current
+      const metaText = current
         ? `${current.filename} · ${current.source}${current.catalog_status ? ` · ${current.catalog_status}` : ""}`
         : "No database selected on server.";
+      $("dbMeta").textContent = metaText;
+      // The header has no room for the meta line, so surface it as a tooltip
+      // on the relocated selector.
+      sel.title = current ? `${current.name} — ${metaText}` : metaText;
+    }
+
+    // The single DB <select> lives in the header on wide screens and in the
+    // sidebar drawer on narrow screens; relocate the same node so its handlers
+    // and value stay intact.
+    const dbWideQuery = window.matchMedia("(min-width: 901px)");
+    function placeDbSelect() {
+      const sel = $("dbSelect");
+      const target = dbWideQuery.matches ? $("headerDbSlot") : $("sidebarDbSlot");
+      if (sel && target && sel.parentElement !== target) target.appendChild(sel);
     }
 
     /* ---------------- reactivity core ---------------- */
@@ -1835,12 +1890,25 @@
       $("selAll").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = true); renderPhases(); persist(); markStale(); });
       $("selNone").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = false); renderPhases(); persist(); markStale(); });
 
-      $("loadElementsBtn").addEventListener("click", reloadElements);
       $("computeBtn").addEventListener("click", compute);
+
+      // Keep the DB selector in the correct slot as the viewport crosses the
+      // narrow/wide breakpoint.
+      placeDbSelect();
+      dbWideQuery.addEventListener("change", placeDbSelect);
 
       // mobile drawer
       $("menuBtn").addEventListener("click", () => $("app").classList.toggle("drawer-open"));
       $("backdrop").addEventListener("click", () => $("app").classList.remove("drawer-open"));
+      // On narrow screens the selector is in the drawer; tapping the status dot
+      // opens it straight to the Database card.
+      $("dbDot").addEventListener("click", () => {
+        if (!dbWideQuery.matches) {
+          $("app").classList.add("drawer-open");
+          $("dbCard").open = true;
+          $("dbCard").scrollIntoView({ block: "nearest" });
+        }
+      });
     }
 
     function fillInputs() {
