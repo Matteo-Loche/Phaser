@@ -176,6 +176,193 @@
     .header-status.err { color: var(--err); }
     .header-status.warn { color: var(--warn); }
 
+    /* Header database control (top-right). The <select> is relocated here on
+       wide screens and into the sidebar drawer on narrow screens. */
+    .header-db { display: inline-flex; align-items: center; gap: 0.45rem; min-width: 0; }
+    .header-db-label {
+      font-size: 0.78rem; font-weight: 600; color: var(--muted);
+      white-space: nowrap; flex: none;
+    }
+    .db-label-short { display: none; }
+    .header-db select {
+      width: auto; min-height: 0;
+      max-width: clamp(120px, 18vw, 260px);
+      padding: 0.3rem 0.5rem; border-radius: 8px;
+      font-size: 0.82rem;
+      text-overflow: ellipsis;
+    }
+    .db-dot {
+      flex: none; width: 11px; height: 11px; padding: 0;
+      border-radius: 50%; border: 1px solid var(--border);
+      background: var(--muted); cursor: default;
+    }
+    .db-dot.ok { background: var(--ok); border-color: var(--ok); }
+    .db-dot.err { background: var(--err); border-color: var(--err); }
+    .db-dot.warn { background: var(--warn); border-color: var(--warn); }
+
+    /* Header mode switcher (beside logo) */
+    .mode-switcher { position: relative; flex: none; min-width: 0; }
+    .mode-btn {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      max-width: clamp(110px, 20vw, 240px);
+      padding: 0.32rem 0.55rem;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--panel-2); cursor: pointer;
+      font-size: 0.82rem; font-weight: 600; color: var(--text);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .mode-btn:hover { border-color: var(--accent-dim); }
+    .mode-btn[aria-expanded="true"] {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    .mode-prefix {
+      font-size: 0.72rem; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .mode-chev { font-size: 0.62rem; opacity: 0.75; flex: none; }
+    .mode-menu {
+      position: absolute; top: calc(100% + 4px); left: 0;
+      min-width: 200px; padding: 0.3rem;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--panel); box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+      z-index: 60;
+    }
+    .mode-menu[hidden] { display: none; }
+    .mode-menu button {
+      display: block; width: 100%; text-align: left;
+      padding: 0.5rem 0.65rem; border: none; border-radius: 8px;
+      background: transparent; cursor: pointer; font-size: 0.84rem;
+    }
+    .mode-menu button:hover { background: var(--panel-2); }
+    .mode-menu button.active {
+      background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .mode-menu button .mode-desc {
+      display: block; margin-top: 0.15rem;
+      font-size: 0.72rem; font-weight: 400; color: var(--muted);
+    }
+    /* Wide desktops have spare room: make the mode control prominent. */
+    @media (min-width: 1101px) {
+      .mode-btn {
+        max-width: 320px;
+        padding: 0.5rem 0.8rem;
+        font-size: 0.95rem;
+        border-radius: 10px;
+      }
+      .mode-prefix { font-size: 0.78rem; }
+    }
+
+    /* Mode workspaces */
+    .workspace {
+      grid-area: main;
+      min-width: 0; min-height: 0;
+      display: flex; flex-direction: column;
+    }
+    .mode-panel { min-width: 0; min-height: 0; flex: 1; }
+    #phaseDiagramMain {
+      flex-direction: row;
+      padding: var(--space);
+      gap: var(--space);
+    }
+    /* Only the active mode's panel is shown. The app always carries a mode-*
+       class, so these explicit rules win over any flex display on .mode-panel. */
+    #phaseDiagramMain, #statsMain { display: none; }
+    .app.mode-phase-diagram #phaseDiagramMain { display: flex; }
+    .app.mode-stats #statsMain { display: flex; }
+    /* Statistics mode has no sidebar, so collapse the grid to a single full-width
+       column (otherwise the sidebar/resizer columns stay reserved and squeeze
+       the dashboard into the right third of the screen). */
+    .app.mode-stats {
+      grid-template-columns: 1fr;
+      grid-template-areas: "header" "main";
+    }
+    .app.mode-stats aside,
+    .app.mode-stats .sidebar-resizer,
+    .app.mode-stats #menuBtn { display: none !important; }
+    /* The compute button has display:inline-flex, so the [hidden] attribute
+       alone cannot hide it; drive visibility from the active mode instead. */
+    .app.mode-stats #computeBtn { display: none !important; }
+    .stats-workspace {
+      flex: 1; padding: var(--space);
+      overflow-y: auto;
+      display: flex; flex-direction: column;
+    }
+    .stats-dashboard {
+      width: 100%; max-width: 1600px; margin: 0 auto;
+      display: flex; flex-direction: column; gap: 1.1rem;
+    }
+    #statsBody { display: flex; flex-direction: column; gap: 1.1rem; }
+    .stats-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      gap: 0.75rem; flex-wrap: wrap;
+    }
+    .stats-head h2 { margin: 0; font-size: 1.25rem; font-weight: 700; }
+    .stats-updated { font-size: 0.78rem; color: var(--muted); }
+    .stats-kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1.1rem;
+    }
+    .stats-kpi {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--panel); padding: 0.85rem 0.95rem;
+    }
+    .stats-kpi .value { color: var(--kpi-accent, inherit); }
+    .stats-kpi .label {
+      font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); font-weight: 600; margin-bottom: 0.35rem;
+    }
+    .stats-kpi .value { font-size: 1.35rem; font-weight: 700; line-height: 1.2; }
+    .stats-kpi .sub { font-size: 0.76rem; color: var(--muted); margin-top: 0.25rem; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1.1rem;
+    }
+    .stats-card {
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--panel); padding: 0.95rem 1rem;
+      min-height: 0;
+    }
+    .stats-card h3 {
+      margin: 0 0 0.75rem; font-size: 0.82rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--card-accent, var(--muted));
+    }
+    .stats-bars { display: flex; flex-direction: column; gap: 0.55rem; }
+    .stats-bar-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; align-items: center; }
+    .stats-bar-label {
+      font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .stats-bar-count { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .stats-bar-track {
+      grid-column: 1 / -1; height: 8px; border-radius: 999px;
+      background: var(--panel-2); border: 1px solid var(--border); overflow: hidden;
+    }
+    .stats-bar-fill {
+      height: 100%; border-radius: 999px;
+      background: var(--card-accent, var(--accent));
+      min-width: 2px;
+    }
+    /* time-series charts */
+    .stats-charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 1.1rem;
+    }
+    .stats-plot { width: 100%; height: 200px; }
+    .stats-empty, .stats-error {
+      padding: 1.25rem; border: 1px dashed var(--border); border-radius: var(--radius);
+      background: var(--panel-2); color: var(--muted); font-size: 0.88rem; line-height: 1.45;
+    }
+    .stats-error { border-color: var(--err); color: var(--err); }
+    .stats-footnote {
+      font-size: 0.76rem; color: var(--muted); line-height: 1.4;
+    }
+
     /* Narrow screens: hide the wordy status, but keep the progress bar visible
        by compacting the button (short label) and shrinking the bar. */
     @media (max-width: 760px) {
@@ -185,7 +372,51 @@
       .btn-full { display: none; }
       .btn-short { display: inline; }
       .progress { width: clamp(72px, 30vw, 150px); }
-      #healthPill { display: none; }
+      .db-label-full { display: none; }
+      .db-label-short { display: inline; }
+    }
+    /* Mid + narrow: a single flex row crops/overlaps once the logo, mode
+       switcher, compute group and database all compete for width. Adopt a
+       two-row grid relatively early so the mode switcher drops neatly under the
+       logo, while the compute button stays on the top row next to the logo and
+       database (which is pinned top-right). */
+    @media (max-width: 1280px) {
+      header {
+        display: grid;
+        height: auto;
+        min-height: var(--header-h);
+        align-items: center;
+        column-gap: 0.6rem;
+        row-gap: 0.4rem;
+        padding-top: 0.4rem;
+        padding-bottom: 0.4rem;
+        grid-template-columns: auto auto auto 1fr auto;
+        grid-template-areas:
+          "menu brand compute .    db"
+          "mode mode  mode    mode mode";
+      }
+      header #menuBtn { grid-area: menu; }
+      header .brand { grid-area: brand; }
+      header .mode-switcher { grid-area: mode; justify-self: start; }
+      header .header-compute { grid-area: compute; justify-self: start; }
+      header .header-db { grid-area: db; justify-self: end; }
+      header .spacer { display: none; }
+      .app { grid-template-rows: auto 1fr; }
+      /* Keep the logo from eating row 1 so compute + database still fit. */
+      .brand-logo-wrap { height: 40px; }
+      .mode-btn { max-width: clamp(150px, 45vw, 360px); }
+    }
+    /* Narrow screens: the DB selector lives in the left drawer to save header
+       space; only the status dot stays in the header (tap it to open controls). */
+    @media (max-width: 900px) {
+      .header-db select { display: none; }
+      .db-dot { cursor: pointer; width: 13px; height: 13px; }
+      .brand-logo-wrap { height: 34px; }
+    }
+    /* Wide screens: the selector sits in the header, so the sidebar's own
+       Database card is redundant and hidden. */
+    @media (min-width: 901px) {
+      #dbCard { display: none; }
     }
     .icon-btn {
       display: none;
@@ -206,15 +437,7 @@
       flex-direction: column;
       gap: var(--space);
     }
-    main {
-      grid-area: main;
-      min-width: 0;
-      min-height: 0;
-      display: flex;
-      flex-direction: row;
-      padding: var(--space);
-      gap: var(--space);
-    }
+    main { min-width: 0; min-height: 0; }
 
     /* ---------- Sidebar resizer ---------- */
     .sidebar-resizer {
@@ -427,8 +650,8 @@
     #plotDiv { width: 100%; height: 100%; }
 
     /* Narrow/medium screens: options menu moves on top as a horizontal bar. */
-    @media (max-width: 1100px) {
-      main { flex-direction: column; }
+    @media (max-width: 1280px) {
+      #phaseDiagramMain { flex-direction: column; }
       .plot-resizer { display: none; }
       .plot-toolbar {
         order: -1;
@@ -453,7 +676,7 @@
   </style>
 </head>
 <body>
-  <div class="app" id="app">
+  <div class="app mode-phase-diagram" id="app">
     <header>
       <button class="icon-btn" id="menuBtn" aria-label="Toggle controls">☰</button>
       <a class="brand" id="phaserBrand" href="/" aria-label="PHASER — Phase Diagram Calculator">
@@ -501,7 +724,25 @@
           </svg>
         </div>
       </a>
-      <div class="header-compute">
+      <div class="mode-switcher" id="modeSwitcher">
+        <button class="mode-btn" id="modeBtn" type="button"
+                aria-haspopup="menu" aria-expanded="false" aria-controls="modeMenu">
+          <span class="mode-prefix">Mode</span>
+          <span id="modeBtnLabel">Saturation Predominance</span>
+          <span class="mode-chev" aria-hidden="true">▼</span>
+        </button>
+        <div class="mode-menu" id="modeMenu" role="menu" hidden>
+          <button type="button" role="menuitem" data-mode="phase-diagram">
+            Saturation Predominance
+            <span class="mode-desc">pH–pe / Eh predominance maps</span>
+          </button>
+          <button type="button" role="menuitem" data-mode="stats">
+            Statistics
+            <span class="mode-desc">Server usage metrics and activity</span>
+          </button>
+        </div>
+      </div>
+      <div class="header-compute" id="headerCompute">
         <button class="btn" id="computeBtn"><span class="btn-full">Compute diagram</span><span class="btn-short">Run</span></button>
         <div class="progress" id="progressBar" hidden>
           <div class="progress-fill" id="progressFill"></div>
@@ -510,22 +751,26 @@
         <span class="header-status" id="statusMsg"></span>
       </div>
       <div class="spacer"></div>
-      <span class="pill" id="healthPill">…</span>
+      <div class="header-db" id="headerDbSlot">
+        <span class="header-db-label" id="headerDbLabel">
+          <span class="db-label-full">Database</span><span class="db-label-short">DB</span>
+        </span>
+        <button class="db-dot" id="dbDot" type="button" title="Database status" aria-label="Database status"></button>
+      </div>
     </header>
 
     <div class="backdrop" id="backdrop"></div>
 
     <aside id="sidebar">
-      <details class="card">
+      <details class="card" id="dbCard">
         <summary>Database <span class="chev">›</span></summary>
         <div class="body">
           <div>
             <label for="dbSelect">PHREEQC database</label>
-            <select id="dbSelect"></select>
+            <div id="sidebarDbSlot">
+              <select id="dbSelect"></select>
+            </div>
             <div class="meta" id="dbMeta" style="margin-top:0.35rem"></div>
-          </div>
-          <div class="btn-row">
-            <button class="btn secondary" id="loadElementsBtn">Reload elements</button>
           </div>
         </div>
       </details>
@@ -633,35 +878,52 @@
     <div class="sidebar-resizer" id="sidebarResizer"
          title="Drag to resize · double-click to reset" aria-hidden="true"></div>
 
-    <main>
-      <div class="plot-wrap">
-        <div class="plot-square">
-          <div id="plotDiv"></div>
-          <div class="empty" id="plotEmpty">
-            <div style="font-size:2rem">⬡</div>
-            <div>Set your system and press <b>Compute diagram</b>.</div>
+    <div class="workspace" id="workspace">
+      <main id="phaseDiagramMain" class="mode-panel">
+        <div class="plot-wrap">
+          <div class="plot-square">
+            <div id="plotDiv"></div>
+            <div class="empty" id="plotEmpty">
+              <div style="font-size:2rem">⬡</div>
+              <div>Set your system and press <b>Compute diagram</b>.</div>
+            </div>
           </div>
         </div>
+        <div class="plot-resizer" id="plotResizer"
+             title="Drag to resize · double-click to reset" aria-hidden="true"></div>
+        <div class="plot-toolbar">
+          <span class="pill" id="stalePill" style="display:none">stale — recompute</span>
+          <label style="font-size:0.78rem;color:var(--muted)">Display</label>
+          <select id="displayMode" style="min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+            <option value="solid">Solid predominance</option>
+            <option value="aqueous">Aqueous predominance</option>
+          </select>
+          <span id="solidSubsetWrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.6rem;font-size:0.78rem">
+            <span id="subsetLabel" style="color:var(--muted)">Elements:</span>
+            <span id="solidSubsetBoxes"></span>
+          </span>
+          <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
+          <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
+          <div class="spacer" style="flex:1"></div>
+          <span class="meta" id="plotMeta">No diagram yet.</span>
+        </div>
+      </main>
+      <div id="statsMain" class="mode-panel stats-workspace" hidden>
+        <div class="stats-dashboard" id="statsDashboard">
+          <div class="stats-head">
+            <h2>Server statistics</h2>
+            <span class="stats-updated" id="statsUpdated">Loading…</span>
+          </div>
+          <div id="statsBody">
+            <div class="stats-empty">Loading statistics…</div>
+          </div>
+          <p class="stats-footnote">
+            Counts successful server computes for Saturation Predominance only.
+            Browser cache hits are not included. Refreshes automatically every 3 minutes while this page is open.
+          </p>
+        </div>
       </div>
-      <div class="plot-resizer" id="plotResizer"
-           title="Drag to resize · double-click to reset" aria-hidden="true"></div>
-      <div class="plot-toolbar">
-        <span class="pill" id="stalePill" style="display:none">stale — recompute</span>
-        <label style="font-size:0.78rem;color:var(--muted)">Display</label>
-        <select id="displayMode" style="min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
-          <option value="solid">Solid predominance</option>
-          <option value="aqueous">Aqueous predominance</option>
-        </select>
-        <span id="solidSubsetWrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.6rem;font-size:0.78rem">
-          <span id="subsetLabel" style="color:var(--muted)">Elements:</span>
-          <span id="solidSubsetBoxes"></span>
-        </span>
-        <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
-        <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
-        <div class="spacer" style="flex:1"></div>
-        <span class="meta" id="plotMeta">No diagram yet.</span>
-      </div>
-    </main>
+    </div>
   </div>
 
   <script>
@@ -682,9 +944,12 @@
     const RESULT_DB = "phaserResultCache.v23";
     const RESULT_STORE = "results";
     const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
-    const ACTIVE_JOB_KEY = "phaserActiveJob.v1";
+    const ACTIVE_JOB_KEY = "phaserActiveJob.v2";
+    const MODE_HASH_PREFIX = "#/";
+    const DEFAULT_MODE_ID = "phase-diagram";
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
-    const RESULT_CACHE_MAX = 12;
+    const RESULT_CACHE_MAX = 24;
+    const STATS_POLL_MS = 3 * 60 * 1000;
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
     const LOG_K_O2_25 = 20.75;
     const LOG_K_O2_DT = 0.0018;
@@ -776,16 +1041,331 @@
       allowedSpecies: [],   // species valid for the selected database
       speciesSuggestions: [],
       lastResult: null,
+      modeResults: {},
+      activeJobModeId: null,
       pollTimer: null,
       phaseSeq: 0,
       phaseDebounce: null,
       hasResult: false,
       computeStartedAt: null,
+      modeMenuOpen: false,
+      statsPollTimer: null,
     };
+
+    const MODES = {
+      "phase-diagram": {
+        id: "phase-diagram",
+        label: "Saturation Predominance",
+        title: "PHASER — Saturation Predominance",
+        hasCompute: true,
+        computeLabelFull: "Compute diagram",
+        computeLabelShort: "Run",
+        emptyHint: "Set your system and press <b>Compute diagram</b>.",
+      },
+      stats: {
+        id: "stats",
+        label: "Statistics",
+        title: "PHASER — Statistics",
+        hasCompute: false,
+        emptyHint: null,
+      },
+    };
+
+    let activeModeId = DEFAULT_MODE_ID;
 
     let state = structuredClone(DEFAULT_STATE);
 
     const $ = (id) => document.getElementById(id);
+
+    function getActiveMode() {
+      return MODES[activeModeId] || MODES[DEFAULT_MODE_ID];
+    }
+
+    function parseModeFromHash() {
+      const raw = (location.hash || "").replace(/^#\/?/, "").trim();
+      const id = raw.split("/")[0] || DEFAULT_MODE_ID;
+      return MODES[id] ? id : DEFAULT_MODE_ID;
+    }
+
+    function setHashForMode(modeId) {
+      const next = `${MODE_HASH_PREFIX}${modeId}`;
+      if (location.hash !== next) location.hash = next;
+    }
+
+    function closeModeMenu() {
+      runtime.modeMenuOpen = false;
+      $("modeMenu").hidden = true;
+      $("modeBtn").setAttribute("aria-expanded", "false");
+    }
+
+    function openModeMenu() {
+      runtime.modeMenuOpen = true;
+      $("modeMenu").hidden = false;
+      $("modeBtn").setAttribute("aria-expanded", "true");
+    }
+
+    function toggleModeMenu() {
+      if (runtime.modeMenuOpen) closeModeMenu();
+      else openModeMenu();
+    }
+
+    function updateModeSwitcherUI() {
+      const mode = getActiveMode();
+      $("modeBtnLabel").textContent = mode.label;
+      document.querySelectorAll("#modeMenu button[data-mode]").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.mode === activeModeId);
+      });
+    }
+
+    function updateComputeChrome() {
+      const mode = getActiveMode();
+      const btn = $("computeBtn");
+      btn.hidden = !mode.hasCompute;
+      if (mode.hasCompute) {
+        const full = btn.querySelector(".btn-full");
+        const short = btn.querySelector(".btn-short");
+        if (full) full.textContent = mode.computeLabelFull || "Compute";
+        if (short) short.textContent = mode.computeLabelShort || "Run";
+      }
+    }
+
+    function restoreModeView() {
+      const mode = getActiveMode();
+      document.title = mode.title;
+      $("app").classList.remove("mode-phase-diagram", "mode-stats");
+      $("app").classList.add(`mode-${activeModeId}`);
+      updateModeSwitcherUI();
+      updateComputeChrome();
+      if (activeModeId === "phase-diagram") {
+        const result = runtime.modeResults["phase-diagram"] || runtime.lastResult;
+        if (result) {
+          drawDiagram(result);
+          // The plot was display:none in other modes, so Plotly may have a
+          // zero-size canvas; force a resize now that it is visible.
+          triggerPlotResize();
+        } else if (!runtime.hasResult) {
+          $("plotEmpty").style.display = "";
+        }
+        stopStatsPolling();
+      } else if (activeModeId === "stats") {
+        startStatsPolling();
+      } else {
+        stopStatsPolling();
+      }
+    }
+
+    function setActiveMode(modeId, { updateHash = true } = {}) {
+      if (!MODES[modeId]) modeId = DEFAULT_MODE_ID;
+      if (modeId === activeModeId && !updateHash) {
+        restoreModeView();
+        return;
+      }
+      activeModeId = modeId;
+      restoreModeView();
+      if (updateHash) setHashForMode(modeId);
+      closeModeMenu();
+    }
+
+    function dispatchCompute() {
+      const mode = getActiveMode();
+      if (!mode.hasCompute) return;
+      if (activeModeId === "phase-diagram") return computePhaseDiagram();
+    }
+
+    function cachePayloadForMode(modeId, body) {
+      return { mode_id: modeId, ...body };
+    }
+
+    function renderModeResult(modeId, result) {
+      runtime.modeResults[modeId] = result;
+      if (modeId === "phase-diagram") {
+        runtime.lastResult = result;
+        runtime.hasResult = true;
+        if (activeModeId === "phase-diagram") drawDiagram(result);
+      }
+    }
+
+    /* ---------------- stats dashboard ---------------- */
+    function stopStatsPolling() {
+      if (runtime.statsPollTimer) {
+        clearInterval(runtime.statsPollTimer);
+        runtime.statsPollTimer = null;
+      }
+    }
+
+    function startStatsPolling() {
+      stopStatsPolling();
+      loadStats();
+      runtime.statsPollTimer = setInterval(loadStats, STATS_POLL_MS);
+    }
+
+    function formatStatsDuration(ms) {
+      if (ms == null || !Number.isFinite(ms)) return "—";
+      const s = ms / 1000;
+      if (s < 60) return `${s.toFixed(1)} s`;
+      const m = Math.floor(s / 60);
+      const rem = Math.round(s % 60);
+      return `${m}m ${rem}s`;
+    }
+
+    function statsCssVar(name, fallback) {
+      const v = getComputedStyle(document.body).getPropertyValue(name).trim();
+      return v || fallback;
+    }
+
+    function drawStatsCharts(buckets) {
+      const actEl = $("statsActivityPlot");
+      const waitEl = $("statsWaitPlot");
+      if (!window.Plotly || !actEl || !waitEl) return;
+      const list = buckets || [];
+      const x = list.map(b => new Date(b.bucket_start));
+      const counts = list.map(b => b.count || 0);
+      const waitS = list.map(b => (b.avg_wait_ms != null ? b.avg_wait_ms / 1000 : null));
+
+      const muted = statsCssVar("--muted", "#888");
+      const border = statsCssVar("--border", "#444");
+      const base = {
+        margin: { l: 38, r: 12, t: 6, b: 28 },
+        height: 200,
+        paper_bgcolor: "rgba(0,0,0,0)",
+        plot_bgcolor: "rgba(0,0,0,0)",
+        font: { size: 11, color: muted },
+        showlegend: false,
+        hovermode: "x unified",
+        xaxis: { type: "date", gridcolor: border, zerolinecolor: border, tickformat: "%H:%M", color: muted, nticks: 6 },
+        yaxis: { gridcolor: border, zerolinecolor: border, color: muted, rangemode: "tozero" },
+      };
+      const config = { displayModeBar: false, responsive: true };
+
+      Plotly.react(actEl, [{
+        x, y: counts, type: "scatter", mode: "lines",
+        line: { color: "#00DDFF", width: 1.5, shape: "linear" },
+        fill: "tozeroy", fillcolor: "rgba(0,221,255,0.16)",
+        hovertemplate: "%{y} diagram(s)<extra></extra>",
+      }], { ...base, yaxis: { ...base.yaxis, dtick: 1, tickformat: "d" } }, config);
+
+      Plotly.react(waitEl, [{
+        x, y: waitS, type: "scatter", mode: "lines",
+        connectgaps: false,
+        line: { color: "#FF9900", width: 1.5, shape: "linear" },
+        fill: "tozeroy", fillcolor: "rgba(255,153,0,0.14)",
+        hovertemplate: "%{y:.1f} s wait<extra></extra>",
+      }], base, config);
+    }
+
+    function statsBarList(items, labelKey, countKey) {
+      if (!items?.length) {
+        return `<div class="stats-empty" style="margin:0;padding:0.75rem">No data yet.</div>`;
+      }
+      const max = Math.max(...items.map(it => it[countKey] || 0), 1);
+      return `<div class="stats-bars">${items.map(it => {
+        const label = String(it[labelKey] ?? "—");
+        const count = it[countKey] || 0;
+        const pct = Math.max(2, Math.round((count / max) * 100));
+        const safe = label.replace(/</g, "&lt;");
+        return `<div class="stats-bar-row">
+          <span class="stats-bar-label" title="${safe}">${safe}</span>
+          <span class="stats-bar-count">${count}</span>
+          <div class="stats-bar-track"><div class="stats-bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+      }).join("")}</div>`;
+    }
+
+    function renderStats(data) {
+      const body = $("statsBody");
+      const updated = $("statsUpdated");
+      if (!body) return;
+      updated.textContent = `Updated ${new Date().toLocaleTimeString()} · auto-refresh every 3 min`;
+
+      if (!data || !data.total_diagrams) {
+        body.innerHTML = `<div class="stats-empty">
+          No server computes recorded yet. Run a Saturation Predominance diagram to populate these statistics.
+          Browser cache hits are not counted.
+        </div>`;
+        return;
+      }
+
+      const adapt = data.adaptive_vs_uniform || {};
+      const adaptTotal = (adapt.adaptive || 0) + (adapt.uniform || 0);
+      const adaptPct = adaptTotal ? Math.round((adapt.adaptive / adaptTotal) * 100) : 0;
+      const activity = data.activity_24h || [];
+      const activityTotal = activity.reduce((sum, b) => sum + (b.count || 0), 0);
+      const gridItems = (data.top_grid_sizes || []).map(r => ({
+        label: `${r.grid_levels}×${r.grid_levels}`,
+        count: r.count,
+      }));
+
+      body.innerHTML = `
+        <div class="stats-kpis">
+          <div class="stats-kpi" style="--kpi-accent:#0066FF">
+            <div class="label">Diagrams</div>
+            <div class="value">${data.total_diagrams}</div>
+            <div class="sub">server computes</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#00DDFF">
+            <div class="label">Avg compute</div>
+            <div class="value">${formatStatsDuration(data.avg_compute_ms)}</div>
+            <div class="sub">wall time</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#00FFB2">
+            <div class="label">Avg queue</div>
+            <div class="value">${data.avg_queue_position != null ? data.avg_queue_position.toFixed(1) : "—"}</div>
+            <div class="sub">jobs ahead at start (0 = immediate)</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#FFB300">
+            <div class="label">Avg wait</div>
+            <div class="value">${formatStatsDuration(data.avg_queue_wait_ms)}</div>
+            <div class="sub">queued before compute</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#FF4D00">
+            <div class="label">Adaptive</div>
+            <div class="value">${adaptPct}%</div>
+            <div class="sub">${adapt.adaptive || 0} adaptive · ${adapt.uniform || 0} uniform</div>
+          </div>
+        </div>
+        <div class="stats-charts">
+          <section class="stats-card" style="--card-accent:#00DDFF">
+            <h3>Activity — last 24 hours (${activityTotal} ${activityTotal === 1 ? "diagram" : "diagrams"})</h3>
+            <div id="statsActivityPlot" class="stats-plot"></div>
+          </section>
+          <section class="stats-card" style="--card-accent:#FF9900">
+            <h3>Avg wait time — last 24 hours (seconds)</h3>
+            <div id="statsWaitPlot" class="stats-plot"></div>
+          </section>
+        </div>
+        <div class="stats-grid">
+          <section class="stats-card" style="--card-accent:#0066FF">
+            <h3>Top databases</h3>
+            ${statsBarList(data.top_databases, "db_id", "count")}
+          </section>
+          <section class="stats-card" style="--card-accent:#00FFB2">
+            <h3>Top grid sizes</h3>
+            ${statsBarList(gridItems, "label", "count")}
+          </section>
+          <section class="stats-card" style="--card-accent:#39FF14">
+            <h3>Layer configurations</h3>
+            ${statsBarList(data.top_layer_configs, "label", "count")}
+          </section>
+          <section class="stats-card" style="--card-accent:#FF4D00">
+            <h3>Element pairs</h3>
+            ${statsBarList(data.top_element_pairs, "pair", "count")}
+          </section>
+        </div>`;
+
+      drawStatsCharts(activity);
+    }
+
+    async function loadStats() {
+      const body = $("statsBody");
+      if (!body || activeModeId !== "stats") return;
+      try {
+        const data = await api("/api/stats");
+        renderStats(data);
+      } catch (e) {
+        $("statsUpdated").textContent = "Update failed";
+        body.innerHTML = `<div class="stats-error">${e.message || "Could not load statistics."}</div>`;
+      }
+    }
 
     /* ---------------- helpers ---------------- */
     function peToEh(pe, t) { return pe * F * (t + 273.15); }
@@ -1178,9 +1758,10 @@
       return `${m}m ${ss}s`;
     }
     function setHealth(text, kind) {
-      const el = $("healthPill");
-      el.textContent = text;
-      el.className = "pill" + (kind ? " " + kind : "");
+      const dot = $("dbDot");
+      if (!dot) return;
+      dot.className = "db-dot" + (kind ? " " + kind : "");
+      dot.title = text || "Database status";
     }
     async function api(path, opts = {}) {
       const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -1332,9 +1913,23 @@
       }
 
       const current = selectedDatabase();
-      $("dbMeta").textContent = current
+      const metaText = current
         ? `${current.filename} · ${current.source}${current.catalog_status ? ` · ${current.catalog_status}` : ""}`
         : "No database selected on server.";
+      $("dbMeta").textContent = metaText;
+      // The header has no room for the meta line, so surface it as a tooltip
+      // on the relocated selector.
+      sel.title = current ? `${current.name} — ${metaText}` : metaText;
+    }
+
+    // The single DB <select> lives in the header on wide screens and in the
+    // sidebar drawer on narrow screens; relocate the same node so its handlers
+    // and value stay intact.
+    const dbWideQuery = window.matchMedia("(min-width: 901px)");
+    function placeDbSelect() {
+      const sel = $("dbSelect");
+      const target = dbWideQuery.matches ? $("headerDbSlot") : $("sidebarDbSlot");
+      if (sel && target && sel.parentElement !== target) target.appendChild(sel);
     }
 
     /* ---------------- reactivity core ---------------- */
@@ -1657,7 +2252,7 @@
 
     function initPlotResizer() {
       const app = $("app");
-      const main = document.querySelector("main");
+      const main = $("phaseDiagramMain");
       const resizer = $("plotResizer");
       if (!resizer || !main) return;
 
@@ -1665,7 +2260,7 @@
       if (saved.plotPanelW) app.style.setProperty("--plot-panel-w", clampPlotPanelW(saved.plotPanelW) + "px");
 
       // Panel is on top (stacked) at the same breakpoint where the resizer hides.
-      const isStacked = () => window.matchMedia("(max-width: 1100px)").matches;
+      const isStacked = () => window.matchMedia("(max-width: 1280px)").matches;
       let dragging = false, rafPending = false;
       const scheduleResize = () => {
         if (rafPending) return;
@@ -1835,12 +2430,46 @@
       $("selAll").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = true); renderPhases(); persist(); markStale(); });
       $("selNone").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = false); renderPhases(); persist(); markStale(); });
 
-      $("loadElementsBtn").addEventListener("click", reloadElements);
-      $("computeBtn").addEventListener("click", compute);
+      $("computeBtn").addEventListener("click", dispatchCompute);
+
+      $("modeBtn").addEventListener("click", e => {
+        e.stopPropagation();
+        toggleModeMenu();
+      });
+      $("modeMenu").addEventListener("click", e => {
+        const btn = e.target.closest("button[data-mode]");
+        if (!btn) return;
+        setActiveMode(btn.dataset.mode);
+      });
+      document.addEventListener("click", e => {
+        if (!runtime.modeMenuOpen) return;
+        if ($("modeSwitcher").contains(e.target)) return;
+        closeModeMenu();
+      });
+      document.addEventListener("keydown", e => {
+        if (e.key === "Escape") closeModeMenu();
+      });
+      window.addEventListener("hashchange", () => {
+        setActiveMode(parseModeFromHash(), { updateHash: false });
+      });
+
+      // Keep the DB selector in the correct slot as the viewport crosses the
+      // narrow/wide breakpoint.
+      placeDbSelect();
+      dbWideQuery.addEventListener("change", placeDbSelect);
 
       // mobile drawer
       $("menuBtn").addEventListener("click", () => $("app").classList.toggle("drawer-open"));
       $("backdrop").addEventListener("click", () => $("app").classList.remove("drawer-open"));
+      // On narrow screens the selector is in the drawer; tapping the status dot
+      // opens it straight to the Database card.
+      $("dbDot").addEventListener("click", () => {
+        if (!dbWideQuery.matches) {
+          $("app").classList.add("drawer-open");
+          $("dbCard").open = true;
+          $("dbCard").scrollIntoView({ block: "nearest" });
+        }
+      });
     }
 
     function fillInputs() {
@@ -2001,9 +2630,14 @@
       try { await api(`/api/job/${jobId}`, { method: "DELETE" }); } catch (e) {}
     }
 
-    function saveActiveJob(jobId, cacheKey) {
+    function saveActiveJob(jobId, cacheKey, modeId) {
       try {
-        sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({ jobId, cacheKey, startedAt: Date.now() }));
+        sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({
+          jobId,
+          cacheKey,
+          modeId: modeId || activeModeId,
+          startedAt: Date.now(),
+        }));
       } catch (e) {}
     }
 
@@ -2020,8 +2654,10 @@
       }
     }
 
-    async function fetchAndRenderJobResult(jobId, cacheKey, st) {
-      JobProgress.begin(state.adaptiveBoundaries);
+    async function fetchAndRenderJobResult(jobId, cacheKey, st, modeId) {
+      const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
+      const adaptive = jobModeId === "phase-diagram" && !!state.adaptiveBoundaries;
+      JobProgress.begin(adaptive);
       setLogoComputing(true);
       const result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
         JobProgress.setPhase("download", pct == null ? null : pct / 100);
@@ -2029,11 +2665,11 @@
       JobProgress.setPhase("cache", 0.5);
       try { await putCachedResult(cacheKey, result); } catch (cacheErr) {}
       clearActiveJob();
+      runtime.activeJobModeId = null;
       forgetServerJob(jobId);
       JobProgress.setPhase("render", 0.4);
-      drawDiagram(result);
-      runtime.hasResult = true;
-      $("stalePill").style.display = "none";
+      renderModeResult(jobModeId, result);
+      if (jobModeId === "phase-diagram") $("stalePill").style.display = "none";
       JobProgress.finish();
       setLogoComputing(false);
       $("computeBtn").disabled = false;
@@ -2042,7 +2678,8 @@
         ? formatDuration((performance.now() - runtime.computeStartedAt) / 1000)
         : null;
       runtime.computeStartedAt = null;
-      setStatus(`Done · ${formatCount(runs)} runs${dur ? ` · ${dur}` : ""}`, "ok");
+      const modeLabel = MODES[jobModeId]?.label || jobModeId;
+      setStatus(`Done · ${modeLabel} · ${formatCount(runs)} runs${dur ? ` · ${dur}` : ""}`, "ok");
     }
 
     /* ---------------- compute ---------------- */
@@ -2050,7 +2687,7 @@
       $("phaserBrand")?.classList.toggle("is-computing", !!on);
     }
 
-    async function compute() {
+    async function computePhaseDiagram() {
       const totals = activeTotals();
       const sel = selectedPhases();
       if (!Object.keys(totals).length) { setStatus("Add at least one species with a concentration.", "err"); return; }
@@ -2063,6 +2700,7 @@
       else if (state.layerSolids && !state.layerAqueous) state.displayMode = "solid";
 
       const t = state.tempC;
+      const modeId = "phase-diagram";
 
       const body = {
         db_id: state.dbId,
@@ -2090,14 +2728,15 @@
       try {
         $("computeBtn").disabled = true;
         $("app").classList.remove("drawer-open");
-        const cacheKey = cacheKeyFor(stableStringify(body));
+        runtime.activeJobModeId = modeId;
+        const cacheKey = cacheKeyFor(stableStringify(cachePayloadForMode(modeId, body)));
         try {
           const cached = await getCachedResult(cacheKey);
           if (cached) {
-            drawDiagram(cached);
-            runtime.hasResult = true;
+            renderModeResult(modeId, cached);
             $("stalePill").style.display = "none";
             setStatus("Cached", "ok");
+            runtime.activeJobModeId = null;
             $("computeBtn").disabled = false;
             return;
           }
@@ -2114,17 +2753,18 @@
           forgetServerJob(prev.jobId);
         }
         const start = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
-        saveActiveJob(start.job_id, cacheKey);
+        saveActiveJob(start.job_id, cacheKey, modeId);
         if (start.status === "queued") {
           const q = queueStatusText(start) || "Queued…";
           JobProgress.setQueued(q.replace(/…$/, ""));
           setLogoComputing(true, q);
         }
-        pollJob(start.job_id, cacheKey);
+        pollJob(start.job_id, cacheKey, modeId);
       } catch (e) {
         setStatus(e.message, "err");
         JobProgress.fail();
         setLogoComputing(false);
+        runtime.activeJobModeId = null;
         $("computeBtn").disabled = false;
       }
     }
@@ -2137,10 +2777,13 @@
       return `Queued — position ${pos} of ${size}`;
     }
 
-    function pollJob(jobId, cacheKey) {
+    function pollJob(jobId, cacheKey, modeId) {
       clearInterval(runtime.pollTimer);
-      saveActiveJob(jobId, cacheKey);
-      JobProgress.begin(state.adaptiveBoundaries);
+      const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
+      runtime.activeJobModeId = jobModeId;
+      saveActiveJob(jobId, cacheKey, jobModeId);
+      const adaptive = jobModeId === "phase-diagram" && !!state.adaptiveBoundaries;
+      JobProgress.begin(adaptive);
       setLogoComputing(true, "Computing…");
       runtime.pollTimer = setInterval(async () => {
         try {
@@ -2167,17 +2810,19 @@
           if (st.status === "error") {
             JobProgress.fail();
             setLogoComputing(false);
+            runtime.activeJobModeId = null;
             $("computeBtn").disabled = false;
             clearActiveJob();
             forgetServerJob(jobId);
             setStatus(st.error || "Computation failed", "err");
             return;
           }
-          await fetchAndRenderJobResult(jobId, cacheKey, st);
+          await fetchAndRenderJobResult(jobId, cacheKey, st, jobModeId);
         } catch (e) {
           clearInterval(runtime.pollTimer);
           JobProgress.fail();
           setLogoComputing(false);
+          runtime.activeJobModeId = null;
           $("computeBtn").disabled = false;
           if (e.message && /not found|404/i.test(e.message)) {
             clearActiveJob();
@@ -2191,6 +2836,8 @@
       const rec = loadActiveJob();
       if (!rec?.jobId) return false;
       runtime.computeStartedAt = null;  // unknown across reloads → omit runtime
+      const jobModeId = rec.modeId || DEFAULT_MODE_ID;
+      runtime.activeJobModeId = jobModeId;
       try {
         const st = await api(`/api/job/${rec.jobId}`);
         if (st.status === "queued" || st.status === "running") {
@@ -2199,22 +2846,24 @@
             : "Resuming compute after page reload…";
           setStatus(msg, "warn");
           $("computeBtn").disabled = true;
-          pollJob(rec.jobId, rec.cacheKey);
+          pollJob(rec.jobId, rec.cacheKey, jobModeId);
           return true;
         }
         if (st.status === "done") {
           setStatus("Compute finished while you were away — loading result…", "warn");
           $("computeBtn").disabled = true;
-          await fetchAndRenderJobResult(rec.jobId, rec.cacheKey, st);
+          await fetchAndRenderJobResult(rec.jobId, rec.cacheKey, st, jobModeId);
           return true;
         }
         if (st.status === "error") {
           clearActiveJob();
+          runtime.activeJobModeId = null;
           forgetServerJob(rec.jobId);
           setStatus(st.error || "Computation failed", "err");
         }
       } catch (e) {
         clearActiveJob();
+        runtime.activeJobModeId = null;
       }
       return false;
     }
@@ -2575,8 +3224,7 @@
         if (!key) return;
         const result = await getCachedResult(key);
         if (!result) return;
-        drawDiagram(result);
-        runtime.hasResult = true;
+        renderModeResult("phase-diagram", result);
         $("stalePill").style.display = "none";
         setStatus("Restored last diagram from this browser session.", "ok");
       } catch (e) {
@@ -2655,6 +3303,9 @@
       fillDatabaseOptions();
       await reloadSpeciesSuggestions();
       afterStateLoad();
+      const initialMode = parseModeFromHash();
+      setActiveMode(initialMode, { updateHash: !!location.hash });
+      if (!location.hash) setHashForMode(initialMode);
       const resumed = await resumeActiveJob();
       if (!resumed) await restoreSessionResult();
     }

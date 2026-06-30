@@ -19,8 +19,10 @@ ICON_DIR = PACKAGE_DIR / "Icon"
 async def lifespan(_app: FastAPI):
     from ..services.catalog import initialize_catalogs
     from ..services.compute import start_job_reaper, stop_job_reaper
+    from ..services.stats import init_stats
 
     initialize_catalogs()
+    init_stats()
     start_job_reaper()
     yield
     stop_job_reaper()

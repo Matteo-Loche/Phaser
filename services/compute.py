@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from collections import deque
 from dataclasses import asdict
@@ -114,7 +115,17 @@ def _try_dispatch() -> None:
             _running_count += 1
             _jobs[job_id]["status"] = "running"
             _jobs[job_id]["queue_position"] = None
-            _jobs[job_id]["started_at"] = _utcnow().isoformat()
+            started = _utcnow()
+            _jobs[job_id]["started_at"] = started.isoformat()
+            created = _parse_dt(_jobs[job_id].get("created_at"))
+            # Jobs ahead (0 = started immediately) is captured at enqueue time;
+            # only count real queue wait when something was actually ahead, so a
+            # job that runs right away records exactly 0 instead of dispatch jitter.
+            jobs_ahead = _jobs[job_id].get("queue_position_at_start") or 0
+            if created is not None and jobs_ahead > 0:
+                _jobs[job_id]["queue_wait_ms"] = (started - created).total_seconds() * 1000.0
+            else:
+                _jobs[job_id]["queue_wait_ms"] = 0.0
             _refresh_queue_positions_locked()
             to_start.append((job_id, body))
 
@@ -188,22 +199,29 @@ def run_compute_job(job_id: str, body: ComputeRequest) -> None:
         _pending.append((job_id, body))
         _jobs[job_id]["queue_position"] = len(_pending)
         _jobs[job_id]["queue_size"] = len(_pending)
+        # Number of jobs that must finish before this one starts: those already
+        # running plus those queued ahead of it. 0 means it starts immediately.
+        _jobs[job_id]["queue_position_at_start"] = _running_count + (len(_pending) - 1)
         _refresh_queue_positions_locked()
     _try_dispatch()
 
 
 def _run_job_wrapper(job_id: str, body: ComputeRequest) -> None:
     global _running_count
+    t0 = time.perf_counter()
     try:
         if get_job(job_id) is not None:
-            _run_job(job_id, body)
+            _run_job(job_id, body, started_at_perf=t0)
     finally:
         with _jobs_lock:
             _running_count = max(0, _running_count - 1)
         _try_dispatch()
 
 
-def _run_job(job_id: str, body: ComputeRequest) -> None:
+def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> None:
+    db_rec = None
+    adapt_stats: dict[str, Any] = {}
+    n_phreeqc_runs: int | None = None
     try:
         db_rec = resolve_db_record(db_id=body.db_id, db_path=body.db_path)
         db = db_rec.path
@@ -319,7 +337,8 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
         with _jobs_lock:
             if job_id not in _jobs:
                 return
-            _jobs[job_id].update(
+            job = _jobs[job_id]
+            job.update(
                 {
                     "status": "done",
                     "progress": 1.0,
@@ -329,6 +348,24 @@ def _run_job(job_id: str, body: ComputeRequest) -> None:
                     "phases_used": list(phase_names),
                     "finished_at": _utcnow().isoformat(),
                 }
+            )
+            queue_position_at_start = job.get("queue_position_at_start")
+            queue_wait_ms = job.get("queue_wait_ms")
+        compute_ms = (time.perf_counter() - started_at_perf) * 1000.0
+        if adapt_stats:
+            n_phreeqc_runs = adapt_stats.get("n_evaluated")
+        if n_phreeqc_runs is None:
+            n_phreeqc_runs = len(rows)
+        if db_rec is not None:
+            from .stats import record_compute
+
+            record_compute(
+                body,
+                db_rec=db_rec,
+                compute_ms=compute_ms,
+                n_phreeqc_runs=n_phreeqc_runs,
+                queue_position_at_start=queue_position_at_start,
+                queue_wait_ms=queue_wait_ms,
             )
     except Exception as exc:
         with _jobs_lock:

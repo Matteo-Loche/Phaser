@@ -168,6 +168,10 @@ CATALOG_DB = Path(
     os.environ.get("PHASER_CATALOG_DB", str(PACKAGE_DIR / "data" / "catalog.sqlite"))
 )
 
+STATS_DB = Path(
+    os.environ.get("PHASER_STATS_DB", str(PACKAGE_DIR / "data" / "stats.sqlite"))
+)
+
 # Default total concentration for catalog SYS probes (units = DEFAULT_UNITS).
 # With mmol/kgw, 1.0 means 1 mmol/kgw per accepted total key.
 CATALOG_PROBE_AMOUNT = float(os.environ.get("PHASER_CATALOG_PROBE_AMOUNT", "1.0"))
