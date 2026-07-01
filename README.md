@@ -570,7 +570,7 @@ Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB
 | **Top databases** | Most-used `db_id` values |
 | **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) |
 | **Layer configurations** | Solid / aqueous / per-element subset combinations |
-| **Element pairs** | Unordered pairs from each job's `system_elements` |
+| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C(4) · Mg`), ranked by frequency |
 | **Avg compute time** | Wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds) |
 | **Avg queue at start** | Mean number of jobs ahead when each job began running, captured at enqueue time (`0` = started immediately) |
 | **Avg wait time** | Mean time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
@@ -719,7 +719,7 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 | `POST` | `/api/phases` | Discover phases for a chemical system |
 | `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}` |
 | `GET` | `/api/job/{job_id}` | Job status (`queued` \| `running` \| `done` \| `error`), `progress`, `phase`, queue position |
-| `GET` | `/api/stats` | Per-server compute usage summary (diagram counts, top DBs, grid sizes, layers, element pairs, timing, queue, `activity_24h`) |
+| `GET` | `/api/stats` | Per-server compute usage summary (diagram counts, top DBs, grid sizes, layers, chemical systems, timing, queue, `activity_24h`) |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
 | `DELETE` | `/api/job/{job_id}` | Release job/result from server memory (called by UI after fetch) |
 
