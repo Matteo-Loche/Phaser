@@ -172,6 +172,37 @@ STATS_DB = Path(
     os.environ.get("PHASER_STATS_DB", str(PACKAGE_DIR / "data" / "stats.sqlite"))
 )
 
+# Per-client API rate limits (sliding window). 0 on a bucket disables that cap.
+# All /api/* routes share the general "api" bucket; expensive POSTs also hit
+# tighter route-specific buckets. /api/health is exempt (Docker probes).
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+RATE_LIMIT_ENABLED = _env_bool("PHASER_RATE_LIMIT", True)
+RATE_LIMIT_WINDOW_SEC = int(os.environ.get("PHASER_RATE_LIMIT_WINDOW_SEC", "60"))
+RATE_LIMIT_API_PER_MIN = int(os.environ.get("PHASER_RATE_LIMIT_API_PER_MIN", "600"))
+RATE_LIMIT_COMPUTE_PER_MIN = int(os.environ.get("PHASER_RATE_LIMIT_COMPUTE_PER_MIN", "12"))
+RATE_LIMIT_DB_REGISTER_PER_MIN = int(
+    os.environ.get("PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN", "6")
+)
+RATE_LIMIT_PHASES_PER_MIN = int(os.environ.get("PHASER_RATE_LIMIT_PHASES_PER_MIN", "60"))
+# After tripping a route burst cap, block that client on the route for this duration.
+RATE_LIMIT_COMPUTE_COOLDOWN_SEC = int(
+    os.environ.get("PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC", "600")
+)
+RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC = int(
+    os.environ.get("PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC", "300")
+)
+RATE_LIMIT_COOLDOWN_ESCALATE = _env_bool("PHASER_RATE_LIMIT_COOLDOWN_ESCALATE", True)
+RATE_LIMIT_COOLDOWN_MAX_SEC = int(os.environ.get("PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC", "3600"))
+RATE_LIMIT_VIOLATION_RESET_SEC = int(
+    os.environ.get("PHASER_RATE_LIMIT_VIOLATION_RESET_SEC", "86400")
+)
+
 # Default total concentration for catalog SYS probes (units = DEFAULT_UNITS).
 # With mmol/kgw, 1.0 means 1 mmol/kgw per accepted total key.
 CATALOG_PROBE_AMOUNT = float(os.environ.get("PHASER_CATALOG_PROBE_AMOUNT", "1.0"))

@@ -17,6 +17,7 @@ Key behaviours:
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
 - **Server usage statistics** — successful Saturation Predominance computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats` and the **Statistics** UI mode (diagram counts, queue timing, 24 h activity).
+- **Per-IP API rate limiting** — sliding-window caps on all `/api/*` routes, burst limits on compute and database registration, and **post-burst cooldowns** with escalating block duration for repeat abuse (see [API rate limiting](#api-rate-limiting)).
 - **Plotly UI** — single-page shell with **mode navigation** (Saturation Predominance · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous layer families, O₂/H₂ gas-limit configuration, vector predominance display, per-element hover species, and browser-side settings/result cache.
 
 ---
@@ -69,7 +70,8 @@ PHASER/
 ├── run_server.py          # CLI entry point (uvicorn)
 ├── config.py              # Paths, limits, defaults (env-overridable)
 ├── api/                   # HTTP layer (FastAPI)
-│   ├── app.py             # Application factory, static files, /icons mount
+│   ├── app.py             # Application factory, static files, rate-limit middleware
+│   ├── rate_limit.py      # Per-IP sliding-window limits and post-burst cooldowns
 │   ├── models.py          # Pydantic request bodies
 │   ├── dependencies.py    # DB / DLL resolution for routes
 │   └── routes/            # One module per API concern
@@ -270,6 +272,24 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
 | `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
 | `PHASER_JOB_REAPER_INTERVAL_SEC` | Background reaper wake interval in seconds (default `60`) |
+| `PHASER_CPU_LIMIT` | Docker Compose only — max CPUs for the container cgroup (default `8` in `.env.example`) |
+| `PHASER_MEMORY_LIMIT` | Docker Compose only — max RAM for the container (default `8G`) |
+| `PHASER_DATA_DIR` | Docker Compose only — host path mounted to `data/databases/generated` |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Docker Compose `tunnel` profile — Cloudflare tunnel token (never commit) |
+| `WATCHTOWER_INTERVAL` | Docker Compose `watchtower` profile — image check interval in seconds (default `3600`) |
+| `PHASER_RATE_LIMIT` | Enable per-client API rate limits (`1` default; `0` disables) |
+| `PHASER_RATE_LIMIT_WINDOW_SEC` | Sliding-window length in seconds (default `60`) |
+| `PHASER_RATE_LIMIT_API_PER_MIN` | All `/api/*` except `/api/health` (default `600`; `0` = off) |
+| `PHASER_RATE_LIMIT_COMPUTE_PER_MIN` | Burst cap on `POST /api/compute` (default `12`; `0` = off) |
+| `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | After compute burst cap, block that IP (default `600` = 10 min) |
+| `PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN` | Burst cap on `POST /api/databases/register` (default `6`) |
+| `PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC` | Cooldown after register burst (default `300`) |
+| `PHASER_RATE_LIMIT_PHASES_PER_MIN` | Cap on `POST /api/phases` (default `60`) |
+| `PHASER_RATE_LIMIT_COOLDOWN_ESCALATE` | Double cooldown on each repeat offense (`1` default) |
+| `PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC` | Max cooldown duration (default `3600`) |
+| `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC` | Reset strike count after this quiet period (default `86400`) |
+
+See [API rate limiting](#api-rate-limiting) for how buckets, cooldowns, and client IP detection interact.
 
 ---
 
@@ -690,11 +710,11 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Web UI |
-| `GET` | `/api/health` | Liveness check |
-| `GET` | `/api/config` | Defaults, limits (`max_concurrent_jobs`, `grid_levels`, `adaptive_refine_factor`, `max_adaptive_points`, `job_result_ttl_sec`, `job_queue_ttl_sec`, …), default `db_id` |
+| `GET` | `/api/health` | Liveness check (**exempt** from rate limits) |
+| `GET` | `/api/config` | Defaults, worker/queue limits, `rate_limits`, default `db_id`, database list |
 | `GET` | `/api/databases` | List available databases |
 | `GET` | `/api/databases/{db_id}` | Database details |
-| `POST` | `/api/databases/register` | Register generated database metadata |
+| `POST` | `/api/databases/register` | Register generated database metadata (`.dat` must already be on server) |
 | `GET` | `/api/elements?db_id=` | Elements in a database |
 | `POST` | `/api/phases` | Discover phases for a chemical system |
 | `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}` |
@@ -702,6 +722,67 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 | `GET` | `/api/stats` | Per-server compute usage summary (diagram counts, top DBs, grid sizes, layers, element pairs, timing, queue, `activity_24h`) |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
 | `DELETE` | `/api/job/{job_id}` | Release job/result from server memory (called by UI after fetch) |
+
+FastAPI also serves **`/docs`**, **`/redoc`**, and **`/openapi.json`** by default (API discovery; not rate-limited).
+
+### API rate limiting
+
+PHASER has **no built-in user authentication**. On a public host, abuse protection is layered:
+
+1. **In-app per-IP limits** (enabled by default; tunable via `.env`)
+2. **`PHASER_MAX_CONCURRENT_JOBS`** — caps simultaneous PHREEQC sweeps
+
+#### Buckets
+
+| Bucket | Routes | Default | Env variable(s) | On burst exceeded |
+|--------|--------|---------|-------------------|-------------------|
+| **`api`** | All `/api/*` except `/api/health` | 600 / 60 s | `PHASER_RATE_LIMIT_API_PER_MIN`, `PHASER_RATE_LIMIT_WINDOW_SEC` | Short `Retry-After` (sliding window) |
+| **`compute`** | `POST /api/compute` | 12 / 60 s | `PHASER_RATE_LIMIT_COMPUTE_PER_MIN`, `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | **Cooldown** — no compute for **10 min** |
+| **`db_register`** | `POST /api/databases/register` | 6 / 60 s | `PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN`, `PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC` | **Cooldown** — **5 min** |
+| **`phases`** | `POST /api/phases` | 60 / 60 s | `PHASER_RATE_LIMIT_PHASES_PER_MIN` | Short `Retry-After` only |
+
+Set any `*_PER_MIN` to **`0`** to disable that bucket. Set **`PHASER_RATE_LIMIT=0`** to disable all limits. Cooldown behaviour: `PHASER_RATE_LIMIT_COOLDOWN_ESCALATE`, `PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC`, `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC`.
+
+Each request is checked against **every bucket that applies**. A compute job counts toward both **`api`** and **`compute`**. Job status polling (`GET /api/job/*`, ~86 req/min at 700 ms) counts only toward **`api`** — the default `600` cap leaves headroom for several active tabs.
+
+#### Cooldown and escalation
+
+When a client exceeds the **compute** or **register** burst cap, that IP enters a **route cooldown** (not just a 60 s window wait). During cooldown, all requests on that route return **HTTP 429** with a longer `Retry-After`.
+
+| Offense (within 24 h) | Compute cooldown (default) |
+|-----------------------|----------------------------|
+| 1st | 10 min |
+| 2nd | 20 min |
+| 3rd | 40 min |
+| … | doubles until **1 h** cap |
+
+Strike count resets after **`PHASER_RATE_LIMIT_VIOLATION_RESET_SEC`** (default 24 h) without another offense. Set **`PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC=0`** (and register cooldown `0`) to disable cooldowns (burst-only mode).
+
+#### Client IP
+
+Behind **Cloudflare Tunnel**, limits use **`CF-Connecting-IP`**, then **`X-Forwarded-For`**, then the direct socket address.
+
+#### Responses and `/api/config`
+
+Over-limit responses are **HTTP 429** with JSON `{"detail": "…"}` and a **`Retry-After`** header (seconds).
+
+`GET /api/config` → `rate_limits` object:
+
+| Field | Meaning |
+|-------|---------|
+| `enabled` | Master switch (`PHASER_RATE_LIMIT`) |
+| `window_sec` | Sliding-window length |
+| `api_per_min` | General API cap |
+| `compute_per_min` | Compute burst cap |
+| `db_register_per_min` | Register burst cap |
+| `phases_per_min` | Phases cap |
+| `compute_cooldown_sec` | Post-burst compute block duration |
+| `db_register_cooldown_sec` | Post-burst register block duration |
+| `cooldown_escalate` | Whether repeat offenses double cooldown |
+| `cooldown_max_sec` | Escalation cap |
+| `violation_reset_sec` | Quiet period before strike count resets |
+
+---
 
 ### Compute request (`POST /api/compute`)
 
@@ -791,6 +872,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
 | Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
 | Job reaper interval | `PHASER_JOB_REAPER_INTERVAL_SEC` | `60` | Background cleanup wake interval |
+| API rate limits | `PHASER_RATE_LIMIT_*` | see [API rate limiting](#api-rate-limiting) | Per-IP caps; enabled by default |
 | O₂ stability limit | `PHASER_O2_LIMIT_ATM` | `0.21` | `O2_FUGACITY_LIMIT_ATM` — water window (atm); per-job `o2_limit_atm` |
 | H₂ stability limit | `PHASER_H2_LIMIT_ATM` | `1.0` | `H2_FUGACITY_LIMIT_ATM` — water window (atm); per-job `h2_limit_atm` |
 | Component-gas limit | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | `COMPONENT_GAS_FUGACITY_LIMIT_ATM` — reference pressure for CO₂/CH₄/… boundaries |
@@ -893,6 +975,8 @@ For Docker Compose with a named Cloudflare tunnel:
 
 The tunnel container connects to the internal Compose service (`phaser:8765`), so no router port forwarding is required.
 
+**Public exposure:** PHASER applies **per-IP rate limits** automatically (see [API rate limiting](#api-rate-limiting)). For a fully open URL, combine tunnel + limits + low `PHASER_MAX_CONCURRENT_JOBS`. Optional hardening: Cloudflare **rate rules** on `/api/*`, or **Zero Trust Access** on the hostname when you want a login wall.
+
 Never commit the real tunnel token.
 
 ---
@@ -927,7 +1011,7 @@ docker compose up -d
 
 Generated databases persist via `PHASER_DATA_DIR` (host path) → container `data/databases/generated`. Built-in PHREEQC databases ship inside the image.
 
-**Runtime tuning (no image rebuild)** — edit `.env` beside `docker-compose.yml`:
+**Runtime tuning (no image rebuild)** — edit `.env` beside `docker-compose.yml` (see `.env.example` for the full template):
 
 | Variable | Layer | Purpose |
 |----------|-------|---------|
@@ -938,10 +1022,24 @@ Generated databases persist via `PHASER_DATA_DIR` (host path) → container `dat
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | App | Adaptive display subdivision |
 | `PHASER_MAX_ADAPTIVE_POINTS` | App | Soft cap on adaptive PHREEQC evals |
 | `PHASER_JOB_*_TTL_SEC` | App | Job memory / queue retention |
+| `PHASER_RATE_LIMIT` | App | `1` = on, `0` = off |
+| `PHASER_RATE_LIMIT_WINDOW_SEC` | App | Rate-limit window (default `60` s) |
+| `PHASER_RATE_LIMIT_API_PER_MIN` | App | All `/api/*` except health (default `600`) |
+| `PHASER_RATE_LIMIT_COMPUTE_PER_MIN` | App | Compute burst (default `12`) |
+| `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | App | Post-burst compute block (default `600`) |
+| `PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN` | App | Register burst (default `6`) |
+| `PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC` | App | Post-burst register block (default `300`) |
+| `PHASER_RATE_LIMIT_PHASES_PER_MIN` | App | Phases cap (default `60`) |
+| `PHASER_RATE_LIMIT_COOLDOWN_ESCALATE` | App | Double cooldown on repeat offense |
+| `PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC` | App | Max cooldown (default `3600`) |
+| `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC` | App | Strike reset after quiet period (default `86400`) |
+| `CLOUDFLARE_TUNNEL_TOKEN` | Compose profile | Tunnel token (`tunnel` profile) |
+| `WATCHTOWER_INTERVAL` | Compose profile | Auto-update poll interval (`watchtower` profile) |
+| `PHASER_DATA_DIR` | Compose volume | Host path for generated `.dat` files |
 
 Set **`PHASER_CPU_LIMIT` and `PHASER_MAX_WORKERS` to the same value**. Defaults: **8 CPUs / 8 workers / 8 GB RAM**. After editing `.env`: `docker compose up -d`.
 
-Verify: `GET /api/config` returns `max_workers` and `max_concurrent_jobs`.
+Verify: `GET /api/config` returns `max_workers`, `max_concurrent_jobs`, and `rate_limits`.
 
 **Optional profiles:**
 
@@ -989,5 +1087,6 @@ Tailscale and LAN work **alongside** localhost — no extra PHASER config. For H
 2. Catalog and stats SQLite files are created on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` for persistence across container recreation.
 3. Set `PHASER_CPU_LIMIT`, `PHASER_MEMORY_LIMIT`, and `PHASER_MAX_WORKERS` in `.env` to match the host (defaults: 8 CPUs, 8 workers, 8 GB).
 4. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
-5. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use Cloudflare Tunnel or a reverse proxy.
-6. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register`.
+5. Review **`PHASER_RATE_LIMIT_*`** before exposing publicly (defaults: 12 compute burst → 10 min cooldown; see [API rate limiting](#api-rate-limiting)).
+6. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use [Cloudflare Tunnel](#cloudflare-tunnel).
+7. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register` (subject to register rate limits).
