@@ -55,3 +55,6 @@ docker-compose.override.yml
 
 # Local dev tests (not part of the shipped package)
 tests/
+
+# Personal deploy configs (not shipped)
+truenas_deploy/

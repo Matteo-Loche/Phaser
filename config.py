@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +55,46 @@ GENERATED_DB_DIR = Path(
 
 # Optional explicit default database id from the registry.
 DEFAULT_DB_ID = os.environ.get("PHASER_DEFAULT_DB_ID", "").strip() or None
+
+# Builtin databases hidden from the UI/API (comma-separated stems or ids; empty = none).
+# Values are slugified like registry ids (see db.registry._slugify). Source filenames
+# in the IPhreeqc 3.8 bundle:
+#   iso.dat, ColdChem.dat, frezchem.dat, Kinec.v2.dat, Kinec_v3.dat,
+#   phreeqc_rates.dat, pitzer.dat, sit.dat
+_DEFAULT_DISABLED_DB_STEMS = (
+    "iso",           # iso.dat
+    "coldchem",      # ColdChem.dat
+    "frezchem",      # frezchem.dat
+    "kinec-v2",      # Kinec.v2.dat
+    "kinec-v3",      # Kinec_v3.dat
+    "phreeqc-rates", # phreeqc_rates.dat
+    "pitzer",        # pitzer.dat
+    "sit",           # sit.dat
+)
+
+
+_DB_STEM_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_db_stem(value: str) -> str:
+    return _DB_STEM_SLUG_RE.sub("-", value.lower()).strip("-")
+
+
+def _load_disabled_db_stems() -> frozenset[str]:
+    raw = os.environ.get("PHASER_DISABLED_DB_STEMS")
+    if raw is None:
+        return frozenset(_normalize_db_stem(s) for s in _DEFAULT_DISABLED_DB_STEMS)
+    raw = raw.strip()
+    if not raw:
+        return frozenset()
+    return frozenset(
+        _normalize_db_stem(part)
+        for part in raw.split(",")
+        if part.strip()
+    )
+
+
+DISABLED_DB_STEMS: frozenset[str] = _load_disabled_db_stems()
 
 _WIN_IPHREEQC = r"C:\Users\Matteo\Documents\PhreeqPy\IPhreeqcCOM.dll"
 _LINUX_IPHREEQC_CANDIDATES = (

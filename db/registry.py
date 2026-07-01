@@ -134,6 +134,22 @@ def _ensure_default_registered(
     return records
 
 
+def _database_match_keys(rec: DatabaseRecord) -> set[str]:
+    keys: set[str] = {_slugify(Path(rec.filename).stem), rec.id.lower()}
+    rid = rec.id.lower()
+    for prefix in ("builtin-", "generated-", "registered-"):
+        if rid.startswith(prefix):
+            keys.add(rid[len(prefix):])
+    return keys
+
+
+def is_database_disabled(rec: DatabaseRecord) -> bool:
+    disabled = config.DISABLED_DB_STEMS
+    if not disabled:
+        return False
+    return bool(_database_match_keys(rec) & disabled)
+
+
 @lru_cache(maxsize=1)
 def list_databases(*, refresh_token: int = 0) -> tuple[DatabaseRecord, ...]:
     del refresh_token  # cache-bust via invalidate_registry()
@@ -152,6 +168,10 @@ def list_databases(*, refresh_token: int = 0) -> tuple[DatabaseRecord, ...]:
     return tuple(records)
 
 
+def list_enabled_databases(*, refresh_token: int = 0) -> tuple[DatabaseRecord, ...]:
+    return tuple(r for r in list_databases(refresh_token=refresh_token) if not is_database_disabled(r))
+
+
 def invalidate_registry() -> None:
     list_databases.cache_clear()
 
@@ -164,7 +184,7 @@ def get_database(db_id: str) -> DatabaseRecord | None:
 
 
 def get_default_database() -> DatabaseRecord:
-    records = [r for r in list_databases() if r.exists]
+    records = [r for r in list_enabled_databases() if r.exists]
     if not records:
         raise RuntimeError(
             "No PHREEQC databases are available on the server. "
@@ -174,7 +194,7 @@ def get_default_database() -> DatabaseRecord:
     preferred = config.DEFAULT_DB_ID
     if preferred:
         match = get_database(preferred)
-        if match and match.exists:
+        if match and match.exists and not is_database_disabled(match):
             return match
 
     default_path = Path(config.THERMODDEM_DB)
@@ -204,6 +224,8 @@ def resolve_database(
         rec = get_database(db_id)
         if not rec:
             raise LookupError(f"Database id not found: {db_id}")
+        if is_database_disabled(rec):
+            raise LookupError(f"Database is disabled: {rec.name}")
         if not rec.exists:
             raise LookupError(f"Database unavailable: {rec.name}")
         return rec
@@ -211,6 +233,8 @@ def resolve_database(
     if db_path:
         rec = find_database_by_path(db_path)
         if rec and rec.exists:
+            if is_database_disabled(rec):
+                raise LookupError(f"Database is disabled: {rec.name}")
             return rec
         raise LookupError(
             "Unknown database path. Select a database from the server list."

@@ -224,7 +224,7 @@ Notes:
 - The `PHASES` parser is bounded by datablock keywords (so trailing `PITZER`/`SIT`/`EXCHANGE_*` blocks are not mis-read as phases), takes the phase name as the first token (drops legacy numbers like `Brucite 19`), and reads composition from the **reaction**, not the label (so suffixes like `Ferrihydrite(2L)` don't inject a spurious element `L`).
 - **Element-subset eligibility** ("which solids can form given only these elements") is pure set logic on stored compositions (`phase elements ⊆ system elements`) — no per-subset PHREEQC probing. Any subset (singles, pairs, triples, full system) resolves correctly, and scans stay fast even for 50+ element databases.
 - **Solid/aqueous collisions** are stored in SQLite and passed to compute on `GridJobParams.solid_aqueous_collisions`; the precipitated solid is labelled `"<name>(s)"` and the aqueous complex keeps the bare name.
-- On startup, `services/catalog.py` scans the **default** database synchronously (so the app fails clearly if it is unusable) and scans the rest in a background thread, logging pass/cached/fail per database.
+- On startup, `services/catalog.py` scans the **default** database synchronously (so the app fails clearly if it is unusable) and scans the rest in a background thread, logging pass/cached/fail per database. Databases listed in **`PHASER_DISABLED_DB_STEMS`** are omitted from the selector and skipped by catalog scans.
 - Each catalog entry is fingerprinted (path, size, mtime, sha256) and tagged with a `SCHEMA_VERSION`; changing the file or bumping the schema triggers an **automatic rebuild** on next startup. Databases whose scan **fails** are marked `failed` and hidden from the UI database selector rather than offered and then erroring.
 
 ### Registering a generated database
@@ -254,6 +254,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 |----------|---------|
 | `PHASER_DB` | Default Thermoddem `.dat` path (fallback if not in scan dirs) |
 | `PHASER_DEFAULT_DB_ID` | Force default registry id |
+| `PHASER_DISABLED_DB_STEMS` | Comma-separated database stems/ids to hide from the UI (default: `iso`, `coldchem`, `frezchem`, `kinec-v2`, `kinec-v3`, `phreeqc-rates`, `pitzer`, `sit` — from `iso.dat`, `ColdChem.dat`, `frezchem.dat`, `Kinec.v2.dat`, `Kinec_v3.dat`, `phreeqc_rates.dat`, `pitzer.dat`, `sit.dat`; empty = show all) |
 | `PHASER_BUILTIN_DB_DIRS` | Extra builtin scan dirs (`os.pathsep`-separated) |
 | `PHASER_GENERATED_DB_DIR` | Override generated database directory |
 | `PHASER_CATALOG_DB` | SQLite catalog cache path (default `data/catalog.sqlite`) |
@@ -805,7 +806,7 @@ Key fields in the JSON body:
 | `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
 | `layer_solids` | `true` | Pack and trace solid predominance maps |
 | `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
-| `layer_elements` | `true` | When `true`, one map per element subset (ignored when the system has only one element); when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
+| `layer_elements` | `false` | When `true`, one map per element subset (ignored when the system has only one element); when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
 
 Grid bounds and results use **`pe`** as the redox coordinate. Charge balance follows the titration recipe (`Cl⁻` seed, `Na⁺` titrant); see [Single-point evaluation](#single-point-evaluation-enginepy).
 

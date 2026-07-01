@@ -43,7 +43,7 @@ class GridJobParams:
     # Which diagram layer families to pack / trace (all on by default).
     layer_solids: bool = True
     layer_aqueous: bool = True
-    layer_elements: bool = True
+    layer_elements: bool = False
 
 
 _TUPLE_FIELDS = (

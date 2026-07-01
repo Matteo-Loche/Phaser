@@ -8,7 +8,7 @@ from fastapi import APIRouter
 from ... import config
 from ...chemistry.units import unit_label
 from ...db.catalog_store import catalog_public_meta, list_elements, require_ready
-from ...db.registry import get_default_database, list_databases
+from ...db.registry import get_default_database, list_enabled_databases
 from ...services.species import species_suggestions
 
 router = APIRouter(tags=["config"])
@@ -32,7 +32,7 @@ def get_config():
             db_elements = []
 
     databases = []
-    for rec in list_databases():
+    for rec in list_enabled_databases():
         payload = rec.public_dict()
         payload.update(catalog_public_meta(rec))
         databases.append(payload)

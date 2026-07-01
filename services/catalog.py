@@ -14,7 +14,7 @@ from ..db.catalog_store import (
     save_failure,
     save_snapshot,
 )
-from ..db.registry import DatabaseRecord, get_default_database, list_databases
+from ..db.registry import DatabaseRecord, get_default_database, list_enabled_databases
 from ..phreeqc.catalog import open_phreeqc, scan_database_catalog
 
 ScanStatus = Literal["pass", "cached", "fail"]
@@ -115,7 +115,7 @@ def initialize_catalogs(*, dll_path: str | None = None) -> None:
         _catalog_log(f"skip — IPhreeqc library not found: {dll}")
         return
 
-    existing = [r for r in list_databases() if r.exists]
+    existing = [r for r in list_enabled_databases() if r.exists]
     _catalog_log(f"found {len(existing)} database(s) in registry")
 
     default = get_default_database()

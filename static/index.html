@@ -855,7 +855,7 @@
               <input type="checkbox" id="layerAqueous" checked /> Aqueous predominance
             </label>
             <label class="toggle" style="display:block">
-              <input type="checkbox" id="layerElements" checked /> Per-element subsets
+              <input type="checkbox" id="layerElements" /> Per-element subsets
               <span class="meta">(filter map by element; off = one combined map)</span>
             </label>
           </div>
@@ -1027,7 +1027,7 @@
       solidSubsetElements: [],
       layerSolids: true,
       layerAqueous: true,
-      layerElements: true,
+      layerElements: false,
       labelsOnly: false,
       showBoundaries: true,
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
@@ -1891,7 +1891,7 @@
       delete state.targetElement;
       state.layerSolids ??= true;
       state.layerAqueous ??= true;
-      state.layerElements ??= true;
+      state.layerElements ??= false;
     }
 
     function selectedDatabase() {

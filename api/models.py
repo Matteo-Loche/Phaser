@@ -43,7 +43,7 @@ class ComputeRequest(BaseModel):
     h2_limit_atm: float = config.H2_FUGACITY_LIMIT_ATM
     layer_solids: bool = True
     layer_aqueous: bool = True
-    layer_elements: bool = True
+    layer_elements: bool = False
 
     @field_validator("units")
     @classmethod
