@@ -13,9 +13,9 @@ from .. import config
 from ..api.dependencies import dll_path, resolve_db_record
 from ..api.models import ComputeRequest
 from ..chemistry.units import is_valid_unit, normalize_unit, totals_to_mmol_kgw
-from ..diagram.packer import pack_grid_results, count_layer_pack_steps
-from ..diagram.vectors import pack_traced_display
+from ..diagram.packer import count_layer_pack_steps, effective_layer_elements, pack_grid_results
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
+from ..diagram.vectors import pack_traced_display
 from ..phreeqc.engine import GridJobParams, validate_phreeqc_setup
 from ..phreeqc.adaptive import run_adaptive_boundary_sweep
 from ..phreeqc.sweep import run_grid_sweep
@@ -245,6 +245,7 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
 
         db_key = require_ready(db_rec)
         sys_tuple = system_elements_from_totals(body.totals, body.system_elements)
+        layer_elements = effective_layer_elements(sys_tuple, body.layer_elements)
         if body.gas_phases:
             trace_gases = tuple(body.gas_phases)
         elif body.include_common_gases:
@@ -277,7 +278,7 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             h2_limit_atm=body.h2_limit_atm,
             layer_solids=body.layer_solids,
             layer_aqueous=body.layer_aqueous,
-            layer_elements=body.layer_elements,
+            layer_elements=layer_elements,
         )
 
         def progress(done: int, total: int, phase: str = "compute"):

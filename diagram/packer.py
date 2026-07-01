@@ -165,11 +165,22 @@ def subsets_for_job(params: GridJobParams) -> list[tuple[str, ...]]:
     With the per-element filter ON, every element subset is computed so the UI
     can filter the predominance map by element without recomputing. With it OFF,
     only the single full-system map is computed (the "main predominance").
+    A one-element system has only one subset — per-element mode is ignored.
     """
-    if params.layer_elements:
-        return subsets_to_pack(params.system_elements)
     full = tuple(sorted(params.system_elements))
-    return [full] if full else []
+    if not full:
+        return []
+    if params.layer_elements and len(full) > 1:
+        return subsets_to_pack(full)
+    return [full]
+
+
+def effective_layer_elements(
+    system_elements: tuple[str, ...] | list[str],
+    layer_elements: bool,
+) -> bool:
+    """Per-element subset maps are only meaningful for multi-element systems."""
+    return bool(layer_elements) and len(set(system_elements)) > 1
 
 
 def count_layer_pack_steps(params: GridJobParams) -> int:
@@ -442,7 +453,9 @@ def pack_grid_results(
         "system_elements": list(params.system_elements),
         "layer_solids": params.layer_solids,
         "layer_aqueous": params.layer_aqueous,
-        "layer_elements": params.layer_elements,
+        "layer_elements": effective_layer_elements(
+            params.system_elements, params.layer_elements
+        ),
         "layers": layers,
         "phase_names": default_layer["names"],
         "grid": default_layer["grid"],

@@ -443,6 +443,8 @@ After the sweep, each grid point has SI values and aqueous dominance data. The p
 | **On** | One map per non-empty element subset | `Fe`, `C`, `Fe-C` (7 subsets for 3 elements) |
 | **Off** | One combined map over the full system | `Fe-C` only |
 
+With **one element** in the system, per-element subsets are ignored automatically (only the full-system map is computed).
+
 The packed JSON records which toggles were used: `layer_solids`, `layer_aqueous`, `layer_elements`.
 
 The UI (`static/index.html`) renders these layers as colored regions with Plotly. In adaptive mode, **display** polygons come from `diagram/vectors.py` instead; the packed grids remain for hover only.
@@ -803,7 +805,7 @@ Key fields in the JSON body:
 | `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
 | `layer_solids` | `true` | Pack and trace solid predominance maps |
 | `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
-| `layer_elements` | `true` | When `true`, one map per element subset; when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
+| `layer_elements` | `true` | When `true`, one map per element subset (ignored when the system has only one element); when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
 
 Grid bounds and results use **`pe`** as the redox coordinate. Charge balance follows the titration recipe (`Cl⁻` seed, `Na⁺` titrant); see [Single-point evaluation](#single-point-evaluation-enginepy).
 

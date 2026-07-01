@@ -1435,6 +1435,21 @@
     function systemElements() {
       return [...new Set(state.totals.map(t => elementOf(t.species)))];
     }
+    function effectiveLayerElements(result = null) {
+      if (result?.layer_elements != null) return !!result.layer_elements;
+      return !!state.layerElements && systemElements().length > 1;
+    }
+    function syncLayerElementsControl() {
+      const el = $("layerElements");
+      if (!el) return;
+      const disabled = systemElements().length <= 1;
+      el.disabled = disabled;
+      const label = el.closest("label");
+      if (label) label.style.opacity = disabled ? "0.55" : "";
+      el.title = disabled
+        ? "Per-element subsets apply only when the system has two or more elements."
+        : "";
+    }
     function activeTotals() {
       const out = {};
       state.totals.forEach(t => { if (t.value > 0) out[t.species] = t.value; });
@@ -1517,7 +1532,7 @@
         return {
           solids: !!state.layerSolids,
           aqueous: !!state.layerAqueous,
-          elements: !!state.layerElements,
+          elements: effectiveLayerElements(),
         };
       }
       if (result.layer_solids != null) {
@@ -1941,6 +1956,7 @@
         renderSpecies();
         debounce(refreshPhases, "phaseDebounce", 350);
       }
+      syncLayerElementsControl();
       renderGridMeta();
     }
     function markStale() {
@@ -2104,7 +2120,7 @@
     // Predominance maps actually computed for the current toggles.
     function layerMapCount() {
       const nEl = systemElements().length || 1;
-      const nSub = state.layerElements ? countSubsets(nEl) : 1;
+      const nSub = effectiveLayerElements() ? countSubsets(nEl) : 1;
       const families = (state.layerSolids ? 1 : 0) + (state.layerAqueous ? 1 : 0);
       return Math.max(1, families * nSub);
     }
@@ -2378,6 +2394,11 @@
         commit();
       });
       function onLayerToggle(key, el) {
+        if (key === "layerElements" && systemElements().length <= 1) {
+          el.checked = false;
+          state.layerElements = false;
+          return;
+        }
         state[key] = el.checked;
         // Solid / Aqueous are mutually required: silently keep the box checked
         // when the user tries to clear the last predominance family.
@@ -2482,6 +2503,7 @@
       $("layerSolids").checked = !!state.layerSolids;
       $("layerAqueous").checked = !!state.layerAqueous;
       $("layerElements").checked = !!state.layerElements;
+      syncLayerElementsControl();
       $("o2LimitAtm").value = state.o2LimitAtm;
       $("h2LimitAtm").value = state.h2LimitAtm;
       $("yMin").value = state.y.axis === "eh"
@@ -2717,7 +2739,7 @@
         adaptive_boundaries: !!state.adaptiveBoundaries,
         layer_solids: !!state.layerSolids,
         layer_aqueous: !!state.layerAqueous,
-        layer_elements: !!state.layerElements,
+        layer_elements: effectiveLayerElements(),
       };
       if (state.adaptiveBoundaries) {
         // Include the factor so the cache key reflects it (changing the factor
