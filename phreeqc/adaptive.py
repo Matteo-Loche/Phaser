@@ -13,7 +13,6 @@ Pipeline:
 """
 from __future__ import annotations
 
-import os
 from dataclasses import asdict
 from typing import Any, Callable
 
@@ -167,7 +166,7 @@ def run_adaptive_boundary_sweep(
 
     from .boundary_trace import _chunk_cells, run_boundary_trace
 
-    workers = max_workers or min(config.MAX_WORKERS, os.cpu_count() or 4)
+    workers = max_workers if max_workers is not None else config.MAX_WORKERS
     n_progress = max(1, len(_chunk_cells(cells, workers=workers)))
     report(0, n_progress, "boundaries")
     trace_bundle, trace_stats = run_boundary_trace(

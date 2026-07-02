@@ -81,7 +81,7 @@ PHASER/
 │   ├── app.py             # Application factory, static files, rate-limit middleware
 │   ├── rate_limit.py      # Per-IP sliding-window limits and post-burst cooldowns
 │   ├── models.py          # Pydantic request bodies
-│   ├── dependencies.py    # DB / DLL resolution for routes
+│   ├── dependencies.py    # DB resolution for routes
 │   └── routes/            # One module per API concern
 ├── chemistry/             # Concentration unit conversion
 ├── db/                    # PHREEQC database handling
@@ -277,10 +277,10 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_CATALOG_DB` | SQLite catalog cache path (default `data/catalog.sqlite`) |
 | `PHASER_STATS_DB` | Per-server usage statistics SQLite path (default `data/stats.sqlite`) |
 | `PHASER_CATALOG_PROBE_AMOUNT` | Total concentration per element for catalog SYS probes (default `1.0` in `mmol/kgw`) |
-| `PHASER_IPHREEQC_LIB` | Path to `libiphreeqc.so` / `IPhreeqc.dll` |
+| `PHASER_IPHREEQC_LIB` | Server path to `libiphreeqc.so` / `IPhreeqc.dll` (not a compute API field) |
 | `PHASER_HOST` | Bind address (default `0.0.0.0`) |
 | `PHASER_PORT` | Listen port (default `8765`) |
-| `PHASER_MAX_WORKERS` | Parallel PHREEQC worker processes per grid sweep (default `8`; set via compose `.env`, no rebuild) |
+| `PHASER_MAX_WORKERS` | Server-side parallel PHREEQC worker processes per grid sweep (default `8`; set via compose `.env`, no rebuild; not a compute API field) |
 | `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | Display subdivision factor in adaptive mode (default `5`) |
 | `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
@@ -343,7 +343,7 @@ The sweep coordinate is **`pe`**; `Eh` and `log fO₂` are derived from `(pH, pe
 
 A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
 
-- `ProcessPoolExecutor` spawns worker processes (default up to `MAX_WORKERS`).
+- `ProcessPoolExecutor` spawns worker processes (`PHASER_MAX_WORKERS`, server-configured).
 - Each worker initializes its own IPhreeqc instance (`_worker_init`).
 - `pool.map` evaluates all `(pH, pe)` pairs, preserving order.
 - Progress callback updates job status for the UI poll loop.
@@ -404,7 +404,7 @@ Limits (`config.py`):
 | `HOVER_SPECIES_PER_ELEMENT` | 4 | Species kept per element in packed hover data (env `PHASER_HOVER_SPECIES_PER_ELEMENT`) |
 | `TRACE_CHUNK_MULTIPLIER` | 8 | Worker pool chunking multiplier (env `PHASER_TRACE_CHUNK_MULTIPLIER`) |
 | `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
-| `MAX_WORKERS` | 8 | Worker processes per sweep (capped by CPU count) |
+| `MAX_WORKERS` | 8 | Worker processes per sweep (`PHASER_MAX_WORKERS`; server authority) |
 | `MAX_CONCURRENT_JOBS` | 1 | Max simultaneous sweeps server-wide |
 | `JOB_RESULT_TTL_SEC` | 3600 | Drop finished jobs from memory after this (env `PHASER_JOB_RESULT_TTL_SEC`) |
 | `JOB_QUEUE_TTL_SEC` | 7200 | Drop abandoned queued jobs after this (env `PHASER_JOB_QUEUE_TTL_SEC`) |
@@ -825,6 +825,8 @@ Key fields in the JSON body:
 | `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
 | `layer_elements` | `false` | When `true`, one map per element subset (ignored when the system has only one element); when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
 
+Parallel worker count and the IPhreeqc library path are configured on the server (`PHASER_MAX_WORKERS`, `PHASER_IPHREEQC_LIB`); see [Configuration](#configuration-configpy).
+
 Grid bounds and results use **`pe`** as the redox coordinate. Charge balance follows the titration recipe (`Cl⁻` seed, `Na⁺` titrant); see [Single-point evaluation](#single-point-evaluation-enginepy).
 
 ### Compute flow
@@ -884,8 +886,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Trace top-N species | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH species slots during tracing |
 | Grid top-N species | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH species slots in base grid sweep |
 | Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `4` | Species kept per element in packed hover JSON |
-| Max workers per sweep | — | `MAX_WORKERS = 8` | Capped by `os.cpu_count()` in `sweep.py` |
-| Max workers per sweep | `PHASER_MAX_WORKERS` | `8` | ProcessPool size for grid/trace work |
+| Max workers per sweep | `PHASER_MAX_WORKERS` | `8` | ProcessPool size for grid/trace work (server-side; exposed read-only in `/api/config`) |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
 | Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |

@@ -1451,7 +1451,7 @@ def run_boundary_trace(
         top_aq_species_per_element=config.BOUNDARY_TRACE_TOP_AQ_SPECIES,
     )
 
-    workers = max_workers or min(config.MAX_WORKERS, os.cpu_count() or 4)
+    workers = max_workers if max_workers is not None else config.MAX_WORKERS
     chunks = _chunk_cells(cells, workers=workers)
 
     if workers <= 1 or len(chunks) <= 1:

@@ -788,7 +788,7 @@
         <summary>Chemical system <span class="pill" id="elemCount">0</span><span class="chev">›</span></summary>
         <div class="body">
           <div class="add-species">
-            <input id="speciesPicker" list="speciesOptions" placeholder="Add species (e.g. Fe, C(4), S(6))" />
+            <input id="speciesPicker" list="speciesOptions" placeholder="Add species (exact case: Fe, Cu, C(4))" />
             <datalist id="speciesOptions"></datalist>
             <button class="btn" id="addSpeciesBtn">Add</button>
           </div>
@@ -2053,11 +2053,21 @@
       sel.value = normalizeUnit(state.units || runtime.cfg?.default_units || "mmol/kgw");
     }
 
-    function isAllowedSpecies(name) {
+    function canonicalSpeciesName(name) {
       const sp = (name || "").trim();
-      if (!sp) return false;
+      if (!sp) return null;
       const allowed = runtime.allowedSpecies || [];
-      return allowed.some(a => a.toLowerCase() === sp.toLowerCase());
+      return allowed.includes(sp) ? sp : null;
+    }
+
+    function caseInsensitiveSpeciesMatch(name) {
+      const needle = (name || "").trim().toLowerCase();
+      if (!needle) return null;
+      return (runtime.allowedSpecies || []).find(a => a.toLowerCase() === needle) || null;
+    }
+
+    function isAllowedSpecies(name) {
+      return canonicalSpeciesName(name) !== null;
     }
 
     function addSpecies(name) {
@@ -2067,15 +2077,21 @@
         setStatus("Load a database first, then add species.", "err");
         return;
       }
-      if (!isAllowedSpecies(sp)) {
-        setStatus(`${sp} is not in the selected database. Choose from the list.`, "err");
+      const canonical = canonicalSpeciesName(sp);
+      if (!canonical) {
+        const near = caseInsensitiveSpeciesMatch(sp);
+        if (near) {
+          setStatus(`Use exact spelling: ${near} (e.g. Cu, not cu).`, "err");
+        } else {
+          setStatus(`${sp} is not in the selected database. Choose from the list.`, "err");
+        }
         return;
       }
-      if (state.totals.some(t => t.species.toLowerCase() === sp.toLowerCase())) {
-        setStatus(`${sp} already added.`, "warn");
+      if (state.totals.some(t => t.species === canonical)) {
+        setStatus(`${canonical} already added.`, "warn");
         return;
       }
-      state.totals.push({ species: sp, value: runtime.cfg?.default_species_conc ?? 1 });
+      state.totals.push({ species: canonical, value: runtime.cfg?.default_species_conc ?? 1 });
       $("speciesPicker").value = "";
       commit({ totalsChanged: true });
     }

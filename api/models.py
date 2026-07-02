@@ -21,7 +21,6 @@ class PhaseQuery(BaseModel):
 class ComputeRequest(BaseModel):
     db_id: str | None = None
     db_path: str | None = None  # optional; must match a registered database (prefer db_id)
-    dll_path: str | None = None
     temp_c: float = config.TEMP_C
     ph_min: float = config.PH_MIN
     ph_max: float = config.PH_MAX
@@ -36,7 +35,6 @@ class ComputeRequest(BaseModel):
     exclude_gases: bool = True
     include_common_gases: bool = False
     gas_phases: list[str] | None = None
-    max_workers: int | None = None
     adaptive_boundaries: bool = config.ADAPTIVE_BOUNDARIES_DEFAULT
     adaptive_refine_factor: int | None = None
     o2_limit_atm: float = config.O2_FUGACITY_LIMIT_ATM

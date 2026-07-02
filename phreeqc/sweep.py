@@ -57,7 +57,7 @@ def run_point_sweep(
             f"{len(params.phases)} phases selected; limit is {config.MAX_PHASES_PER_JOB}."
         )
 
-    workers = max_workers or min(config.MAX_WORKERS, os.cpu_count() or 4)
+    workers = max_workers if max_workers is not None else config.MAX_WORKERS
     params_dict = asdict(params)
     tasks = [(ph, pe, params_dict) for ph, pe in tasks_list]
 

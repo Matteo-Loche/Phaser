@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .. import config
-from ..api.dependencies import dll_path, resolve_db_record
+from ..api.dependencies import resolve_db_record
 from ..api.models import ComputeRequest
 from ..chemistry.units import is_valid_unit, normalize_unit, totals_to_mmol_kgw
 from ..diagram.packer import count_layer_pack_steps, effective_layer_elements, pack_grid_results
@@ -225,7 +225,7 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
     try:
         db_rec = resolve_db_record(db_id=body.db_id, db_path=body.db_path)
         db = db_rec.path
-        dll = dll_path(body.dll_path)
+        dll = config.IPHREEQC_DLL
         system_elems = set(system_elements_from_totals(body.totals, body.system_elements))
         phase_names = resolve_phase_names(
             db_rec,
@@ -291,14 +291,16 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             pack_params, adapt_stats, base_results, trace_bundle = (
                 run_adaptive_boundary_sweep(
                     params,
-                    max_workers=body.max_workers,
+                    max_workers=config.MAX_WORKERS,
                     progress_cb=progress,
                     refine_factor=body.adaptive_refine_factor,
                 )
             )
             compute_mode = "adaptive"
         else:
-            results = run_grid_sweep(params, max_workers=body.max_workers, progress_cb=progress)
+            results = run_grid_sweep(
+                params, max_workers=config.MAX_WORKERS, progress_cb=progress
+            )
             pack_params = params
             adapt_stats = {}
             base_results = results
