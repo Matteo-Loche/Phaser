@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
-from .. import config
 from ..db.registry import DatabaseRecord, resolve_database
 
 
@@ -14,7 +13,3 @@ def resolve_db_record(db_id: str | None = None, db_path: str | None = None) -> D
         raise HTTPException(404, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
-
-
-def dll_path(value: str | None) -> str:
-    return value or config.IPHREEQC_DLL

@@ -11,7 +11,7 @@ from ..chemistry.units import is_valid_unit, normalize_unit
 
 class PhaseQuery(BaseModel):
     db_id: str | None = None
-    db_path: str | None = None  # legacy migration aid; must match a registered database
+    db_path: str | None = None  # optional; must match a registered database (prefer db_id)
     elements: list[str]
     selected: list[str] | None = None
     exclude_element_solids: bool = True
@@ -20,8 +20,7 @@ class PhaseQuery(BaseModel):
 
 class ComputeRequest(BaseModel):
     db_id: str | None = None
-    db_path: str | None = None  # legacy migration aid; must match a registered database
-    dll_path: str | None = None
+    db_path: str | None = None  # optional; must match a registered database (prefer db_id)
     temp_c: float = config.TEMP_C
     ph_min: float = config.PH_MIN
     ph_max: float = config.PH_MAX
@@ -36,14 +35,13 @@ class ComputeRequest(BaseModel):
     exclude_gases: bool = True
     include_common_gases: bool = False
     gas_phases: list[str] | None = None
-    max_workers: int | None = None
     adaptive_boundaries: bool = config.ADAPTIVE_BOUNDARIES_DEFAULT
     adaptive_refine_factor: int | None = None
     o2_limit_atm: float = config.O2_FUGACITY_LIMIT_ATM
     h2_limit_atm: float = config.H2_FUGACITY_LIMIT_ATM
     layer_solids: bool = True
     layer_aqueous: bool = True
-    layer_elements: bool = True
+    layer_elements: bool = False
 
     @field_validator("units")
     @classmethod

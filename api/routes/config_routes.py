@@ -6,9 +6,10 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from ... import config
+from ...__version__ import __version__
 from ...chemistry.units import unit_label
 from ...db.catalog_store import catalog_public_meta, list_elements, require_ready
-from ...db.registry import get_default_database, list_databases
+from ...db.registry import get_default_database, list_enabled_databases
 from ...services.species import species_suggestions
 
 router = APIRouter(tags=["config"])
@@ -32,7 +33,7 @@ def get_config():
             db_elements = []
 
     databases = []
-    for rec in list_databases():
+    for rec in list_enabled_databases():
         payload = rec.public_dict()
         payload.update(catalog_public_meta(rec))
         databases.append(payload)
@@ -62,13 +63,36 @@ def get_config():
         "species_suggestions": species_suggestions(db_elements),
         "max_phases": config.MAX_PHASES_PER_JOB,
         "max_grid_points": config.MAX_GRID_POINTS,
+        "max_workers": config.MAX_WORKERS,
         "max_concurrent_jobs": config.MAX_CONCURRENT_JOBS,
         "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
         "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,
         "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
         "job_result_ttl_sec": config.JOB_RESULT_TTL_SEC,
         "job_queue_ttl_sec": config.JOB_QUEUE_TTL_SEC,
+        "rate_limits": {
+            "enabled": config.RATE_LIMIT_ENABLED,
+            "window_sec": config.RATE_LIMIT_WINDOW_SEC,
+            "api_per_min": config.RATE_LIMIT_API_PER_MIN,
+            "compute_per_min": config.RATE_LIMIT_COMPUTE_PER_MIN,
+            "db_register_per_min": config.RATE_LIMIT_DB_REGISTER_PER_MIN,
+            "phases_per_min": config.RATE_LIMIT_PHASES_PER_MIN,
+            "compute_cooldown_sec": config.RATE_LIMIT_COMPUTE_COOLDOWN_SEC,
+            "db_register_cooldown_sec": config.RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC,
+            "cooldown_escalate": config.RATE_LIMIT_COOLDOWN_ESCALATE,
+            "cooldown_max_sec": config.RATE_LIMIT_COOLDOWN_MAX_SEC,
+            "violation_reset_sec": config.RATE_LIMIT_VIOLATION_RESET_SEC,
+        },
         "db_exists": bool(default_db and default_db.exists),
         "dll_exists": Path(config.IPHREEQC_DLL).is_file(),
+        "about": {
+            "app_version": __version__,
+            "build_id": config.BUILD_ID,
+            "repository_url": config.REPOSITORY_URL,
+            "issues_url": config.ISSUES_URL,
+            "license_name": config.LICENSE_NAME,
+            "license_url": config.LICENSE_URL,
+            "doi_url": config.DOI_URL,
+        },
         **catalog_meta,
     }

@@ -446,7 +446,7 @@ def _pack_one_layer(
     recs = _parse_cell_lines(cell_lines, name_index)
     cell_regions = (
         layer_nodes.get("cell_regions")
-        or layer_nodes.get("cell_wedges")  # trace bundles before v20
+        or layer_nodes.get("cell_wedges")
         or []
     )
     regions_by_cat = _parse_cell_regions(cell_regions, name_index)

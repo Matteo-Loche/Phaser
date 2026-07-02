@@ -10,7 +10,7 @@ _MOL_SCALE_KGW: dict[str, float] = {
     "umol/kgw": 1e-6,
 }
 
-# UI / legacy aliases normalized to canonical keys.
+# UI unit aliases (e.g. µmol/kgw) normalized to canonical keys.
 _UNIT_ALIASES = {
     "µmol/kgw": "umol/kgw",
     "μmol/kgw": "umol/kgw",

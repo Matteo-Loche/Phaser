@@ -22,8 +22,10 @@ def main() -> None:
 
     init_schema()
 
+    from PHASER import __version__
+
     databases = list_databases()
-    print(f"app: {app.title}")
+    print(f"app: {app.title} v{__version__}")
     print(f"databases: {len(databases)}")
     if databases:
         default_db = get_default_database()

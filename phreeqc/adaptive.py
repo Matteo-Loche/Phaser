@@ -2,10 +2,11 @@
 
 Pipeline:
 
-1. Evaluate the full user-selected base grid (hover data + corner categories).
-2. Use catalog-derived solid/aqueous collision labels; colliding solids are suffixed
-   ``<name>(s)`` on ``GridJobParams`` before tracing.
-3. Flag base cells whose corners differ across any **enabled** plottable layer signature (solid and/or aqueous, respecting `layer_elements`).
+1. Load solid/aqueous collision names from the catalog into ``GridJobParams``
+   (colliding solids are suffixed ``<name>(s)`` during packing and tracing).
+2. Evaluate the full user-selected base grid (hover data + corner categories).
+3. Flag base cells whose corners differ across any **enabled** plottable layer
+   signature (solid and/or aqueous, respecting ``layer_elements``).
 4. Trace phase boundaries on those cells via root-finding (``boundary_trace.py``),
    emitting exact line segments and convex fill regions for 3-category cells.
 5. Pack traced geometry into vector display layers (``diagram/vectors.py``).
@@ -165,7 +166,7 @@ def run_adaptive_boundary_sweep(
 
     from .boundary_trace import _chunk_cells, run_boundary_trace
 
-    workers = max_workers or min(config.MAX_WORKERS, 4)
+    workers = max_workers if max_workers is not None else config.MAX_WORKERS
     n_progress = max(1, len(_chunk_cells(cells, workers=workers)))
     report(0, n_progress, "boundaries")
     trace_bundle, trace_stats = run_boundary_trace(

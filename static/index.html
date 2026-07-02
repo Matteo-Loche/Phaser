@@ -362,6 +362,15 @@
     .stats-footnote {
       font-size: 0.76rem; color: var(--muted); line-height: 1.4;
     }
+    .stats-about-body {
+      font-size: 0.84rem; color: var(--muted); line-height: 1.5;
+    }
+    .stats-about-body p { margin: 0.35rem 0; }
+    .stats-about-body a { color: #0066FF; text-decoration: none; }
+    .stats-about-body a:hover { text-decoration: underline; }
+    .stats-about-body .build-id {
+      font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;
+    }
 
     /* Narrow screens: hide the wordy status, but keep the progress bar visible
        by compacting the button (short label) and shrinking the bar. */
@@ -779,7 +788,7 @@
         <summary>Chemical system <span class="pill" id="elemCount">0</span><span class="chev">›</span></summary>
         <div class="body">
           <div class="add-species">
-            <input id="speciesPicker" list="speciesOptions" placeholder="Add species (e.g. Fe, C(4), S(6))" />
+            <input id="speciesPicker" list="speciesOptions" placeholder="Add species (exact case: Fe, Cu, C(4))" />
             <datalist id="speciesOptions"></datalist>
             <button class="btn" id="addSpeciesBtn">Add</button>
           </div>
@@ -855,7 +864,7 @@
               <input type="checkbox" id="layerAqueous" checked /> Aqueous predominance
             </label>
             <label class="toggle" style="display:block">
-              <input type="checkbox" id="layerElements" checked /> Per-element subsets
+              <input type="checkbox" id="layerElements" /> Per-element subsets
               <span class="meta">(filter map by element; off = one combined map)</span>
             </label>
           </div>
@@ -917,6 +926,10 @@
           <div id="statsBody">
             <div class="stats-empty">Loading statistics…</div>
           </div>
+          <section class="stats-card stats-about" style="--card-accent:#888">
+            <h3>About</h3>
+            <div id="statsAboutBody" class="stats-about-body">Loading…</div>
+          </section>
           <p class="stats-footnote">
             Counts successful server computes for Saturation Predominance only.
             Browser cache hits are not included. Refreshes automatically every 3 minutes while this page is open.
@@ -1027,7 +1040,7 @@
       solidSubsetElements: [],
       layerSolids: true,
       layerAqueous: true,
-      layerElements: true,
+      layerElements: false,
       labelsOnly: false,
       showBoundaries: true,
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
@@ -1195,8 +1208,48 @@
 
     function startStatsPolling() {
       stopStatsPolling();
+      renderStatsAbout();
       loadStats();
       runtime.statsPollTimer = setInterval(loadStats, STATS_POLL_MS);
+    }
+
+    function htmlEscape(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderStatsAbout() {
+      const el = $("statsAboutBody");
+      if (!el) return;
+      const about = runtime.cfg?.about;
+      if (!about) {
+        el.textContent = "Version info unavailable.";
+        return;
+      }
+      const ver = htmlEscape(about.app_version || "—");
+      const build = about.build_id
+        ? `<span class="build-id"> · ${htmlEscape(String(about.build_id).slice(0, 7))}</span>`
+        : "";
+      const repo = htmlEscape(about.repository_url || "");
+      const issues = htmlEscape(about.issues_url || "");
+      const licenseName = htmlEscape(about.license_name || "License");
+      const licenseUrl = about.license_url ? htmlEscape(about.license_url) : "";
+      const doiUrl = about.doi_url ? htmlEscape(about.doi_url) : "";
+      const links = [
+        `<a href="${repo}" target="_blank" rel="noopener noreferrer">Source code</a>`,
+        licenseUrl
+          ? `<a href="${licenseUrl}" target="_blank" rel="noopener noreferrer">${licenseName}</a>`
+          : "",
+        doiUrl
+          ? `<a href="${doiUrl}" target="_blank" rel="noopener noreferrer">DOI</a>`
+          : "",
+        `<a href="${issues}" target="_blank" rel="noopener noreferrer">Report a bug</a>`,
+      ].filter(Boolean).join(" · ");
+      el.innerHTML = `
+        <p><strong>PHASER ${ver}</strong>${build}</p>
+        <p>${links}</p>`;
     }
 
     function formatStatsDuration(ms) {
@@ -1347,8 +1400,8 @@
             ${statsBarList(data.top_layer_configs, "label", "count")}
           </section>
           <section class="stats-card" style="--card-accent:#FF4D00">
-            <h3>Element pairs</h3>
-            ${statsBarList(data.top_element_pairs, "pair", "count")}
+            <h3>Chemical systems</h3>
+            ${statsBarList(data.top_chemical_systems, "system", "count")}
           </section>
         </div>`;
 
@@ -1435,6 +1488,21 @@
     function systemElements() {
       return [...new Set(state.totals.map(t => elementOf(t.species)))];
     }
+    function effectiveLayerElements(result = null) {
+      if (result?.layer_elements != null) return !!result.layer_elements;
+      return !!state.layerElements && systemElements().length > 1;
+    }
+    function syncLayerElementsControl() {
+      const el = $("layerElements");
+      if (!el) return;
+      const disabled = systemElements().length <= 1;
+      el.disabled = disabled;
+      const label = el.closest("label");
+      if (label) label.style.opacity = disabled ? "0.55" : "";
+      el.title = disabled
+        ? "Per-element subsets apply only when the system has two or more elements."
+        : "";
+    }
     function activeTotals() {
       const out = {};
       state.totals.forEach(t => { if (t.value > 0) out[t.species] = t.value; });
@@ -1517,7 +1585,7 @@
         return {
           solids: !!state.layerSolids,
           aqueous: !!state.layerAqueous,
-          elements: !!state.layerElements,
+          elements: effectiveLayerElements(),
         };
       }
       if (result.layer_solids != null) {
@@ -1828,7 +1896,7 @@
       if (state.gridLevels == null) {
         state.gridLevels = state.ph?.levels ?? state.y?.levels ?? DEFAULT_STATE.gridLevels;
       }
-      // Migrate legacy y-axis bounds (always stored as pe internally now).
+      // Normalize saved redox bounds: internal storage always uses peMin/peMax.
       if (state.y) {
         if (state.y.peMin == null && state.y.min != null) {
           if (state.y.axis === "eh") {
@@ -1867,16 +1935,16 @@
         value: roundForUnit(t.value, state.units),
       }));
       if (!state.dbId && state.dbPath) {
-        const legacy = runtime.databases.find(d => d.filename && state.dbPath.endsWith(d.filename));
-        state.dbId = legacy?.id || "";
+        const matchedDb = runtime.databases.find(d => d.filename && state.dbPath.endsWith(d.filename));
+        state.dbId = matchedDb?.id || "";
         delete state.dbPath;
       }
-      if (state.displayMode === "element") state.displayMode = "aqueous";
+      if (state.displayMode === "element") state.displayMode = "aqueous"; // removed mode id
       if (!["solid", "aqueous"].includes(state.displayMode)) state.displayMode = "solid";
       delete state.targetElement;
       state.layerSolids ??= true;
       state.layerAqueous ??= true;
-      state.layerElements ??= true;
+      state.layerElements ??= false;
     }
 
     function selectedDatabase() {
@@ -1941,6 +2009,7 @@
         renderSpecies();
         debounce(refreshPhases, "phaseDebounce", 350);
       }
+      syncLayerElementsControl();
       renderGridMeta();
     }
     function markStale() {
@@ -1984,11 +2053,21 @@
       sel.value = normalizeUnit(state.units || runtime.cfg?.default_units || "mmol/kgw");
     }
 
-    function isAllowedSpecies(name) {
+    function canonicalSpeciesName(name) {
       const sp = (name || "").trim();
-      if (!sp) return false;
+      if (!sp) return null;
       const allowed = runtime.allowedSpecies || [];
-      return allowed.some(a => a.toLowerCase() === sp.toLowerCase());
+      return allowed.includes(sp) ? sp : null;
+    }
+
+    function caseInsensitiveSpeciesMatch(name) {
+      const needle = (name || "").trim().toLowerCase();
+      if (!needle) return null;
+      return (runtime.allowedSpecies || []).find(a => a.toLowerCase() === needle) || null;
+    }
+
+    function isAllowedSpecies(name) {
+      return canonicalSpeciesName(name) !== null;
     }
 
     function addSpecies(name) {
@@ -1998,15 +2077,21 @@
         setStatus("Load a database first, then add species.", "err");
         return;
       }
-      if (!isAllowedSpecies(sp)) {
-        setStatus(`${sp} is not in the selected database. Choose from the list.`, "err");
+      const canonical = canonicalSpeciesName(sp);
+      if (!canonical) {
+        const near = caseInsensitiveSpeciesMatch(sp);
+        if (near) {
+          setStatus(`Use exact spelling: ${near} (e.g. Cu, not cu).`, "err");
+        } else {
+          setStatus(`${sp} is not in the selected database. Choose from the list.`, "err");
+        }
         return;
       }
-      if (state.totals.some(t => t.species.toLowerCase() === sp.toLowerCase())) {
-        setStatus(`${sp} already added.`, "warn");
+      if (state.totals.some(t => t.species === canonical)) {
+        setStatus(`${canonical} already added.`, "warn");
         return;
       }
-      state.totals.push({ species: sp, value: runtime.cfg?.default_species_conc ?? 1 });
+      state.totals.push({ species: canonical, value: runtime.cfg?.default_species_conc ?? 1 });
       $("speciesPicker").value = "";
       commit({ totalsChanged: true });
     }
@@ -2104,14 +2189,13 @@
     // Predominance maps actually computed for the current toggles.
     function layerMapCount() {
       const nEl = systemElements().length || 1;
-      const nSub = state.layerElements ? countSubsets(nEl) : 1;
+      const nSub = effectiveLayerElements() ? countSubsets(nEl) : 1;
       const families = (state.layerSolids ? 1 : 0) + (state.layerAqueous ? 1 : 0);
       return Math.max(1, families * nSub);
     }
 
-    // Fraction of base cells expected on a boundary, scaled by how many layer
-    // maps are active. Normalized so the all-on case ≈ the original 0.12, and it
-    // shrinks as families/subsets are disabled. Saturating (boundaries overlap).
+    // Fraction of base cells expected on a boundary, scaled by active layer maps.
+    // Normalized to ≈0.12 when all families and subsets are enabled; shrinks when disabled.
     function boundaryFraction() {
       const nEl = systemElements().length || 1;
       const kAll = 2 * countSubsets(nEl); // both families × all subsets
@@ -2378,6 +2462,11 @@
         commit();
       });
       function onLayerToggle(key, el) {
+        if (key === "layerElements" && systemElements().length <= 1) {
+          el.checked = false;
+          state.layerElements = false;
+          return;
+        }
         state[key] = el.checked;
         // Solid / Aqueous are mutually required: silently keep the box checked
         // when the user tries to clear the last predominance family.
@@ -2482,6 +2571,7 @@
       $("layerSolids").checked = !!state.layerSolids;
       $("layerAqueous").checked = !!state.layerAqueous;
       $("layerElements").checked = !!state.layerElements;
+      syncLayerElementsControl();
       $("o2LimitAtm").value = state.o2LimitAtm;
       $("h2LimitAtm").value = state.h2LimitAtm;
       $("yMin").value = state.y.axis === "eh"
@@ -2717,7 +2807,7 @@
         adaptive_boundaries: !!state.adaptiveBoundaries,
         layer_solids: !!state.layerSolids,
         layer_aqueous: !!state.layerAqueous,
-        layer_elements: !!state.layerElements,
+        layer_elements: effectiveLayerElements(),
       };
       if (state.adaptiveBoundaries) {
         // Include the factor so the cache key reflects it (changing the factor

@@ -45,7 +45,7 @@ def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEME
         entries.sort(key=lambda e: e[1], reverse=True)
         return entries
 
-    # Legacy results: reconstruct from the flat species map / dominant fallback.
+    # Fallback when per-element rankings are absent: use flat species maps.
     mols: dict[str, float] = dict(row.get("aq_molality_by_species") or {})
     elem_map: dict[str, str] = dict(row.get("aq_species_element") or {})
     if not mols:
@@ -58,13 +58,13 @@ def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEME
                 elem_map.setdefault(sp, elem)
     if not mols:
         return []
-    legacy_by_elem: dict[str, list[tuple[str, float]]] = {}
+    flat_by_elem: dict[str, list[tuple[str, float]]] = {}
     for sp, m in mols.items():
         if not (m == m) or m <= 0:
             continue
-        legacy_by_elem.setdefault(elem_map.get(sp, ""), []).append((sp, m))
+        flat_by_elem.setdefault(elem_map.get(sp, ""), []).append((sp, m))
     entries = []
-    for elem, lst in legacy_by_elem.items():
+    for elem, lst in flat_by_elem.items():
         lst.sort(key=lambda kv: kv[1], reverse=True)
         for sp, m in lst[:per_element]:
             entries.append([sp, m, elem])
@@ -121,22 +121,6 @@ def label_is_solid(
     return label in solid_set and label not in collision_names
 
 
-def solid_aqueous_collisions(rows: list[dict], job_phases: tuple[str, ...]) -> frozenset[str]:
-    """Phase names that also occur as aqueous species names across the results.
-
-    Derived purely from the job's phase list and the species PHREEQC reports, so
-    it is database- and system-agnostic (no hardcoded names).
-    """
-    solid_set = set(job_phases)
-    aq_names: set[str] = set()
-    for row in rows:
-        for sp in (row.get("dominant_aq_by_element") or {}).values():
-            if sp and sp not in ("none", "aqueous"):
-                aq_names.add(sp)
-        aq_names.update((row.get("aq_molality_by_species") or {}).keys())
-    return frozenset(solid_set & aq_names)
-
-
 def subset_key(subset: tuple[str, ...]) -> str:
     return "-".join(sorted(subset))
 
@@ -165,11 +149,22 @@ def subsets_for_job(params: GridJobParams) -> list[tuple[str, ...]]:
     With the per-element filter ON, every element subset is computed so the UI
     can filter the predominance map by element without recomputing. With it OFF,
     only the single full-system map is computed (the "main predominance").
+    A one-element system has only one subset — per-element mode is ignored.
     """
-    if params.layer_elements:
-        return subsets_to_pack(params.system_elements)
     full = tuple(sorted(params.system_elements))
-    return [full] if full else []
+    if not full:
+        return []
+    if params.layer_elements and len(full) > 1:
+        return subsets_to_pack(full)
+    return [full]
+
+
+def effective_layer_elements(
+    system_elements: tuple[str, ...] | list[str],
+    layer_elements: bool,
+) -> bool:
+    """Per-element subset maps are only meaningful for multi-element systems."""
+    return bool(layer_elements) and len(set(system_elements)) > 1
 
 
 def count_layer_pack_steps(params: GridJobParams) -> int:
@@ -236,7 +231,7 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
         if best_sp != "none":
             return best_sp
         return dominant_aq_in_subset(row, subset)
-    # Legacy results (no per-element ranking): fall back to flat species map.
+    # Fallback when per-element rankings are absent: use flat species maps.
     mols = row.get("aq_molality_by_species") or {}
     elem_map = row.get("aq_species_element") or {}
     best_sp, best_m = "none", -1.0
@@ -442,7 +437,9 @@ def pack_grid_results(
         "system_elements": list(params.system_elements),
         "layer_solids": params.layer_solids,
         "layer_aqueous": params.layer_aqueous,
-        "layer_elements": params.layer_elements,
+        "layer_elements": effective_layer_elements(
+            params.system_elements, params.layer_elements
+        ),
         "layers": layers,
         "phase_names": default_layer["names"],
         "grid": default_layer["grid"],

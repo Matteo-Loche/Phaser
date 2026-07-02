@@ -8,7 +8,8 @@ from ...db.catalog_store import catalog_public_meta
 from ...db.registry import (
     get_database,
     get_default_database,
-    list_databases,
+    is_database_disabled,
+    list_enabled_databases,
     register_generated_database,
 )
 from ...services.catalog import scan_database_record
@@ -25,7 +26,7 @@ def _public_record(rec) -> dict:
 
 @router.get("/api/databases")
 def api_list_databases():
-    records = list_databases()
+    records = list_enabled_databases()
     default_id = None
     if any(r.exists for r in records):
         try:
@@ -42,7 +43,7 @@ def api_list_databases():
 @router.get("/api/databases/{db_id}")
 def api_get_database(db_id: str):
     rec = get_database(db_id)
-    if not rec:
+    if not rec or is_database_disabled(rec):
         raise HTTPException(404, f"Database id not found: {db_id}")
     return _public_record(rec)
 

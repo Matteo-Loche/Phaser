@@ -6,6 +6,7 @@ from typing import Any
 from ..api.models import ComputeRequest
 from ..db import stats_store
 from ..db.registry import DatabaseRecord
+from ..diagram.packer import effective_layer_elements
 from ..diagram.phases import system_elements_from_totals
 
 
@@ -31,7 +32,7 @@ def record_compute(
             grid_levels=body.ph_levels,
             layer_solids=body.layer_solids,
             layer_aqueous=body.layer_aqueous,
-            layer_elements=body.layer_elements,
+            layer_elements=effective_layer_elements(sys_tuple, body.layer_elements),
             adaptive=body.adaptive_boundaries,
             system_elements=sys_tuple,
             n_phreeqc_runs=n_phreeqc_runs,

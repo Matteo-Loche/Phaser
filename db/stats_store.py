@@ -5,7 +5,6 @@ import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -53,10 +52,6 @@ def init_schema() -> None:
                     queue_position_at_start INTEGER,
                     queue_wait_ms REAL,
                     system_elements TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS element_pair_counts (
-                    pair_key TEXT PRIMARY KEY,
-                    count INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_compute_events_finished
                     ON compute_events(finished_at);
@@ -136,18 +131,50 @@ def record_compute_event(
                     json.dumps(elems),
                 ),
             )
-            for a, b in combinations(elems, 2):
-                key = f"{a}-{b}"
-                conn.execute(
-                    """
-                    INSERT INTO element_pair_counts(pair_key, count) VALUES (?, 1)
-                    ON CONFLICT(pair_key) DO UPDATE SET count = count + 1
-                    """,
-                    (key,),
-                )
             conn.commit()
         finally:
             conn.close()
+
+
+def _format_chemical_system(system_elements_json: str) -> str:
+    try:
+        elems = json.loads(system_elements_json)
+    except (json.JSONDecodeError, TypeError):
+        return system_elements_json
+    if not isinstance(elems, list):
+        return system_elements_json
+    return " · ".join(str(e) for e in elems)
+
+
+def _top_chemical_systems(conn: sqlite3.Connection, limit: int = 12) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT system_elements, COUNT(*) AS count
+        FROM compute_events
+        WHERE mode_id = 'phase-diagram'
+        GROUP BY system_elements
+        ORDER BY count DESC, system_elements ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        raw = row["system_elements"]
+        try:
+            elements = json.loads(raw)
+            if not isinstance(elements, list):
+                elements = []
+        except (json.JSONDecodeError, TypeError):
+            elements = []
+        out.append(
+            {
+                "system": _format_chemical_system(raw),
+                "elements": elements,
+                "count": int(row["count"]),
+            }
+        )
+    return out
 
 
 def _top_rows(
@@ -258,7 +285,7 @@ def get_summary() -> dict[str, Any]:
                     "top_databases": [],
                     "top_grid_sizes": [],
                     "top_layer_configs": [],
-                    "top_element_pairs": [],
+                    "top_chemical_systems": [],
                 }
 
             top_databases = _top_rows(
@@ -307,16 +334,7 @@ def get_summary() -> dict[str, Any]:
                 for r in layer_rows
             ]
 
-            top_element_pairs = _top_rows(
-                conn,
-                """
-                SELECT pair_key AS pair, count
-                FROM element_pair_counts
-                ORDER BY count DESC, pair_key ASC
-                LIMIT ?
-                """,
-                12,
-            )
+            top_chemical_systems = _top_chemical_systems(conn)
 
             return {
                 "total_diagrams": total,
@@ -333,7 +351,7 @@ def get_summary() -> dict[str, Any]:
                 "top_databases": top_databases,
                 "top_grid_sizes": top_grid_sizes,
                 "top_layer_configs": top_layer_configs,
-                "top_element_pairs": top_element_pairs,
+                "top_chemical_systems": top_chemical_systems,
             }
         finally:
             conn.close()

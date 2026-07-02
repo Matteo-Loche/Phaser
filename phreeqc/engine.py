@@ -43,7 +43,7 @@ class GridJobParams:
     # Which diagram layer families to pack / trace (all on by default).
     layer_solids: bool = True
     layer_aqueous: bool = True
-    layer_elements: bool = True
+    layer_elements: bool = False
 
 
 _TUPLE_FIELDS = (
@@ -184,7 +184,7 @@ def _format_user_punch(elements: tuple[str, ...], *, top_n: int) -> str:
         pad = b + 80
         cont = b + 100
         # SYS returns total element moles as its VALUE and the species count via
-        # the 2nd (by-ref) argument. Keep them in separate variables: clobbering
+        # the 2nd (by-ref) argument. Keep them in separate variables; overwriting
         # the count with the return value would break the FOR-loop bound. moles()
         # is the element's stoichiometric moles per species (sorted descending).
         lines.extend(
