@@ -23,6 +23,7 @@ RUN ../configure \
 
 FROM python:${PYTHON_VERSION}
 ARG IPHREEQC_VERSION
+ARG PHASER_BUILD_ID=
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -30,7 +31,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PHASER_PORT=8765 \
     PHASER_IPHREEQC_LIB=/usr/local/lib/libiphreeqc.so \
     PHASER_BUILTIN_DB_DIRS=/opt/phreeqc/database \
-    PHASER_GENERATED_DB_DIR=/app/PHASER/data/databases/generated
+    PHASER_GENERATED_DB_DIR=/app/PHASER/data/databases/generated \
+    PHASER_BUILD_ID=${PHASER_BUILD_ID}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

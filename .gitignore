@@ -58,3 +58,4 @@ tests/
 
 # Personal deploy configs (not shipped)
 truenas_deploy/
+maintainer-notes.md

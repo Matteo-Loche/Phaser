@@ -10,14 +10,7 @@ from .. import config
 
 MAX_SLOTS = 48
 _DELIM = "|"
-# v2: replaced PHREEQC-probed subset_phases with formula-derived phase_elements.
-# v3: phase catalog (names/kinds/composition) sourced from the PHASES block
-#     instead of the redox-dependent SYS("phases") probe, so Fe(III) oxides etc.
-#     are no longer dropped; forces a catalog rebuild.
-# v4: composition parsed from the reaction only (not the display name), fixing a
-#     spurious element from suffixes like "Ferrihydrite(2L)" -> "L".
-# v5: PHASES block bounded by datablock keywords (skip trailing PITZER/SIT/etc.)
-#     and phase name taken as the first token (drops legacy numbers, "Brucite 19").
+# Bump when catalog parsing or stored fields change (invalidates cached SQLite catalogs).
 SCHEMA_VERSION = 5
 
 # Element extraction from PHREEQC phase formulae (PHASES block). O/H/charge are
@@ -499,7 +492,7 @@ def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
     Robust against:
       * other datablocks after PHASES (PITZER/SIT/EXCHANGE_*), which are skipped
         via top-level keyword tracking rather than fixed end markers;
-      * legacy phase numbers on the name line (e.g. ``Brucite 19``), by taking
+      * trailing index numbers on the name line (e.g. ``Brucite 19``), by taking
         the name as the first whitespace token;
       * label suffixes like ``Ferrihydrite(2L)``, by reading composition from
         the reaction rather than the name.
@@ -530,7 +523,7 @@ def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
         # option lines (log_k, -analytic, delta_h, -Vm, ...) are not names.
         if "=" in stripped or low.startswith(_PHASE_OPTION_PREFIXES):
             continue
-        # Phase name = first whitespace token (drops trailing legacy numbers).
+        # Phase name = first whitespace token (drops trailing index numbers).
         name = stripped.split()[0]
         # The reaction is the next meaningful line and must contain "=".
         j = i

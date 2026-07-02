@@ -362,6 +362,15 @@
     .stats-footnote {
       font-size: 0.76rem; color: var(--muted); line-height: 1.4;
     }
+    .stats-about-body {
+      font-size: 0.84rem; color: var(--muted); line-height: 1.5;
+    }
+    .stats-about-body p { margin: 0.35rem 0; }
+    .stats-about-body a { color: #0066FF; text-decoration: none; }
+    .stats-about-body a:hover { text-decoration: underline; }
+    .stats-about-body .build-id {
+      font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;
+    }
 
     /* Narrow screens: hide the wordy status, but keep the progress bar visible
        by compacting the button (short label) and shrinking the bar. */
@@ -917,6 +926,10 @@
           <div id="statsBody">
             <div class="stats-empty">Loading statistics…</div>
           </div>
+          <section class="stats-card stats-about" style="--card-accent:#888">
+            <h3>About</h3>
+            <div id="statsAboutBody" class="stats-about-body">Loading…</div>
+          </section>
           <p class="stats-footnote">
             Counts successful server computes for Saturation Predominance only.
             Browser cache hits are not included. Refreshes automatically every 3 minutes while this page is open.
@@ -1195,8 +1208,48 @@
 
     function startStatsPolling() {
       stopStatsPolling();
+      renderStatsAbout();
       loadStats();
       runtime.statsPollTimer = setInterval(loadStats, STATS_POLL_MS);
+    }
+
+    function htmlEscape(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function renderStatsAbout() {
+      const el = $("statsAboutBody");
+      if (!el) return;
+      const about = runtime.cfg?.about;
+      if (!about) {
+        el.textContent = "Version info unavailable.";
+        return;
+      }
+      const ver = htmlEscape(about.app_version || "—");
+      const build = about.build_id
+        ? `<span class="build-id"> · ${htmlEscape(String(about.build_id).slice(0, 7))}</span>`
+        : "";
+      const repo = htmlEscape(about.repository_url || "");
+      const issues = htmlEscape(about.issues_url || "");
+      const licenseName = htmlEscape(about.license_name || "License");
+      const licenseUrl = about.license_url ? htmlEscape(about.license_url) : "";
+      const doiUrl = about.doi_url ? htmlEscape(about.doi_url) : "";
+      const links = [
+        `<a href="${repo}" target="_blank" rel="noopener noreferrer">Source code</a>`,
+        licenseUrl
+          ? `<a href="${licenseUrl}" target="_blank" rel="noopener noreferrer">${licenseName}</a>`
+          : "",
+        doiUrl
+          ? `<a href="${doiUrl}" target="_blank" rel="noopener noreferrer">DOI</a>`
+          : "",
+        `<a href="${issues}" target="_blank" rel="noopener noreferrer">Report a bug</a>`,
+      ].filter(Boolean).join(" · ");
+      el.innerHTML = `
+        <p><strong>PHASER ${ver}</strong>${build}</p>
+        <p>${links}</p>`;
     }
 
     function formatStatsDuration(ms) {
@@ -1843,7 +1896,7 @@
       if (state.gridLevels == null) {
         state.gridLevels = state.ph?.levels ?? state.y?.levels ?? DEFAULT_STATE.gridLevels;
       }
-      // Migrate legacy y-axis bounds (always stored as pe internally now).
+      // Normalize saved redox bounds: internal storage always uses peMin/peMax.
       if (state.y) {
         if (state.y.peMin == null && state.y.min != null) {
           if (state.y.axis === "eh") {
@@ -1882,11 +1935,11 @@
         value: roundForUnit(t.value, state.units),
       }));
       if (!state.dbId && state.dbPath) {
-        const legacy = runtime.databases.find(d => d.filename && state.dbPath.endsWith(d.filename));
-        state.dbId = legacy?.id || "";
+        const matchedDb = runtime.databases.find(d => d.filename && state.dbPath.endsWith(d.filename));
+        state.dbId = matchedDb?.id || "";
         delete state.dbPath;
       }
-      if (state.displayMode === "element") state.displayMode = "aqueous";
+      if (state.displayMode === "element") state.displayMode = "aqueous"; // removed mode id
       if (!["solid", "aqueous"].includes(state.displayMode)) state.displayMode = "solid";
       delete state.targetElement;
       state.layerSolids ??= true;
@@ -2125,9 +2178,8 @@
       return Math.max(1, families * nSub);
     }
 
-    // Fraction of base cells expected on a boundary, scaled by how many layer
-    // maps are active. Normalized so the all-on case ≈ the original 0.12, and it
-    // shrinks as families/subsets are disabled. Saturating (boundaries overlap).
+    // Fraction of base cells expected on a boundary, scaled by active layer maps.
+    // Normalized to ≈0.12 when all families and subsets are enabled; shrinks when disabled.
     function boundaryFraction() {
       const nEl = systemElements().length || 1;
       const kAll = 2 * countSubsets(nEl); // both families × all subsets

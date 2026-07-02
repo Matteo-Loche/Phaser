@@ -11,7 +11,7 @@ from ..chemistry.units import is_valid_unit, normalize_unit
 
 class PhaseQuery(BaseModel):
     db_id: str | None = None
-    db_path: str | None = None  # legacy migration aid; must match a registered database
+    db_path: str | None = None  # optional; must match a registered database (prefer db_id)
     elements: list[str]
     selected: list[str] | None = None
     exclude_element_solids: bool = True
@@ -20,7 +20,7 @@ class PhaseQuery(BaseModel):
 
 class ComputeRequest(BaseModel):
     db_id: str | None = None
-    db_path: str | None = None  # legacy migration aid; must match a registered database
+    db_path: str | None = None  # optional; must match a registered database (prefer db_id)
     dll_path: str | None = None
     temp_c: float = config.TEMP_C
     ph_min: float = config.PH_MIN

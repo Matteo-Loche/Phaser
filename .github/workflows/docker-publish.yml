@@ -2,9 +2,9 @@
 # automatically on every push to `main` and on every version tag (v1.2.3).
 #
 # Resulting image: ghcr.io/matteo-loche/phaser
-#   - tag `latest`            -> newest commit on main
-#   - tag `sha-<commit>`      -> the exact commit it was built from
-#   - tag `v1.2.3` / `1.2`    -> when you push a git tag like v1.2.3
+#   - tag `latest`  -> newest commit on main
+#   - tag `1.2.3`   -> git tag v1.2.3
+
 name: Publish Docker image
 
 on:
@@ -18,7 +18,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: read       # read your source code
+      contents: read       # read repository contents
       packages: write      # push the image to GHCR
 
     steps:
@@ -34,16 +34,12 @@ jobs:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=sha
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
       # Enables advanced build features + layer caching.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Logs in to GHCR. GITHUB_TOKEN is provided automatically by GitHub;
-      # you do NOT need to create any secret yourself.
+      # Logs in to GHCR. GITHUB_TOKEN is provided automatically; no extra secret required.
       - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
@@ -58,6 +54,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PHASER_BUILD_ID=${{ github.sha }}
           # Cache layers between runs so rebuilds are fast.
           cache-from: type=gha
           cache-to: type=gha,mode=max

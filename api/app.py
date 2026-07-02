@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
+from ..__version__ import __version__
 from .rate_limit import check_rate_limit, limit_detail_message, limit_for_bucket
 from .routes import router
 
@@ -51,7 +52,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-app = FastAPI(title="Phase Diagram Service", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Phase Diagram Service", version=__version__, lifespan=lifespan)
 app.add_middleware(RateLimitMiddleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/icons", StaticFiles(directory=str(ICON_DIR)), name="icons")

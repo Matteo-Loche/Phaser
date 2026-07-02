@@ -219,7 +219,7 @@ def resolve_database(
     db_id: str | None = None,
     db_path: str | None = None,
 ) -> DatabaseRecord:
-    """Resolve a trusted database record from id (preferred) or legacy path."""
+    """Resolve a trusted database record from id (preferred) or registered path."""
     if db_id:
         rec = get_database(db_id)
         if not rec:
@@ -249,7 +249,7 @@ def register_generated_database(
     metadata: dict[str, Any] | None = None,
     write_sidecar: bool = True,
 ) -> DatabaseRecord:
-    """Register a user-generated database for future PyGCC / external tooling integration."""
+    """Register a user-generated database produced by external tooling."""
     path = Path(dat_path)
     if not path.is_file():
         raise FileNotFoundError(f"Database file not found: {path}")

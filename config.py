@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
+from .__version__ import DOI_URL as _BUILTIN_DOI_URL
 _IS_WINDOWS = sys.platform == "win32"
 
 # Override with PHASER_DB and PHASER_IPHREEQC_LIB if needed.
@@ -45,7 +46,7 @@ BUILTIN_DB_DIRS: tuple[Path, ...] = tuple(
     for p in ([_BUILTIN_DB_DIR_DEFAULT, *_extra_builtin_dirs])
 )
 
-# User-generated databases (e.g. future PyGCC output copied or registered here).
+# User-generated databases (e.g. PyGCC output copied or registered here).
 GENERATED_DB_DIR = Path(
     os.environ.get(
         "PHASER_GENERATED_DB_DIR",
@@ -96,7 +97,60 @@ def _load_disabled_db_stems() -> frozenset[str]:
 
 DISABLED_DB_STEMS: frozenset[str] = _load_disabled_db_stems()
 
-_WIN_IPHREEQC = r"C:\Users\Matteo\Documents\PhreeqPy\IPhreeqcCOM.dll"
+# About / release metadata (shown in Statistics and /api/config).
+BUILD_ID = os.environ.get("PHASER_BUILD_ID", "").strip() or None
+_DEFAULT_REPO_URL = "https://github.com/matteo-loche/phaser"
+REPOSITORY_URL = os.environ.get("PHASER_REPO_URL", _DEFAULT_REPO_URL).strip() or _DEFAULT_REPO_URL
+_issues_override = os.environ.get("PHASER_ISSUES_URL", "").strip()
+ISSUES_URL = _issues_override or f"{REPOSITORY_URL.rstrip('/')}/issues"
+
+
+def _find_license_file() -> tuple[str, Path] | None:
+    for filename in ("LICENSE", "LICENSE.txt", "LICENSE.md"):
+        path = PACKAGE_DIR / filename
+        if path.is_file():
+            return filename, path
+    return None
+
+
+def _license_name_from_text(text: str) -> str:
+    head = text[:2000].upper()
+    if "AFFERO GENERAL PUBLIC LICENSE" in head and "VERSION 3" in head:
+        return "AGPL-3.0"
+    if "GNU GENERAL PUBLIC LICENSE" in head and "VERSION 3" in head:
+        return "GPL-3.0"
+    if "APACHE LICENSE" in head and "VERSION 2" in head:
+        return "Apache-2.0"
+    if "MIT LICENSE" in head:
+        return "MIT"
+    return "License"
+
+
+_found_license = _find_license_file()
+if _found_license:
+    _license_filename, _license_path = _found_license
+    _default_license_name = _license_name_from_text(
+        _license_path.read_text(encoding="utf-8", errors="ignore")
+    )
+    _default_license_url = (
+        f"{_DEFAULT_REPO_URL.rstrip('/')}/blob/main/{_license_filename}"
+    )
+else:
+    _default_license_name = None
+    _default_license_url = None
+
+LICENSE_NAME = os.environ.get("PHASER_LICENSE_NAME", _default_license_name or "").strip() or None
+_license_url_override = os.environ.get("PHASER_LICENSE_URL", "").strip()
+LICENSE_URL = _license_url_override or _default_license_url
+
+_doi_override = os.environ.get("PHASER_DOI_URL", "").strip()
+_baked_doi = (_BUILTIN_DOI_URL or "").strip()
+DOI_URL = _doi_override or _baked_doi or None
+
+_WIN_IPHREEQC_CANDIDATES = (
+    r"C:\Program Files\USGS\IPhreeqc\bin\IPhreeqcCOM.dll",
+    r"C:\Program Files (x86)\USGS\IPhreeqc\bin\IPhreeqcCOM.dll",
+)
 _LINUX_IPHREEQC_CANDIDATES = (
     "/usr/local/lib/libiphreeqc.so",
     "/usr/lib/x86_64-linux-gnu/libiphreeqc.so",
@@ -113,7 +167,9 @@ def _first_existing(paths: tuple[str, ...]) -> str:
 
 IPHREEQC_DLL = os.environ.get(
     "PHASER_IPHREEQC_LIB",
-    _WIN_IPHREEQC if _IS_WINDOWS else _first_existing(_LINUX_IPHREEQC_CANDIDATES),
+    _first_existing(_WIN_IPHREEQC_CANDIDATES)
+    if _IS_WINDOWS
+    else _first_existing(_LINUX_IPHREEQC_CANDIDATES),
 )
 
 HOST = os.environ.get("PHASER_HOST", "0.0.0.0")

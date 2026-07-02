@@ -4,6 +4,12 @@
 
 <p align="center"><em>pH–pe / pH–Eh predominance diagrams from PHREEQC</em></p>
 
+<p align="center">
+  <a href="https://github.com/matteo-loche/phaser/blob/main/LICENSE.txt">
+    <img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL v3" />
+  </a>
+</p>
+
 PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams** from PHREEQC thermodynamic databases. Users define a chemical system (total concentrations), select solid phases, and the server evaluates a grid of PHREEQC solutions in parallel to determine which phase or aqueous species is dominant at each point. The application ships as a **Docker image** (Linux IPhreeqc and PHREEQC databases bundled) or can be run from source on Linux/WSL.
 
 Key behaviours:
@@ -46,7 +52,7 @@ docker compose up --build -d
 ### From source (Linux / WSL)
 
 ```bash
-cd /path/to/Software_dev/PHASER
+cd /path/to/PHASER
 python3 -m venv .venv-linux
 source .venv-linux/bin/activate
 pip install -r requirements.txt
@@ -59,7 +65,7 @@ Open [http://localhost:8765](http://localhost:8765).
 
 ### Windows
 
-Windows Python cannot load Linux `libiphreeqc.so`. Use **WSL** or **Docker** for compute, or install a matching Windows `IPhreeqc` DLL and run natively.
+Windows Python cannot load Linux `libiphreeqc.so`. Use **WSL** or **Docker** for compute, or install a matching Windows `IPhreeqc` DLL and set **`PHASER_IPHREEQC_LIB`** to its path (see `.env.example` / `config.py`).
 
 ---
 
@@ -68,13 +74,16 @@ Windows Python cannot load Linux `libiphreeqc.so`. Use **WSL** or **Docker** for
 ```
 PHASER/
 ├── run_server.py          # CLI entry point (uvicorn)
+├── __version__.py         # App version and optional DOI (SemVer)
 ├── config.py              # Paths, limits, defaults (env-overridable)
+├── LICENSE.txt            # AGPL-3.0
 ├── api/                   # HTTP layer (FastAPI)
 │   ├── app.py             # Application factory, static files, rate-limit middleware
 │   ├── rate_limit.py      # Per-IP sliding-window limits and post-burst cooldowns
 │   ├── models.py          # Pydantic request bodies
 │   ├── dependencies.py    # DB / DLL resolution for routes
 │   └── routes/            # One module per API concern
+├── chemistry/             # Concentration unit conversion
 ├── db/                    # PHREEQC database handling
 │   ├── registry.py        # Server-side database catalog (trusted paths)
 │   ├── catalog_store.py   # SQLite PHREEQC catalog (elements/phases/species/collisions)
@@ -82,6 +91,7 @@ PHASER/
 ├── phreeqc/               # PHREEQC solver integration
 │   ├── catalog.py         # SYS probes + PHASES-block parse -> catalog snapshot
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
+│   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
 │   ├── sweep.py           # Multiprocessing grid sweep
 │   ├── adaptive.py        # Adaptive boundary orchestration
 │   └── boundary_trace.py  # Root-finding tracer (brentq, triple/band regions, fallback)
@@ -90,6 +100,7 @@ PHASER/
 │   ├── packer.py          # Pack grid results; solid/aqueous name collision labels
 │   └── vectors.py         # Signed-distance vector display from traced boundaries
 ├── services/              # Orchestration logic
+│   ├── catalog.py         # Startup / background PHREEQC catalog scans
 │   ├── compute.py         # FIFO compute queue + background grid jobs
 │   ├── stats.py           # Per-server usage statistics recording
 │   └── species.py         # Species picker suggestions
@@ -191,12 +202,12 @@ Users select a database by **`db_id`** from a server-managed catalog. Filesystem
 
 ### Sources
 
-1. **builtin** — `.dat` files scanned from the PHREEQC installation directory (`BUILTIN_DB_DIRS` in `config.py`, default: USGS Phreeqc Interactive `database/` folder).
+1. **builtin** — `.dat` files scanned from `BUILTIN_DB_DIRS` (default: USGS Phreeqc Interactive `database/` on Windows/WSL dev; `/opt/phreeqc/database` in the Docker image via `PHASER_BUILTIN_DB_DIRS`).
 2. **generated** — `.dat` files in `data/databases/generated/`, for output from external tools (e.g. PyGCC).
 
 ### Registry flow
 
-1. On startup / first request, `db/registry.py` scans configured directories.
+1. On startup, `db/registry.py` scans configured directories (and rescans after registration).
 2. Each file becomes a `DatabaseRecord` with `id`, `name`, `source`, `filename`.
 3. Optional sidecar metadata: `mydb.meta.json` next to `mydb.dat` (display name, `origin_service`, etc.).
 4. `GET /api/databases` returns client-safe records (**no filesystem paths**).
@@ -252,8 +263,14 @@ curl -X POST http://localhost:8765/api/databases/register \
 
 | Variable | Purpose |
 |----------|---------|
-| `PHASER_DB` | Default Thermoddem `.dat` path (fallback if not in scan dirs) |
+| `PHASER_DB` | Path used to pick the default registry entry when `PHASER_DEFAULT_DB_ID` is unset (matches by file path; typical on Windows dev with ThermoDem; Docker uses scanned builtin DBs) |
 | `PHASER_DEFAULT_DB_ID` | Force default registry id |
+| `PHASER_REPO_URL` | GitHub repo URL for Statistics About (default `https://github.com/matteo-loche/phaser`) |
+| `PHASER_ISSUES_URL` | Bug-report URL (default `{repo}/issues`) |
+| `PHASER_LICENSE_NAME` | License label in About (default detected from `LICENSE` / `LICENSE.txt`) |
+| `PHASER_LICENSE_URL` | License link in About (default `{repo}/blob/main/<license-file>`) |
+| `PHASER_DOI_URL` | Override baked-in Zenodo DOI from `__version__.py` (forks only) |
+| `PHASER_BUILD_ID` | Optional build/commit id (set automatically in CI Docker builds) |
 | `PHASER_DISABLED_DB_STEMS` | Comma-separated database stems/ids to hide from the UI (default: `iso`, `coldchem`, `frezchem`, `kinec-v2`, `kinec-v3`, `phreeqc-rates`, `pitzer`, `sit` — from `iso.dat`, `ColdChem.dat`, `frezchem.dat`, `Kinec.v2.dat`, `Kinec_v3.dat`, `phreeqc_rates.dat`, `pitzer.dat`, `sit.dat`; empty = show all) |
 | `PHASER_BUILTIN_DB_DIRS` | Extra builtin scan dirs (`os.pathsep`-separated) |
 | `PHASER_GENERATED_DB_DIR` | Override generated database directory |
@@ -337,8 +354,8 @@ The optional **Adaptive boundaries** mode evaluates the full user-selected grid,
 
 **Pipeline:**
 
-1. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
-2. **Collision detection** — `solid_aqueous_collisions` scans the base results for phase names that also appear as aqueous species; colliding solids are labelled `"<name>(s)"` on `GridJobParams` before tracing.
+1. **Solid/aqueous name collisions** — names shared by a solid phase and an aqueous species come from the SQLite catalog (`solid_aqueous_collisions`, detected at database scan). `services/compute.py` loads them onto `GridJobParams` before the sweep; colliding solids are labelled `"<name>(s)"` during packing and tracing (not inferred from grid results).
+2. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
 3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners.
 4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with dynamic chunking). For each layer and cell:
    - **2-category cells** — `scipy.optimize.brentq` along cell edges locates crossings of a continuous scalar whose zero is the boundary:
@@ -441,7 +458,7 @@ After the sweep, each grid point has SI values and aqueous dominance data. The p
 
 | Toggle | Maps computed | Example (Fe–C system) |
 |--------|---------------|------------------------|
-| **On** | One map per non-empty element subset | `Fe`, `C`, `Fe-C` (7 subsets for 3 elements) |
+| **On** | One map per non-empty element subset | `Fe`, `C`, `Fe-C` (7 subsets for a 3-element system such as Fe–C–Mg) |
 | **Off** | One combined map over the full system | `Fe-C` only |
 
 With **one element** in the system, per-element subsets are ignored automatically (only the full-system map is computed).
@@ -714,7 +731,7 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 |--------|------|-------------|
 | `GET` | `/` | Web UI |
 | `GET` | `/api/health` | Liveness check (**exempt** from rate limits) |
-| `GET` | `/api/config` | Defaults, worker/queue limits, `rate_limits`, default `db_id`, database list |
+| `GET` | `/api/config` | Defaults, worker/queue limits, `rate_limits`, `about`, default `db_id`, database list |
 | `GET` | `/api/databases` | List available databases |
 | `GET` | `/api/databases/{db_id}` | Database details |
 | `POST` | `/api/databases/register` | Register generated database metadata (`.dat` must already be on server) |
@@ -829,17 +846,15 @@ sequenceDiagram
     API-->>UI: job_id and queue_position
     Job->>Reg: resolve db_id to path
     alt adaptive_boundaries
-        Job->>Sw: base grid sweep
-        Job->>Ad: flag boundary cells
+        Job->>Ad: run_adaptive_boundary_sweep (base grid + trace)
         Ad->>Tr: root-find boundaries (parallel)
         Job->>Pack: pack_grid_results
         Job->>Vec: pack_traced_display
     else uniform
         Job->>Sw: run_grid_sweep
+        Job->>Pack: pack_grid_results
     end
-    Job->>Pack: pack_grid_results
-    Pack-->>Job: layered grids
-    Vec-->>Job: vector display layers
+    Pack-->>Job: layered grids (+ vector display if adaptive)
     loop Poll while running or after page reload
         UI->>API: GET job status
         API-->>UI: progress and phase
@@ -993,12 +1008,13 @@ PHASER ships as a **Docker image** on GHCR. One compose file — **`docker-compo
 The workflow `.github/workflows/docker-publish.yml` builds and pushes to **GHCR** on every push to **`main`** and on version tags (`v1.2.3`):
 
 ```text
-ghcr.io/matteo-loche/phaser:latest     # newest main
-ghcr.io/matteo-loche/phaser:sha-<commit>
-ghcr.io/matteo-loche/phaser:1.2.3      # version tags
+ghcr.io/matteo-loche/phaser:latest   # newest commit on main
+ghcr.io/matteo-loche/phaser:0.1.0    # git tag v0.1.0
 ```
 
 Pushes to **`main`** and tags matching **`v*`** trigger a build; other branches do not update `:latest`.
+
+Application version (and optional DOI) are defined in **`__version__.py`** and exposed via `GET /api/config` under `about`.
 
 ### Production server
 
@@ -1040,7 +1056,19 @@ Generated databases persist via `PHASER_DATA_DIR` (host path) → container `dat
 | `WATCHTOWER_INTERVAL` | Compose profile | Auto-update poll interval (`watchtower` profile) |
 | `PHASER_DATA_DIR` | Compose volume | Host path for generated `.dat` files |
 
-Set **`PHASER_CPU_LIMIT` and `PHASER_MAX_WORKERS` to the same value**. Defaults: **8 CPUs / 8 workers / 8 GB RAM**. After editing `.env`: `docker compose up -d`.
+### CPU, workers, and concurrent jobs
+
+| Variable | Role |
+|----------|------|
+| `PHASER_CPU_LIMIT` | Docker cgroup CPU cap for the container |
+| `PHASER_MAX_WORKERS` | PHREEQC worker processes **per sweep** (each holds an IPhreeqc instance) |
+| `PHASER_MAX_CONCURRENT_JOBS` | How many sweeps may run at once; extra jobs wait in the FIFO queue |
+
+With **`PHASER_MAX_CONCURRENT_JOBS=1`** (default), a common starting point is **`PHASER_CPU_LIMIT` = `PHASER_MAX_WORKERS`** so one job can use the full pool.
+
+With **`PHASER_MAX_CONCURRENT_JOBS` > 1**, peak demand is roughly **`MAX_CONCURRENT_JOBS × MAX_WORKERS`** processes. Either raise `PHASER_CPU_LIMIT` accordingly, or lower `MAX_WORKERS` so concurrent jobs share the cgroup without heavy oversubscription. **Higher workers** → faster single diagrams; **lower workers + more concurrent jobs** → better throughput when the queue stays busy.
+
+Defaults in `.env.example`: **8 CPUs / 8 workers / 1 concurrent job / 8 GB RAM**. After editing `.env`: `docker compose up -d`.
 
 Verify: `GET /api/config` returns `max_workers`, `max_concurrent_jobs`, and `rate_limits`.
 
@@ -1088,8 +1116,8 @@ Tailscale and LAN work **alongside** localhost — no extra PHASER config. For H
 
 1. Mount persistent storage for `data/databases/generated` (`PHASER_DATA_DIR`).
 2. Catalog and stats SQLite files are created on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` for persistence across container recreation.
-3. Set `PHASER_CPU_LIMIT`, `PHASER_MEMORY_LIMIT`, and `PHASER_MAX_WORKERS` in `.env` to match the host (defaults: 8 CPUs, 8 workers, 8 GB).
-4. Set `PHASER_MAX_CONCURRENT_JOBS` from available CPU/RAM (default `1` is safe on shared hosts).
+3. Tune **`PHASER_CPU_LIMIT`**, **`PHASER_MAX_CONCURRENT_JOBS`**, and **`PHASER_MAX_WORKERS`** together (see [CPU, workers, and concurrent jobs](#cpu-workers-and-concurrent-jobs) above); set **`PHASER_MEMORY_LIMIT`** for available RAM (defaults: 8 CPUs, 8 workers, 1 concurrent job, 8 GB).
+4. On shared hosts, keep **`PHASER_MAX_CONCURRENT_JOBS=1`** unless you have headroom for parallel sweeps.
 5. Review **`PHASER_RATE_LIMIT_*`** before exposing publicly (defaults: 12 compute burst → 10 min cooldown; see [API rate limiting](#api-rate-limiting)).
 6. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use [Cloudflare Tunnel](#cloudflare-tunnel).
 7. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register` (subject to register rate limits).

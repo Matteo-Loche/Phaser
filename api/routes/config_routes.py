@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter
 
 from ... import config
+from ...__version__ import __version__
 from ...chemistry.units import unit_label
 from ...db.catalog_store import catalog_public_meta, list_elements, require_ready
 from ...db.registry import get_default_database, list_enabled_databases
@@ -84,5 +85,14 @@ def get_config():
         },
         "db_exists": bool(default_db and default_db.exists),
         "dll_exists": Path(config.IPHREEQC_DLL).is_file(),
+        "about": {
+            "app_version": __version__,
+            "build_id": config.BUILD_ID,
+            "repository_url": config.REPOSITORY_URL,
+            "issues_url": config.ISSUES_URL,
+            "license_name": config.LICENSE_NAME,
+            "license_url": config.LICENSE_URL,
+            "doi_url": config.DOI_URL,
+        },
         **catalog_meta,
     }

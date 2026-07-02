@@ -45,7 +45,7 @@ def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEME
         entries.sort(key=lambda e: e[1], reverse=True)
         return entries
 
-    # Legacy results: reconstruct from the flat species map / dominant fallback.
+    # Fallback when per-element rankings are absent: use flat species maps.
     mols: dict[str, float] = dict(row.get("aq_molality_by_species") or {})
     elem_map: dict[str, str] = dict(row.get("aq_species_element") or {})
     if not mols:
@@ -58,13 +58,13 @@ def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEME
                 elem_map.setdefault(sp, elem)
     if not mols:
         return []
-    legacy_by_elem: dict[str, list[tuple[str, float]]] = {}
+    flat_by_elem: dict[str, list[tuple[str, float]]] = {}
     for sp, m in mols.items():
         if not (m == m) or m <= 0:
             continue
-        legacy_by_elem.setdefault(elem_map.get(sp, ""), []).append((sp, m))
+        flat_by_elem.setdefault(elem_map.get(sp, ""), []).append((sp, m))
     entries = []
-    for elem, lst in legacy_by_elem.items():
+    for elem, lst in flat_by_elem.items():
         lst.sort(key=lambda kv: kv[1], reverse=True)
         for sp, m in lst[:per_element]:
             entries.append([sp, m, elem])
@@ -119,22 +119,6 @@ def label_is_solid(
     if label.endswith(SOLID_SUFFIX) and label[: -len(SOLID_SUFFIX)] in solid_set:
         return True
     return label in solid_set and label not in collision_names
-
-
-def solid_aqueous_collisions(rows: list[dict], job_phases: tuple[str, ...]) -> frozenset[str]:
-    """Phase names that also occur as aqueous species names across the results.
-
-    Derived purely from the job's phase list and the species PHREEQC reports, so
-    it is database- and system-agnostic (no hardcoded names).
-    """
-    solid_set = set(job_phases)
-    aq_names: set[str] = set()
-    for row in rows:
-        for sp in (row.get("dominant_aq_by_element") or {}).values():
-            if sp and sp not in ("none", "aqueous"):
-                aq_names.add(sp)
-        aq_names.update((row.get("aq_molality_by_species") or {}).keys())
-    return frozenset(solid_set & aq_names)
 
 
 def subset_key(subset: tuple[str, ...]) -> str:
@@ -247,7 +231,7 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
         if best_sp != "none":
             return best_sp
         return dominant_aq_in_subset(row, subset)
-    # Legacy results (no per-element ranking): fall back to flat species map.
+    # Fallback when per-element rankings are absent: use flat species maps.
     mols = row.get("aq_molality_by_species") or {}
     elem_map = row.get("aq_species_element") or {}
     best_sp, best_m = "none", -1.0
