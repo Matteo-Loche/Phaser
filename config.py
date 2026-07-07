@@ -237,6 +237,8 @@ BOUNDARY_TRACE_TOLERANCE = float(os.environ.get("PHASER_BOUNDARY_TRACE_TOLERANCE
 # Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
 TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "8"))
 TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "8"))
+# Base grid sweep: ProcessPoolExecutor.map chunksize (points per IPC message).
+SWEEP_MAP_CHUNKSIZE = int(os.environ.get("PHASER_SWEEP_MAP_CHUNKSIZE", "200"))
 
 # Completed job results are dropped from server memory after this TTL if the
 # browser never fetched them (or after fetch + DELETE). Also used by the reaper.
