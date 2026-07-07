@@ -1475,34 +1475,48 @@ def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _morton_code(i: int, j: int) -> int:
+    """2D Morton (Z-order) key for grid cell lower-left index ``(i, j)``."""
+    code = 0
+    for bit in range(16):
+        code |= ((i >> bit) & 1) << (2 * bit + 1)
+        code |= ((j >> bit) & 1) << (2 * bit)
+    return code
+
+
+def _sort_cells_morton(cells: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    return sorted(cells, key=lambda ij: _morton_code(ij[0], ij[1]))
+
+
 def _chunk_cells(
     cells: list[tuple[int, int]],
     *,
     workers: int,
-    multiplier: int | None = None,
-    min_cells_per_chunk: int | None = None,
 ) -> list[list[tuple[int, int]]]:
-    """Split cells into many small chunks for dynamic pool load-balancing."""
+    """Split mixed cells into worker chunks (Morton order, contiguous blocks)."""
     if not cells:
         return []
-    mult = multiplier if multiplier is not None else config.TRACE_CHUNK_MULTIPLIER
-    min_chunk = (
-        min_cells_per_chunk
-        if min_cells_per_chunk is not None
-        else config.TRACE_MIN_CELLS_PER_CHUNK
-    )
+    mult = config.TRACE_CHUNK_MULTIPLIER
+    min_chunk = config.TRACE_MIN_CELLS_PER_CHUNK
     if workers <= 1 or len(cells) <= min_chunk:
         return [cells]
 
+    ordered = _sort_cells_morton(cells)
+
     target_chunks = workers * max(1, mult)
-    max_chunks = max(1, len(cells) // min_chunk)
-    n_chunks = min(target_chunks, max_chunks, len(cells))
+    max_chunks = max(1, len(ordered) // min_chunk)
+    n_chunks = min(target_chunks, max_chunks, len(ordered))
     n_chunks = max(n_chunks, workers)
 
-    chunks: list[list[tuple[int, int]]] = [[] for _ in range(n_chunks)]
-    for idx, cell in enumerate(cells):
-        chunks[idx % n_chunks].append(cell)
-    return [c for c in chunks if c]
+    base, extra = divmod(len(ordered), n_chunks)
+    chunks: list[list[tuple[int, int]]] = []
+    start = 0
+    for ci in range(n_chunks):
+        size = base + (1 if ci < extra else 0)
+        if size:
+            chunks.append(ordered[start : start + size])
+            start += size
+    return chunks
 
 
 def run_boundary_trace(
