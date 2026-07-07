@@ -30,7 +30,7 @@ Key behaviours:
 
 ## Quick start
 
-### Docker (server / local test)
+### Docker
 
 Pull the pre-built image from GHCR — no local compiler required:
 
@@ -112,6 +112,8 @@ PHASER/
 │   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
 ├── static/
 │   └── index.html         # Single-page web UI
+├── scripts/
+│   └── smoke_check.py     # Import/registry smoke test
 ├── docker-compose.yml     # Server deployment (pull GHCR; optional local build)
 ├── Dockerfile             # Image build (used by GitHub Actions and compose --build)
 ├── .github/workflows/
@@ -357,7 +359,7 @@ A **single `SOLUTION`** at the requested `(pH, pe)` with user element totals —
 A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
 
 - `ProcessPoolExecutor` spawns worker processes (`PHASER_MAX_WORKERS`, server-configured).
-- Each worker initializes its own IPhreeqc instance and receives **`GridJobParams` once** via the pool initializer (`grid_job_params_from_dict`); per-point tasks carry only `(pH, pe)`.
+- Each worker initializes its own IPhreeqc instance and receives **`GridJobParams` once** via the pool initializer (`grid_job_params_from_dict`); per-point tasks carry only `(pH, pe)` (avoids pickling the full job descriptor on every point).
 - `pool.map` uses **`SWEEP_MAP_CHUNKSIZE`** (default `200`, env `PHASER_SWEEP_MAP_CHUNKSIZE`) so several points share one IPC message. This is separate from boundary-trace chunking (see below).
 - `pool.map` evaluates all `(pH, pe)` pairs, preserving order.
 - Progress callback updates job status for the UI poll loop.
@@ -383,7 +385,7 @@ The optional **Adaptive boundaries** mode evaluates the full user-selected grid,
      - *Band* (four crossings): the doubled category sits on the diagonal, so each single-corner category is the half-plane cut off by the line joining its two adjacent crossings, and the doubled category is the convex strip between both cuts.
    - **2-category saddles** (four edge crossings) — two intersecting dividing lines.
    - **Fallback** — unresolved cells (4+ categories, lost brackets) share one local `(factor+1)²` sub-grid evaluation per cell across all layers, then marching squares on the sampled category field.
-   - **Crossing cache** — identical edge crossings are cached per worker across layers that share geometry.
+   - **Crossing cache** — edge `brentq` results are keyed by canonical grid-node pairs (shared by adjacent cells) and category pair, so each physical edge is root-found once per worker; converged↔failed edges use the same deduplication. Hits apply across layers that share geometry.
 5. **Vector display** (`diagram/vectors.py`) — per layer, a fine categorical grid is assembled from base data, traced overrides, and exact dividing-line geometry. Fills come from **signed-distance fields** whose zero contour matches the traced segments: straight lines for 2-category cells, and per-region line bounds (min of half-planes) for triple/band cells, with disconnected pieces of one category combined by union. Boundary polylines are taken directly from the trace bundle. In titration mode, O₂/H₂ overlays and water-band clipping are applied (`water_stability_limits_enabled`); direct mode uses the full plot frame. A despeckle pass removes isolated pixels from fallback regions.
 
 Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SPECIES`, default 4) while keeping explicit `-mol` output for species seen on boundaries.
@@ -948,13 +950,6 @@ PHASER can consume databases produced by external tools:
   ```bash
   python scripts/smoke_check.py
   ```
-- **Local unit tests** (optional; `tests/` is gitignored and not shipped):
-  ```bash
-  python -m PHASER.tests.test_boundary_trace
-  python -m PHASER.tests.test_vectors
-  python -m PHASER.tests.test_layer_toggles
-  ```
-  From the parent of the `PHASER` folder, with the project venv active (WSL recommended).
 
 ---
 

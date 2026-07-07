@@ -62,11 +62,36 @@ class TraceStats:
 _CROSSING_UNCACHED = object()
 
 
-def _crossing_cache_key(
+def _edge_grid_nodes(i: int, j: int, edge: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Grid-node indices (ph_idx, pe_idx) at the start and end of a cell edge."""
+    corners = ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1))
+    return corners[edge], corners[(edge + 1) % 4]
+
+
+def _canonical_edge_crossing_key(
     i: int, j: int, edge: int, cat_a: str, cat_b: str
-) -> tuple[int, int, int, str, str]:
-    lo, hi = sorted((cat_a, cat_b))
-    return (i, j, edge, lo, hi)
+) -> tuple[tuple[int, int], tuple[int, int], str, str, bool]:
+    """Cache key for a physical grid edge and category pair.
+
+    Returns ``(n_lo, n_hi, lo_cat, hi_cat, forward)`` where ``n_lo <= n_hi``
+    lexicographically and *forward* is True when the local edge direction runs
+    from ``n_lo`` to ``n_hi`` (so ``t_local == t_canonical``).
+    """
+    n0, n1 = _edge_grid_nodes(i, j, edge)
+    lo_c, hi_c = sorted((cat_a, cat_b))
+    if n0 <= n1:
+        return n0, n1, lo_c, hi_c, True
+    return n1, n0, lo_c, hi_c, False
+
+
+def _canonical_convergence_key(
+    i: int, j: int, edge: int
+) -> tuple[tuple[int, int], tuple[int, int], bool]:
+    """Canonical node-pair key for converged↔failed edge crossings."""
+    n0, n1 = _edge_grid_nodes(i, j, edge)
+    if n0 <= n1:
+        return n0, n1, True
+    return n1, n0, False
 
 
 def _merge_stats(dest: TraceStats, src: TraceStats) -> None:
@@ -83,7 +108,12 @@ class PointEvaluator:
         self._full: set[tuple[float, float]] = set()
         self.n_evals = 0
         self._pq = init_phreeqc(params.dll_path, params.db_path)
-        self._crossing_t: dict[tuple[int, int, int, str, str], float | None] = {}
+        self._crossing_t: dict[
+            tuple[tuple[int, int], tuple[int, int], str, str], float | None
+        ] = {}
+        self._convergence_crossing_t: dict[
+            tuple[tuple[int, int], tuple[int, int]], float | None
+        ] = {}
         # Solid phases identify solid<->aqueous edges (where the aqueous side is
         # labelled by its dominant species, not the literal string "aqueous").
         self.solid_phases: frozenset[str] = frozenset(params.phases)
@@ -94,10 +124,16 @@ class PointEvaluator:
     def crossing_t_lookup(
         self, i: int, j: int, edge: int, cat_a: str, cat_b: str
     ) -> float | None | object:
-        key = _crossing_cache_key(i, j, edge, cat_a, cat_b)
+        n_lo, n_hi, lo_c, hi_c, forward = _canonical_edge_crossing_key(
+            i, j, edge, cat_a, cat_b
+        )
+        key = (n_lo, n_hi, lo_c, hi_c)
         if key not in self._crossing_t:
             return _CROSSING_UNCACHED
-        return self._crossing_t[key]
+        t_canon = self._crossing_t[key]
+        if t_canon is None:
+            return None
+        return t_canon if forward else 1.0 - t_canon
 
     def store_crossing_t(
         self,
@@ -108,7 +144,42 @@ class PointEvaluator:
         cat_b: str,
         t: float | None,
     ) -> None:
-        self._crossing_t[_crossing_cache_key(i, j, edge, cat_a, cat_b)] = t
+        n_lo, n_hi, lo_c, hi_c, forward = _canonical_edge_crossing_key(
+            i, j, edge, cat_a, cat_b
+        )
+        key = (n_lo, n_hi, lo_c, hi_c)
+        if t is None:
+            t_canon = None
+        elif forward:
+            t_canon = t
+        else:
+            t_canon = 1.0 - t
+        self._crossing_t[key] = t_canon
+
+    def convergence_crossing_t_lookup(
+        self, i: int, j: int, edge: int
+    ) -> float | None | object:
+        n_lo, n_hi, forward = _canonical_convergence_key(i, j, edge)
+        key = (n_lo, n_hi)
+        if key not in self._convergence_crossing_t:
+            return _CROSSING_UNCACHED
+        t_canon = self._convergence_crossing_t[key]
+        if t_canon is None:
+            return None
+        return t_canon if forward else 1.0 - t_canon
+
+    def store_convergence_crossing_t(
+        self, i: int, j: int, edge: int, t: float | None
+    ) -> None:
+        n_lo, n_hi, forward = _canonical_convergence_key(i, j, edge)
+        key = (n_lo, n_hi)
+        if t is None:
+            t_canon = None
+        elif forward:
+            t_canon = t
+        else:
+            t_canon = 1.0 - t
+        self._convergence_crossing_t[key] = t_canon
 
     def eval(self, ph: float, pe: float) -> dict:
         key = _point_key(ph, pe)
@@ -470,7 +541,7 @@ def _edge_crossing_t(
     tol: float,
     stats: TraceStats | None = None,
 ) -> float | None:
-    """Parametric crossing along one edge, cached per (cell, edge, cat pair)."""
+    """Parametric crossing along one edge, cached per physical edge and cat pair."""
     cached = evaluator.crossing_t_lookup(i, j, edge, cat_a, cat_b)
     if cached is not _CROSSING_UNCACHED:
         if stats is not None:
@@ -1217,9 +1288,16 @@ def _trace_stability_cell(
         if c0 == c1:
             continue
         ph0, pe0, ph1, pe1 = _edge_coords(i, j, edge, base_ph, base_pe)
-        t = _find_convergence_crossing(
-            evaluator, ph0, pe0, ph1, pe1, tol=tol, stats=stats
-        )
+        cached = evaluator.convergence_crossing_t_lookup(i, j, edge)
+        if cached is not _CROSSING_UNCACHED:
+            if stats is not None:
+                stats.n_crossing_cache_hits += 1
+            t = cached  # type: ignore[assignment]
+        else:
+            t = _find_convergence_crossing(
+                evaluator, ph0, pe0, ph1, pe1, tol=tol, stats=stats
+            )
+            evaluator.store_convergence_crossing_t(i, j, edge, t)
         if t is None:
             continue
         x, y = _interp_point(t, ph0, pe0, ph1, pe1)
