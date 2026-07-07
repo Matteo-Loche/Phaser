@@ -539,6 +539,7 @@ def _edge_crossing_t(
     base_pe: np.ndarray,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> float | None:
     """Parametric crossing along one edge, cached per physical edge and cat pair."""
@@ -548,8 +549,9 @@ def _edge_crossing_t(
             stats.n_crossing_cache_hits += 1
         return cached  # type: ignore[return-value]
     ph0, pe0, ph1, pe1 = _edge_coords(i, j, edge, base_ph, base_pe)
+    edge_tol = stability_tol if "none" in (cat_a, cat_b) else tol
     t = _find_crossing_brentq(
-        evaluator, cat_a, cat_b, ph0, pe0, ph1, pe1, tol=tol, stats=stats
+        evaluator, cat_a, cat_b, ph0, pe0, ph1, pe1, tol=edge_tol, stats=stats
     )
     evaluator.store_crossing_t(i, j, edge, cat_a, cat_b, t)
     return t
@@ -580,6 +582,7 @@ def _traced_cell(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]] | None:
     """Exact dividing-line geometry (+ optional boundary segment) for a 2-cat cell.
@@ -598,7 +601,8 @@ def _traced_cell(
         if ca == cb:
             continue
         t = _edge_crossing_t(
-            evaluator, ca, cb, i, j, edge, base_ph, base_pe, tol=tol, stats=stats
+            evaluator, ca, cb, i, j, edge, base_ph, base_pe,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if t is None:
             return None
@@ -678,6 +682,7 @@ def _collect_edge_crossings(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> dict[int, tuple[tuple[float, float], tuple[float, float]]] | None:
     """Edge crossings keyed by edge index -> (local_xy, world_xy)."""
@@ -688,7 +693,8 @@ def _collect_edge_crossings(
         if ca == cb:
             continue
         t = _edge_crossing_t(
-            evaluator, ca, cb, i, j, edge, base_ph, base_pe, tol=tol, stats=stats
+            evaluator, ca, cb, i, j, edge, base_ph, base_pe,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if t is None:
             return None
@@ -986,6 +992,7 @@ def _trace_triple_cell(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[dict[tuple[int, int], str], list[dict[str, Any]], dict[str, Any] | None] | None:
     """3-category cell: edge brentq plus convex per-category fill regions.
@@ -1000,7 +1007,8 @@ def _trace_triple_cell(
     if len(distinct) != 3:
         return None
     crossings = _collect_edge_crossings(
-        evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+        evaluator, corners, i, j, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
     )
     if not crossings:
         return None
@@ -1115,13 +1123,15 @@ def _trace_saddle_cell(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[dict[tuple[int, int], str], list[dict[str, Any]]] | None:
     """2-category cell with four edge crossings (saddle topology)."""
     if len(set(corners)) != 2:
         return None
     crossings = _collect_edge_crossings(
-        evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+        evaluator, corners, i, j, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
     )
     if crossings is None or len(crossings) != 4:
         return None
@@ -1155,6 +1165,7 @@ def _classify_cell(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[
     dict[str, Any] | None,
@@ -1178,7 +1189,8 @@ def _classify_cell(
 
     if len(distinct) == 3:
         triple = _trace_triple_cell(
-            evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+            evaluator, corners, i, j, base_ph, base_pe, factor,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if triple is not None:
             node_cats, segments, region_rec = triple
@@ -1188,7 +1200,8 @@ def _classify_cell(
 
     if len(distinct) == 2:
         saddle = _trace_saddle_cell(
-            evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+            evaluator, corners, i, j, base_ph, base_pe, factor,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if saddle is not None:
             node_cats, segments = saddle
@@ -1202,7 +1215,8 @@ def _classify_cell(
         return None, None, [], None, True
 
     traced = _traced_cell(
-        evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+        evaluator, corners, i, j, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
     )
     if traced is None:
         return None, None, [], None, True
@@ -1273,7 +1287,7 @@ def _trace_stability_cell(
     base_pe: np.ndarray,
     base_ij: dict[tuple[int, int], Any],
     *,
-    tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> list[dict[str, Any]]:
     """Trace converged / failed transition edges (stability limit)."""
@@ -1295,7 +1309,7 @@ def _trace_stability_cell(
             t = cached  # type: ignore[assignment]
         else:
             t = _find_convergence_crossing(
-                evaluator, ph0, pe0, ph1, pe1, tol=tol, stats=stats
+                evaluator, ph0, pe0, ph1, pe1, tol=stability_tol, stats=stats
             )
             evaluator.store_convergence_crossing_t(i, j, edge, t)
         if t is None:
@@ -1336,6 +1350,7 @@ def _trace_cells_batch(
     corner_ij: dict[tuple[int, int], dict],
     *,
     tol: float,
+    stability_tol: float,
     factor: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], TraceStats]:
     """Trace all layers + stability limits for a batch of cells (one worker)."""
@@ -1374,6 +1389,7 @@ def _trace_cells_batch(
                 corner_ij,
                 factor,
                 tol=tol,
+                stability_tol=stability_tol,
                 stats=stats,
             )
             if need_fallback:
@@ -1412,7 +1428,8 @@ def _trace_cells_batch(
     for i, j in cells:
         stability.extend(
             _trace_stability_cell(
-                evaluator, i, j, base_ph, base_pe, corner_ij, tol=tol, stats=stats
+                evaluator, i, j, base_ph, base_pe, corner_ij,
+                stability_tol=stability_tol, stats=stats,
             )
         )
 
@@ -1440,33 +1457,56 @@ def _trace_cells_batch(
     return layers_out, stability, stats
 
 
-def _trace_worker_init(dll_path: str, db_path: str) -> None:
-    global _WORKER_PQ
+_WORKER_PQ = None
+_WORKER_TRACE_PARAMS: GridJobParams | None = None
+_WORKER_BASE_PH: np.ndarray | None = None
+_WORKER_BASE_PE: np.ndarray | None = None
+_WORKER_TOL: float = 0.0
+_WORKER_STABILITY_TOL: float = 0.0
+_WORKER_FACTOR: int = 1
+
+
+def _trace_worker_init(
+    dll_path: str,
+    db_path: str,
+    trace_params_dict: dict[str, Any],
+    base_ph: list[float],
+    base_pe: list[float],
+    tol: float,
+    stability_tol: float,
+    factor: int,
+) -> None:
+    global _WORKER_PQ, _WORKER_TRACE_PARAMS, _WORKER_BASE_PH, _WORKER_BASE_PE
+    global _WORKER_TOL, _WORKER_STABILITY_TOL, _WORKER_FACTOR
     _WORKER_PQ = init_phreeqc(dll_path, db_path)
+    _WORKER_TRACE_PARAMS = grid_job_params_from_dict(trace_params_dict)
+    _WORKER_BASE_PH = np.asarray(base_ph, dtype=float)
+    _WORKER_BASE_PE = np.asarray(base_pe, dtype=float)
+    _WORKER_TOL = float(tol)
+    _WORKER_STABILITY_TOL = float(stability_tol)
+    _WORKER_FACTOR = int(factor)
 
 
 def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
     """Process-pool entry: trace a chunk of boundary cells."""
     cells: list[tuple[int, int]] = job["cells"]
-    trace_params = grid_job_params_from_dict(job["trace_params"])
-    db_path = job["db_path"]
-    base_ph = np.asarray(job["base_ph"], dtype=float)
-    base_pe = np.asarray(job["base_pe"], dtype=float)
     corner_ij = {
         tuple(int(p) for p in k.split(",")): v for k, v in job["corner_ij"].items()
     }
-    tol = job["tol"]
-    factor = int(job["factor"])
+    assert _WORKER_TRACE_PARAMS is not None
+    assert _WORKER_BASE_PH is not None
+    assert _WORKER_BASE_PE is not None
 
     layers_out, stability, stats = _trace_cells_batch(
         cells,
-        trace_params,
-        db_path,
-        base_ph,
-        base_pe,
+        _WORKER_TRACE_PARAMS,
+        _WORKER_TRACE_PARAMS.db_path,
+        _WORKER_BASE_PH,
+        _WORKER_BASE_PE,
         corner_ij,
-        tol=tol,
-        factor=factor,
+        tol=_WORKER_TOL,
+        stability_tol=_WORKER_STABILITY_TOL,
+        factor=_WORKER_FACTOR,
     )
     return {
         "layers": layers_out,
@@ -1528,12 +1568,14 @@ def run_boundary_trace(
     base_ij: dict[tuple[int, int], GridPointResult],
     cells: list[tuple[int, int]],
     tolerance: float | None = None,
+    stability_tolerance: float | None = None,
     refine_factor: int | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
     max_workers: int | None = None,
 ) -> tuple[dict[str, Any], TraceStats]:
     """Trace boundaries across all plottable layers for mixed base cells."""
     tol = tolerance or config.BOUNDARY_TRACE_TOLERANCE
+    stability_tol = stability_tolerance or config.BOUNDARY_TRACE_STABILITY_TOLERANCE
     factor = refine_factor or config.ADAPTIVE_REFINE_FACTOR
     specs = layer_specs(params, db_path)
     species = collect_trace_species(params, base_ij, cells, specs)
@@ -1556,6 +1598,7 @@ def run_boundary_trace(
             base_pe,
             corner_ij,
             tol=tol,
+            stability_tol=stability_tol,
             factor=factor,
         )
         if progress_cb:
@@ -1565,18 +1608,7 @@ def run_boundary_trace(
         for chunk in chunks:
             corner_ij = _corner_seed(chunk, base_ij)
             serial_corner = {f"{i},{j}": v for (i, j), v in corner_ij.items()}
-            jobs.append(
-                {
-                    "cells": chunk,
-                    "trace_params": asdict(trace_params),
-                    "db_path": db_path,
-                    "base_ph": base_ph.tolist(),
-                    "base_pe": base_pe.tolist(),
-                    "corner_ij": serial_corner,
-                    "tol": tol,
-                    "factor": factor,
-                }
-            )
+            jobs.append({"cells": chunk, "corner_ij": serial_corner})
 
         layers_out = {}
         stability: list[dict[str, Any]] = []
@@ -1585,7 +1617,16 @@ def run_boundary_trace(
         with ProcessPoolExecutor(
             max_workers=workers,
             initializer=_trace_worker_init,
-            initargs=(params.dll_path, params.db_path),
+            initargs=(
+                params.dll_path,
+                params.db_path,
+                asdict(trace_params),
+                base_ph.tolist(),
+                base_pe.tolist(),
+                tol,
+                stability_tol,
+                factor,
+            ),
         ) as pool:
             for result in pool.map(_trace_worker_job, jobs):
                 chunk_stats = TraceStats(**result["stats"])
@@ -1638,6 +1679,7 @@ def run_boundary_trace(
     trace_bundle: dict[str, Any] = {
         "method": "traced",
         "tolerance": tol,
+        "stability_tolerance": stability_tol,
         "refine_factor": factor,
         "top_aq_species_per_element": trace_params.top_aq_species_per_element,
         "aq_species": list(species),

@@ -232,8 +232,13 @@ HOVER_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_HOVER_SPECIES_PER_ELEMENT
 BOUNDARY_TRACE_TOP_AQ_SPECIES = int(
     os.environ.get("PHASER_TRACE_TOP_AQ_SPECIES", "4")
 )
-# Relative tolerance for 1D root finding along cell edges (trace mode).
-BOUNDARY_TRACE_TOLERANCE = float(os.environ.get("PHASER_BOUNDARY_TRACE_TOLERANCE", "1e-4"))
+# Relative tolerance for 1D root finding along phase-boundary cell edges (trace mode).
+# Straight chord geometry dominates display error; 1e-3 is ample vs sub-node brentq.
+BOUNDARY_TRACE_TOLERANCE = float(os.environ.get("PHASER_BOUNDARY_TRACE_TOLERANCE", "1e-3"))
+# Looser tolerance for converged↔failed (stability) edges — ±1 step scalar, not thermodynamics.
+BOUNDARY_TRACE_STABILITY_TOLERANCE = float(
+    os.environ.get("PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE", "1e-2")
+)
 # Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
 TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "8"))
 TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "8"))

@@ -360,6 +360,7 @@ A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
 
 - `ProcessPoolExecutor` spawns worker processes (`PHASER_MAX_WORKERS`, server-configured).
 - Each worker initializes its own IPhreeqc instance and receives **`GridJobParams` once** via the pool initializer (`grid_job_params_from_dict`); per-point tasks carry only `(pH, pe)` (avoids pickling the full job descriptor on every point).
+- Boundary tracing uses the same pattern: workers receive `trace_params`, axis arrays, and tolerances once in `_trace_worker_init`; per-chunk jobs carry only `cells` and corner seed data.
 - `pool.map` uses **`SWEEP_MAP_CHUNKSIZE`** (default `200`, env `PHASER_SWEEP_MAP_CHUNKSIZE`) so several points share one IPC message. This is separate from boundary-trace chunking (see below).
 - `pool.map` evaluates all `(pH, pe)` pairs, preserving order.
 - Progress callback updates job status for the UI poll loop.
@@ -386,6 +387,7 @@ The optional **Adaptive boundaries** mode evaluates the full user-selected grid,
    - **2-category saddles** (four edge crossings) — two intersecting dividing lines.
    - **Fallback** — unresolved cells (4+ categories, lost brackets) share one local `(factor+1)²` sub-grid evaluation per cell across all layers, then marching squares on the sampled category field.
    - **Crossing cache** — edge `brentq` results are keyed by canonical grid-node pairs (shared by adjacent cells) and category pair, so each physical edge is root-found once per worker; converged↔failed edges use the same deduplication. Hits apply across layers that share geometry.
+   - **Tolerances** — phase-boundary `brentq` uses `BOUNDARY_TRACE_TOLERANCE` (default `1e-3`); converged↔failed edges use the looser `BOUNDARY_TRACE_STABILITY_TOLERANCE` (default `1e-2`). Straight chord fills dominate display error, so sub-node brentq precision is unnecessary; stability frontiers are numerical artifacts, not thermodynamic boundaries.
 5. **Vector display** (`diagram/vectors.py`) — per layer, a fine categorical grid is assembled from base data, traced overrides, and exact dividing-line geometry. Fills come from **signed-distance fields** whose zero contour matches the traced segments: straight lines for 2-category cells, and per-region line bounds (min of half-planes) for triple/band cells, with disconnected pieces of one category combined by union. Boundary polylines are taken directly from the trace bundle. In titration mode, O₂/H₂ overlays and water-band clipping are applied (`water_stability_limits_enabled`); direct mode uses the full plot frame. A despeckle pass removes isolated pixels from fallback regions.
 
 Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SPECIES`, default 4) while keeping explicit `-mol` output for species seen on boundaries.
@@ -414,7 +416,8 @@ Limits (`config.py`):
 | `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI and API default for adaptive mode |
 | `ADAPTIVE_REFINE_FACTOR` | 5 | Fine display raster + fallback sub-grid factor (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
 | `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evaluations in adaptive mode (env `PHASER_MAX_ADAPTIVE_POINTS`) |
-| `BOUNDARY_TRACE_TOLERANCE` | 1e-4 | Relative tolerance for `brentq` / 2D root finding (env `PHASER_BOUNDARY_TRACE_TOLERANCE`) |
+| `BOUNDARY_TRACE_TOLERANCE` | 1e-3 | Phase-boundary root finding (`brentq` / 2D roots; env `PHASER_BOUNDARY_TRACE_TOLERANCE`) |
+| `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed stability edges (looser; env `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE`) |
 | `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N species per element during tracing (env `PHASER_TRACE_TOP_AQ_SPECIES`) |
 | `TOP_AQ_SPECIES_PER_ELEMENT` | 64 | Top-N species per element in the base grid sweep (env `PHASER_TOP_AQ_SPECIES`) |
 | `HOVER_SPECIES_PER_ELEMENT` | 4 | Species kept per element in packed hover data (env `PHASER_HOVER_SPECIES_PER_ELEMENT`) |
@@ -909,7 +912,8 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
 | Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Display subdivision factor in adaptive mode |
 | Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft cap on total PHREEQC runs in adaptive mode |
-| Boundary trace tolerance | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-4` | Root-finding tolerance along cell edges |
+| Boundary trace tolerance | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-3` | Phase-boundary root finding along cell edges |
+| Stability trace tolerance | `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed edge root finding |
 | Trace top-N species | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH species slots during tracing |
 | Grid top-N species | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH species slots in base grid sweep |
 | Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `4` | Species kept per element in packed hover JSON |
