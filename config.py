@@ -189,6 +189,26 @@ PE_MIN = -10.0
 PE_MAX = 14.0
 GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
 
+# Grid-point PHREEQC input modes (see phreeqc/input_titration.py, input_direct.py).
+SOLUTION_MODE_DEFAULT = "titration"
+SOLUTION_MODE_META: dict[str, dict[str, str]] = {
+    "titration": {
+        "label": "Charge-balanced titration",
+        "description": (
+            "Acidic seed solution charge-balanced with Cl⁻; pH fixed via Fix_H⁺/NaOH "
+            "titration and redox via O₂(g) fugacity. Solution remains electroneutral."
+        ),
+    },
+    "direct": {
+        "label": "Direct (fixed pH–pe)",
+        "description": (
+            "Single SOLUTION at each grid point with the requested pH, pe, and totals. "
+            "No charge balancing — electroneutrality may be violated."
+        ),
+    },
+}
+SOLUTION_MODES: tuple[str, ...] = tuple(SOLUTION_MODE_META.keys())
+
 MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200
 MAX_WORKERS = int(os.environ.get("PHASER_MAX_WORKERS", "8"))

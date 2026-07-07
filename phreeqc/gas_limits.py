@@ -20,6 +20,11 @@ from .sweep import _point_key
 _WATER_GASES = ("O2(g)", "H2(g)")
 
 
+def water_stability_limits_enabled(params: GridJobParams) -> bool:
+    """Whether analytic O₂/H₂ water-stability overlays apply for this job."""
+    return params.solution_mode != "direct"
+
+
 def log_k_o2_water(*, temp_c: float = 25.0) -> float:
     """log K for O2(g) + 4H+ + 4e- = 2H2O at temperature T (°C).
 
@@ -277,27 +282,28 @@ def trace_gas_limit_segments(
         return []
 
     segments: list[dict[str, Any]] = []
-    ph_lo, ph_hi = float(base_ph[0]), float(base_ph[-1])
-    pe_lo, pe_hi = float(base_pe[0]), float(base_pe[-1])
-    for gas, limit_atm in (
-        ("O2(g)", params.o2_limit_atm),
-        ("H2(g)", params.h2_limit_atm),
-    ):
-        line = _water_gas_limit_line(
-            gas, temp_c=params.temp_c, limit_atm=limit_atm,
-            ph0=ph_lo, ph1=ph_hi, pe0=pe_lo, pe1=pe_hi,
-        )
-        if line is None:
-            continue
-        x0, y0, x1, y1 = line
-        segments.append({
-            "kind": "gas_limit",
-            "gas": gas,
-            "limit_atm": limit_atm,
-            "style": "water",
-            "x": [x0, x1],
-            "y": [y0, y1],
-        })
+    if water_stability_limits_enabled(params):
+        ph_lo, ph_hi = float(base_ph[0]), float(base_ph[-1])
+        pe_lo, pe_hi = float(base_pe[0]), float(base_pe[-1])
+        for gas, limit_atm in (
+            ("O2(g)", params.o2_limit_atm),
+            ("H2(g)", params.h2_limit_atm),
+        ):
+            line = _water_gas_limit_line(
+                gas, temp_c=params.temp_c, limit_atm=limit_atm,
+                ph0=ph_lo, ph1=ph_hi, pe0=pe_lo, pe1=pe_hi,
+            )
+            if line is None:
+                continue
+            x0, y0, x1, y1 = line
+            segments.append({
+                "kind": "gas_limit",
+                "gas": gas,
+                "limit_atm": limit_atm,
+                "style": "water",
+                "x": [x0, x1],
+                "y": [y0, y1],
+            })
 
     component_gases = tuple(
         g for g in params.trace_gas_phases if g not in _WATER_GASES

@@ -27,6 +27,7 @@ from ..phreeqc.gas_limits import (
     water_gas_outside_labels,
     water_gas_scalar_grids,
     water_gas_sum_window,
+    water_stability_limits_enabled,
 )
 from .packer import (
     category_solid_subset,
@@ -402,20 +403,26 @@ def _pack_one_layer(
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble one display layer: polygons from SDF contouring + boundary lines."""
+    use_water = water_stability_limits_enabled(params)
     node_cats = layer_nodes.get("node_cat") or []
     cell_lines = layer_nodes.get("cell_lines") or []
     line_cat_names = {c for r in cell_lines for c in (r["pos"], r["neg"])}
-    o2_label, h2_label = water_gas_outside_labels(params)
+    if use_water:
+        o2_label, h2_label = water_gas_outside_labels(params)
+        extra_names = {o2_label, h2_label}
+    else:
+        o2_label = h2_label = None
+        extra_names = set()
     names = sorted(
         {cat_fn(r) for r in base_rows}
         | set(node_cats)
         | line_cat_names
-        | {o2_label, h2_label}
+        | extra_names
     )
     name_index = {name: i for i, name in enumerate(names)}
     none_idx = name_index.get("none", -999)
-    o2_idx = name_index[o2_label]
-    h2_idx = name_index[h2_label]
+    o2_idx = name_index.get(o2_label, -999) if use_water else -999
+    h2_idx = name_index.get(h2_label, -999) if use_water else -999
 
     base_idx = _base_index_grid(
         base_rows,
@@ -461,24 +468,25 @@ def _pack_one_layer(
     fine = _despeckle(fine)
     chem_fine = fine.copy()
 
-    o2_scalar, h2_scalar, inside_window = water_gas_scalar_grids(
-        fine_ph, fine_pe, params
-    )
-    fine[np.asarray(o2_scalar > 0.0)] = o2_idx
-    fine[np.asarray((h2_scalar > 0.0) & (o2_scalar <= 0.0))] = h2_idx
+    if use_water:
+        o2_scalar, h2_scalar, _inside_window = water_gas_scalar_grids(
+            fine_ph, fine_pe, params
+        )
+        fine[np.asarray(o2_scalar > 0.0)] = o2_idx
+        fine[np.asarray((h2_scalar > 0.0) & (o2_scalar <= 0.0))] = h2_idx
+        inside_dist = np.minimum(-o2_scalar, -h2_scalar)
+    else:
+        inside_dist = np.full(chem_fine.shape, np.inf, dtype=float)
 
     ph_lo, ph_hi = float(fine_ph[0]), float(fine_ph[-1])
     pe_lo, pe_hi = float(fine_pe[0]), float(fine_pe[-1])
 
-    # Group clean-cell dividing lines by the categories they bound, so each
-    # category's fill field can be overwritten with a continuous signed distance.
     recs_by_cat: dict[int, list[tuple[dict[str, Any], float]]] = defaultdict(list)
     for r in recs:
         recs_by_cat[r["pos"]].append((r, 1.0))
         recs_by_cat[r["neg"]].append((r, -1.0))
 
     polygons: list[dict[str, Any]] = []
-    inside_dist = np.minimum(-o2_scalar, -h2_scalar)
     for cat in range(len(names)):
         if cat == none_idx:
             continue
@@ -526,9 +534,13 @@ def _pack_one_layer(
         if not (field > 0.0).any():
             continue
         for xs, ys in _field_contours(field, fine_ph, fine_pe):
-            cx, cy = _clip_polygon_to_water_band(
-                [float(v) for v in xs], [float(v) for v in ys], params,
-            )
+            if use_water:
+                cx, cy = _clip_polygon_to_water_band(
+                    [float(v) for v in xs], [float(v) for v in ys], params,
+                )
+            else:
+                cx = [float(v) for v in xs]
+                cy = [float(v) for v in ys]
             if len(cx) < 3:
                 continue
             polygons.append(
@@ -540,23 +552,25 @@ def _pack_one_layer(
                 }
             )
 
-    # Boundary lines: traced chemistry segments (clipped to the water window so
-    # they don't bleed into the O₂/H₂ regions) plus the analytic gas-limit lines.
-    lower_sum, upper_sum = water_gas_sum_window(params)
-    chem_segments = _clip_segments_to_sum_window(
-        list(layer_nodes.get("boundaries") or []),
-        lower=lower_sum,
-        upper=upper_sum,
-    )
-    chem_segments.extend(
-        water_gas_boundary_segments(
-            params,
-            ph_min=float(fine_ph[0]),
-            ph_max=float(fine_ph[-1]),
-            pe_min=float(fine_pe[0]),
-            pe_max=float(fine_pe[-1]),
+    # Boundary lines: traced chemistry segments, optionally clipped to the
+    # water-stability window plus analytic O₂/H₂ gas-limit lines.
+    chem_segments = list(layer_nodes.get("boundaries") or [])
+    if use_water:
+        lower_sum, upper_sum = water_gas_sum_window(params)
+        chem_segments = _clip_segments_to_sum_window(
+            chem_segments,
+            lower=lower_sum,
+            upper=upper_sum,
         )
-    )
+        chem_segments.extend(
+            water_gas_boundary_segments(
+                params,
+                ph_min=float(fine_ph[0]),
+                ph_max=float(fine_ph[-1]),
+                pe_min=float(fine_pe[0]),
+                pe_max=float(fine_pe[-1]),
+            )
+        )
     boundaries = _segments_to_boundary_lines(chem_segments)
 
     layer: dict[str, Any] = {
@@ -677,6 +691,7 @@ def pack_traced_display(
         "mode": "traced",
         "factor": factor,
         "interpolated": True,
+        "solution_mode": params.solution_mode,
         "stability_limits": _segments_to_boundary_lines(stability_segments),
         "layers": {
             "solid_subsets": solid_subsets,

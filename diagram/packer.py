@@ -453,4 +453,5 @@ def pack_grid_results(
         "n_converged": sum(1 for r in rows if r.get("converged")),
         "n_total": len(rows),
         "temp_c": params.temp_c,
+        "solution_mode": params.solution_mode,
     }

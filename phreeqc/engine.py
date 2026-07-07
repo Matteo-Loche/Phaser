@@ -44,6 +44,7 @@ class GridJobParams:
     layer_solids: bool = True
     layer_aqueous: bool = True
     layer_elements: bool = False
+    solution_mode: str = config.SOLUTION_MODE_DEFAULT
 
 
 _TUPLE_FIELDS = (
@@ -285,15 +286,19 @@ def _parse_grid_row(
         if g in si and si[g] == si[g]
     }
 
-    from .gas_limits import water_gas_domain_labels
+    from .gas_limits import water_gas_domain_labels, water_stability_limits_enabled
 
-    gas_domain = water_gas_domain_labels(
-        ph=ph,
-        pe=pe,
-        temp_c=params.temp_c,
-        o2_limit_atm=params.o2_limit_atm,
-        h2_limit_atm=params.h2_limit_atm,
-    )
+    gas_domain: dict[str, str] = {}
+    if water_stability_limits_enabled(params):
+        gas_domain.update(
+            water_gas_domain_labels(
+                ph=ph,
+                pe=pe,
+                temp_c=params.temp_c,
+                o2_limit_atm=params.o2_limit_atm,
+                h2_limit_atm=params.h2_limit_atm,
+            )
+        )
     for gas, val in gas_si.items():
         if gas not in ("O2(g)", "H2(g)") and val > math.log10(params.component_gas_limit_atm):
             gas_domain[gas] = f"{gas} > {params.component_gas_limit_atm:g} atm"
@@ -349,24 +354,16 @@ def _format_selected_output_block(
 {mol_line}{user_punch}"""
 
 
-def format_grid_input(
-    *,
-    ph: float,
-    pe: float,
-    params: GridJobParams,
-) -> str:
-    """PhreePlot-style titration: acidic seed + Fix_H+/NaOH + fixed O2 fugacity.
-
-    The acidic seed solution (pH 1.8, benign pe) is charge-balanced with
-    ``Cl ... charge`` so PHREEQC does not fail while constructing strongly
-    reducing target points.  pH is then pinned with a fictitious ``Fix_H+``
-    phase titrated by ``NaOH``, and redox is imposed through the gas phase
-    directly as ``SI(O2(g)) = log10(fO2)`` (no ``Fix_pe``), where
-    ``log10(fO2) = 4 * (pe + pH - log K_O2)`` (see ``gas_limits.log_f_o2``).
-    """
-    totals_lines = "\n".join(
-        f"    {name:<10} {val:.12e}" for name, val in sorted(params.totals.items()) if val > 0
+def totals_lines(params: GridJobParams) -> str:
+    return "\n".join(
+        f"    {name:<10} {val:.12e}"
+        for name, val in sorted(params.totals.items())
+        if val > 0
     )
+
+
+def format_selected_output_suffix(params: GridJobParams) -> str:
+    """SELECTED_OUTPUT + USER_PUNCH block and closing END for one grid point."""
     user_punch = _format_user_punch(
         params.system_elements,
         top_n=_top_aq_species_per_element(params),
@@ -378,44 +375,35 @@ def format_grid_input(
             for s in params.aq_species_molality
         )
         mol_line = f"    -mol {mol_tokens}\n"
-    from .gas_limits import log_f_o2
+    return f"{_format_selected_output_block(params, user_punch=user_punch, mol_line=mol_line)}END\n"
 
-    target_log_f_o2 = log_f_o2(ph=ph, pe=pe, temp_c=params.temp_c)
-    return f"""
-TITLE Phase diagram (titration)
-PHASES
-Fix_H+
-    H+ = H+
-    log_k 0
-SOLUTION 1
-    temp      {params.temp_c:.6g}
-    units     {config.DEFAULT_UNITS}
-    water     {config.WATER_MASS_KGW:.12e}
-    pH        1.8
-    pe        4.0
-{totals_lines}
-    Cl         1.0 charge
-END
-USE solution 1
-EQUILIBRIUM_PHASES 1
-    Fix_H+ {-ph:.12g} NaOH 10
-    -force_equality true
-    O2(g) {target_log_f_o2:.12g} 10
-    -force_equality true
-END
-{_format_selected_output_block(params, user_punch=user_punch, mol_line=mol_line)}END
-"""
+
+def format_grid_input(
+    *,
+    ph: float,
+    pe: float,
+    params: GridJobParams,
+) -> str:
+    """Dispatch to the input builder for ``params.solution_mode``."""
+    if params.solution_mode == "direct":
+        from .input_direct import format_direct_input
+
+        return format_direct_input(ph=ph, pe=pe, params=params)
+    from .input_titration import format_titration_input
+
+    return format_titration_input(ph=ph, pe=pe, params=params)
 
 
 def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> GridPointResult:
     base = GridPointResult(ph=ph, pe=pe, converged=False)
     try:
-        selected = _run_phreeqc_string(phreeqc, format_grid_input(ph=ph, pe=pe, params=params))
+        inp = format_grid_input(ph=ph, pe=pe, params=params)
+        data_row_index = 1 if params.solution_mode == "direct" else -1
+        selected = _run_phreeqc_string(phreeqc, inp)
         if not selected or len(selected) < 2:
             return base
         headers = selected[0]
-        # Titration emits a row per reaction step; the equilibrated state is last.
-        data_row = selected[-1]
+        data_row = selected[data_row_index]
         row = dict(zip(headers, data_row))
         return _parse_grid_row(row, ph=ph, pe=pe, params=params)
     except Exception:

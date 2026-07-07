@@ -42,6 +42,16 @@ class ComputeRequest(BaseModel):
     layer_solids: bool = True
     layer_aqueous: bool = True
     layer_elements: bool = False
+    solution_mode: str = config.SOLUTION_MODE_DEFAULT
+
+    @field_validator("solution_mode")
+    @classmethod
+    def _validate_solution_mode(cls, value: str) -> str:
+        mode = (value or "").strip().lower()
+        if mode not in config.SOLUTION_MODES:
+            allowed = ", ".join(config.SOLUTION_MODES)
+            raise ValueError(f"Unsupported solution_mode: {value!r}. Use one of: {allowed}.")
+        return mode
 
     @field_validator("units")
     @classmethod

@@ -517,6 +517,25 @@
     .card .body { padding: 0 0.85rem 0.85rem; display: flex; flex-direction: column; gap: 0.6rem; }
 
     label { display: block; font-size: 0.74rem; color: var(--muted); margin-bottom: 0.25rem; }
+    .label-row {
+      display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.25rem;
+    }
+    .label-row label { margin-bottom: 0; }
+    .help-tip {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1rem; height: 1rem; border-radius: 50%;
+      border: 1px solid var(--border); color: var(--muted);
+      font-size: 0.68rem; font-weight: 700; line-height: 1;
+      cursor: help; flex: none; user-select: none;
+    }
+    .help-tip:hover, .help-tip:focus-visible { color: var(--accent); border-color: var(--accent-dim); }
+    .mode-options { display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.35rem; }
+    .mode-option {
+      display: flex; align-items: flex-start; gap: 0.45rem;
+      font-size: 0.82rem; color: var(--text); cursor: pointer;
+    }
+    .mode-option input { margin-top: 0.2rem; flex: none; }
+    .mode-option .mode-label { font-weight: 500; }
     input[type="number"], input[type="text"], select {
       width: 100%; min-height: var(--tap);
       padding: 0.45rem 0.55rem;
@@ -804,9 +823,6 @@
               <input id="tempC" type="number" step="0.1" />
             </div>
           </div>
-          <p class="meta" style="margin-top:0.55rem;line-height:1.35">
-            Charge balance: Cl⁻ or Na⁺
-          </p>
         </div>
       </details>
 
@@ -844,6 +860,23 @@
         </div>
       </details>
 
+      <details class="card" open>
+        <summary>Plot options <span class="chev">›</span></summary>
+        <div class="body">
+          <div class="meta" style="margin-bottom:0.35rem">Layers to compute and display</div>
+          <label class="toggle" style="display:block;margin-bottom:0.3rem">
+            <input type="checkbox" id="layerSolids" checked /> Solid predominance
+          </label>
+          <label class="toggle" style="display:block;margin-bottom:0.3rem">
+            <input type="checkbox" id="layerAqueous" checked /> Aqueous predominance
+          </label>
+          <label class="toggle" style="display:block">
+            <input type="checkbox" id="layerElements" /> Per-element subsets
+            <span class="meta">(filter map by element; off = one combined map)</span>
+          </label>
+        </div>
+      </details>
+
       <details class="card">
         <summary>Configuration <span class="chev">›</span></summary>
         <div class="body">
@@ -855,18 +888,11 @@
             <input type="checkbox" id="adaptiveBoundaries" />
             Adaptive boundaries <span class="meta">(root-find phase edges)</span>
           </label>
-          <div style="margin-top:0.65rem;font-size:0.82rem">
-            <div class="meta" style="margin-bottom:0.35rem">Compute layers</div>
-            <label class="toggle" style="display:block;margin-bottom:0.3rem">
-              <input type="checkbox" id="layerSolids" checked /> Solid predominance
-            </label>
-            <label class="toggle" style="display:block;margin-bottom:0.3rem">
-              <input type="checkbox" id="layerAqueous" checked /> Aqueous predominance
-            </label>
-            <label class="toggle" style="display:block">
-              <input type="checkbox" id="layerElements" /> Per-element subsets
-              <span class="meta">(filter map by element; off = one combined map)</span>
-            </label>
+          <div style="margin-top:0.65rem">
+            <div class="label-row">
+              <label>Calculation mode</label>
+            </div>
+            <div class="mode-options" id="solutionModeOptions" role="radiogroup" aria-label="Calculation mode"></div>
           </div>
           <div class="grid2" style="margin-top:0.55rem">
             <div>
@@ -1036,6 +1062,7 @@
       y: { axis: "eh", peMin: -10, peMax: 14 },
       gridLevels: 100,
       adaptiveBoundaries: true,
+      solutionMode: "titration",
       displayMode: "solid",
       solidSubsetElements: [],
       layerSolids: true,
@@ -1945,6 +1972,12 @@
       state.layerSolids ??= true;
       state.layerAqueous ??= true;
       state.layerElements ??= false;
+      const modes = (runtime.cfg?.solution_modes || []).map(m => m.id);
+      const defaultMode = runtime.cfg?.default_solution_mode || "titration";
+      if (!modes.includes(state.solutionMode)) state.solutionMode = defaultMode;
+      state.solutionMode ??= defaultMode;
+      state.layerAqueous ??= true;
+      state.layerElements ??= false;
     }
 
     function selectedDatabase() {
@@ -2040,6 +2073,34 @@
       });
       $("elemCount").textContent = state.totals.length;
       $("unitHead").textContent = `concentration (${unitDisplay(state.units)})`;
+    }
+
+    function fillSolutionModeOptions() {
+      const host = $("solutionModeOptions");
+      if (!host) return;
+      const modes = runtime.cfg?.solution_modes || [
+        { id: "titration", label: "Charge-balanced titration", description: "" },
+        { id: "direct", label: "Direct (fixed pH–pe)", description: "" },
+      ];
+      host.innerHTML = modes.map(m => {
+        const tip = (m.description || "").replace(/"/g, "&quot;");
+        return `<label class="mode-option">
+          <input type="radio" name="solutionMode" value="${m.id}" />
+          <span>
+            <span class="mode-label">${m.label}</span>
+            <span class="help-tip" tabindex="0" title="${tip}" aria-label="${tip}">?</span>
+          </span>
+        </label>`;
+      }).join("");
+      const current = state.solutionMode || runtime.cfg?.default_solution_mode || "titration";
+      host.querySelectorAll('input[name="solutionMode"]').forEach(r => {
+        r.checked = r.value === current;
+        r.addEventListener("change", () => {
+          if (!r.checked) return;
+          state.solutionMode = r.value;
+          commit();
+        });
+      });
     }
 
     function fillUnitOptions() {
@@ -2588,6 +2649,10 @@
       syncDisplayFromPlot();
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
+      const mode = state.solutionMode || runtime.cfg?.default_solution_mode || "titration";
+      document.querySelectorAll('input[name="solutionMode"]').forEach(r => {
+        r.checked = r.value === mode;
+      });
     }
 
     function fillSpeciesOptions() {
@@ -2808,6 +2873,7 @@
         layer_solids: !!state.layerSolids,
         layer_aqueous: !!state.layerAqueous,
         layer_elements: effectiveLayerElements(),
+        solution_mode: state.solutionMode || "titration",
       };
       if (state.adaptiveBoundaries) {
         // Include the factor so the cache key reflects it (changing the factor
@@ -3347,12 +3413,16 @@
       if (runtime.cfg.adaptive_boundaries_default != null) {
         state.adaptiveBoundaries = runtime.cfg.adaptive_boundaries_default;
       }
+      if (runtime.cfg.default_solution_mode) {
+        state.solutionMode = state.solutionMode || runtime.cfg.default_solution_mode;
+      }
     }
 
     function afterStateLoad() {
       fillInputs();
       fillSpeciesOptions();
       fillUnitOptions();
+      fillSolutionModeOptions();
       renderSpecies();
       syncAxisUI();
       renderGridMeta();

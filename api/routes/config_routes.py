@@ -65,6 +65,11 @@ def get_config():
         "max_grid_points": config.MAX_GRID_POINTS,
         "max_workers": config.MAX_WORKERS,
         "max_concurrent_jobs": config.MAX_CONCURRENT_JOBS,
+        "default_solution_mode": config.SOLUTION_MODE_DEFAULT,
+        "solution_modes": [
+            {"id": mode_id, **config.SOLUTION_MODE_META[mode_id]}
+            for mode_id in config.SOLUTION_MODES
+        ],
         "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
         "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,
         "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
