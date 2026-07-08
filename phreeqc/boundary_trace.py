@@ -23,6 +23,7 @@ from skimage.measure import find_contours
 
 from .. import config
 from ..diagram.packer import label_is_solid, phase_from_label, subset_key
+from .dummy_medium import EXCLUDED_SPECIES
 from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc
 from .sweep import _point_key
 
@@ -369,9 +370,13 @@ def collect_trace_species(
     for key in base_ij:
         r = base_ij[key]
         row = r if isinstance(r, dict) else asdict(r)
-        names.update((row.get("aq_molality_by_species") or {}).keys())
+        names.update(
+            sp
+            for sp in (row.get("aq_molality_by_species") or {})
+            if sp not in EXCLUDED_SPECIES
+        )
         for sp in (row.get("dominant_aq_by_element") or {}).values():
-            if sp and sp not in ("none", "aqueous"):
+            if sp and sp not in ("none", "aqueous") and sp not in EXCLUDED_SPECIES:
                 names.add(sp)
     for spec in specs:
         for i, j in cells:

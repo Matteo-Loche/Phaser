@@ -45,6 +45,7 @@ class GridJobParams:
     layer_aqueous: bool = True
     layer_elements: bool = False
     solution_mode: str = config.SOLUTION_MODE_DEFAULT
+    background_molality: float = 0.0
 
 
 _TUPLE_FIELDS = (
@@ -123,6 +124,9 @@ def init_phreeqc(dll_path: str, db_path: str):
             f"Python is {'64-bit' if python_is_64bit() else '32-bit'}.\n{exc}"
         ) from exc
     pq.load_database(str(db_path))
+    from .dummy_medium import WORKER_DEFINITIONS
+
+    pq.run_string(WORKER_DEFINITIONS)
     return pq
 
 
@@ -383,31 +387,48 @@ def format_grid_input(
     ph: float,
     pe: float,
     params: GridJobParams,
+    flip_charge: bool = False,
 ) -> str:
     """Dispatch to the input builder for ``params.solution_mode``."""
     if params.solution_mode == "direct":
         from .input_direct import format_direct_input
 
         return format_direct_input(ph=ph, pe=pe, params=params)
+    if params.solution_mode == "dummy_titration":
+        from .input_dummy_titration import format_dummy_titration_input
+
+        return format_dummy_titration_input(
+            ph=ph, pe=pe, params=params, flip_charge=flip_charge
+        )
     from .input_titration import format_titration_input
 
     return format_titration_input(ph=ph, pe=pe, params=params)
 
 
+def _selected_output_row_index(params: GridJobParams) -> int:
+    if params.solution_mode == "direct":
+        return 1
+    return -1
+
+
 def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> GridPointResult:
     base = GridPointResult(ph=ph, pe=pe, converged=False)
-    try:
-        inp = format_grid_input(ph=ph, pe=pe, params=params)
-        data_row_index = 1 if params.solution_mode == "direct" else -1
-        selected = _run_phreeqc_string(phreeqc, inp)
-        if not selected or len(selected) < 2:
-            return base
-        headers = selected[0]
-        data_row = selected[data_row_index]
-        row = dict(zip(headers, data_row))
-        return _parse_grid_row(row, ph=ph, pe=pe, params=params)
-    except Exception:
-        return base
+    flip_modes = frozenset({"dummy_titration"})
+    for flip in (False, True):
+        if flip and params.solution_mode not in flip_modes:
+            break
+        try:
+            inp = format_grid_input(ph=ph, pe=pe, params=params, flip_charge=flip)
+            selected = _run_phreeqc_string(phreeqc, inp)
+            if not selected or len(selected) < 2:
+                continue
+            headers = selected[0]
+            data_row = selected[_selected_output_row_index(params)]
+            row = dict(zip(headers, data_row))
+            return _parse_grid_row(row, ph=ph, pe=pe, params=params)
+        except Exception:
+            continue
+    return base
 
 
 def element_from_total_key(key: str) -> str:

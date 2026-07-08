@@ -526,16 +526,34 @@
       width: 1rem; height: 1rem; border-radius: 50%;
       border: 1px solid var(--border); color: var(--muted);
       font-size: 0.68rem; font-weight: 700; line-height: 1;
-      cursor: help; flex: none; user-select: none;
+      cursor: pointer; flex: none; user-select: none;
+      background: var(--bg); padding: 0;
     }
     .help-tip:hover, .help-tip:focus-visible { color: var(--accent); border-color: var(--accent-dim); }
-    .mode-options { display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.35rem; }
-    .mode-option {
-      display: flex; align-items: flex-start; gap: 0.45rem;
-      font-size: 0.82rem; color: var(--text); cursor: pointer;
+    .help-tip[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+    .help-popover {
+      padding: 0.5rem 0.65rem;
+      font-size: 0.76rem;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      line-height: 1.45;
     }
-    .mode-option input { margin-top: 0.2rem; flex: none; }
-    .mode-option .mode-label { font-weight: 500; }
+    .help-popover[hidden] { display: none; }
+    .mode-options { display: flex; flex-direction: column; gap: 0.45rem; margin-top: 0.35rem; }
+    .mode-option-row { display: flex; flex-direction: column; gap: 0.25rem; }
+    .mode-option {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.82rem; color: var(--text);
+    }
+    .mode-option-main {
+      display: flex; align-items: center; gap: 0.5rem;
+      flex: 1; cursor: pointer;
+    }
+    .mode-option input[type="radio"] { width: 18px; height: 18px; flex: none; margin: 0; }
+    .mode-option .mode-label { font-weight: 500; flex: 1; }
+    .mode-help-pop { margin-left: 1.65rem; }
     input[type="number"], input[type="text"], select {
       width: 100%; min-height: var(--tap);
       padding: 0.45rem 0.55rem;
@@ -889,9 +907,7 @@
             Adaptive boundaries <span class="meta">(root-find phase edges)</span>
           </label>
           <div style="margin-top:0.65rem">
-            <div class="label-row">
-              <label>Calculation mode</label>
-            </div>
+            <label>Calculation mode</label>
             <div class="mode-options" id="solutionModeOptions" role="radiogroup" aria-label="Calculation mode"></div>
           </div>
           <div class="grid2" style="margin-top:0.55rem">
@@ -1062,7 +1078,7 @@
       y: { axis: "eh", peMin: -10, peMax: 14 },
       gridLevels: 100,
       adaptiveBoundaries: true,
-      solutionMode: "titration",
+      solutionMode: "dummy_titration",
       displayMode: "solid",
       solidSubsetElements: [],
       layerSolids: true,
@@ -1973,7 +1989,7 @@
       state.layerAqueous ??= true;
       state.layerElements ??= false;
       const modes = (runtime.cfg?.solution_modes || []).map(m => m.id);
-      const defaultMode = runtime.cfg?.default_solution_mode || "titration";
+      const defaultMode = runtime.cfg?.default_solution_mode || "dummy_titration";
       if (!modes.includes(state.solutionMode)) state.solutionMode = defaultMode;
       state.solutionMode ??= defaultMode;
       state.layerAqueous ??= true;
@@ -2075,24 +2091,43 @@
       $("unitHead").textContent = `concentration (${unitDisplay(state.units)})`;
     }
 
+    function closeSolutionModeHelp(exceptMode = null) {
+      const host = $("solutionModeOptions");
+      if (!host) return;
+      host.querySelectorAll(".mode-help-pop").forEach(pop => {
+        if (!exceptMode || pop.dataset.mode !== exceptMode) pop.hidden = true;
+      });
+      host.querySelectorAll(".help-tip[data-mode]").forEach(btn => {
+        if (!exceptMode || btn.dataset.mode !== exceptMode) {
+          btn.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
+
     function fillSolutionModeOptions() {
       const host = $("solutionModeOptions");
       if (!host) return;
       const modes = runtime.cfg?.solution_modes || [
+        { id: "dummy_titration", label: "Dummy-electrolyte titration", description: "" },
         { id: "titration", label: "Charge-balanced titration", description: "" },
         { id: "direct", label: "Direct (fixed pH–pe)", description: "" },
       ];
       host.innerHTML = modes.map(m => {
-        const tip = (m.description || "").replace(/"/g, "&quot;");
-        return `<label class="mode-option">
-          <input type="radio" name="solutionMode" value="${m.id}" />
-          <span>
-            <span class="mode-label">${m.label}</span>
-            <span class="help-tip" tabindex="0" title="${tip}" aria-label="${tip}">?</span>
-          </span>
-        </label>`;
+        const tip = (m.description || m.label || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const label = (m.label || m.id).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return `<div class="mode-option-row">
+          <div class="mode-option">
+            <label class="mode-option-main">
+              <input type="radio" name="solutionMode" value="${m.id}" />
+              <span class="mode-label">${label}</span>
+            </label>
+            <button type="button" class="help-tip" data-mode="${m.id}"
+                    aria-label="Help: ${label}" aria-expanded="false">?</button>
+          </div>
+          <div class="help-popover mode-help-pop" data-mode="${m.id}" hidden>${tip}</div>
+        </div>`;
       }).join("");
-      const current = state.solutionMode || runtime.cfg?.default_solution_mode || "titration";
+      const current = state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration";
       host.querySelectorAll('input[name="solutionMode"]').forEach(r => {
         r.checked = r.value === current;
         r.addEventListener("change", () => {
@@ -2101,6 +2136,27 @@
           commit();
         });
       });
+      host.querySelectorAll(".help-tip[data-mode]").forEach(btn => {
+        btn.addEventListener("click", e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const mode = btn.dataset.mode;
+          const pop = host.querySelector(`.mode-help-pop[data-mode="${mode}"]`);
+          const opening = pop.hidden;
+          closeSolutionModeHelp();
+          if (opening) {
+            pop.hidden = false;
+            btn.setAttribute("aria-expanded", "true");
+          }
+        });
+      });
+      if (!host.dataset.helpDismissWired) {
+        host.dataset.helpDismissWired = "1";
+        document.addEventListener("click", e => {
+          if (host.contains(e.target)) return;
+          closeSolutionModeHelp();
+        });
+      }
     }
 
     function fillUnitOptions() {
@@ -2649,7 +2705,7 @@
       syncDisplayFromPlot();
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
-      const mode = state.solutionMode || runtime.cfg?.default_solution_mode || "titration";
+      const mode = state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration";
       document.querySelectorAll('input[name="solutionMode"]').forEach(r => {
         r.checked = r.value === mode;
       });
@@ -2873,7 +2929,7 @@
         layer_solids: !!state.layerSolids,
         layer_aqueous: !!state.layerAqueous,
         layer_elements: effectiveLayerElements(),
-        solution_mode: state.solutionMode || "titration",
+        solution_mode: state.solutionMode || "dummy_titration",
       };
       if (state.adaptiveBoundaries) {
         // Include the factor so the cache key reflects it (changing the factor

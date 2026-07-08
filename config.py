@@ -189,9 +189,18 @@ PE_MIN = -10.0
 PE_MAX = 14.0
 GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
 
-# Grid-point PHREEQC input modes (see phreeqc/input_titration.py, input_direct.py).
-SOLUTION_MODE_DEFAULT = "titration"
+# Grid-point PHREEQC input modes (see phreeqc/input_titration.py, input_direct.py,
+# input_dummy_titration.py).
+SOLUTION_MODE_DEFAULT = "dummy_titration"
 SOLUTION_MODE_META: dict[str, dict[str, str]] = {
+    "dummy_titration": {
+        "label": "Dummy-electrolyte titration",
+        "description": (
+            "Acidic seed solution charge-balanced with fictitious Bgc+/Bga- medium; "
+            "pH fixed via Fix_H+/BgcOH and redox by O2(g) fugacity "
+            "(same thermodynamic frame as charge-balanced titration, without Cl/Na)."
+        ),
+    },
     "titration": {
         "label": "Charge-balanced titration",
         "description": (

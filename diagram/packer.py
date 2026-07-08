@@ -15,6 +15,7 @@ import numpy as np
 from .. import config
 from ..phreeqc.engine import GridJobParams
 from ..phreeqc.catalog import is_gas
+from ..phreeqc.dummy_medium import EXCLUDED_SPECIES
 
 
 SOLID_SUFFIX = "(s)"
@@ -41,6 +42,8 @@ def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEME
                 key=lambda kv: kv[1], reverse=True,
             )
             for sp, m in ranked[:per_element]:
+                if sp in EXCLUDED_SPECIES:
+                    continue
                 entries.append([sp, m, elem])
         entries.sort(key=lambda e: e[1], reverse=True)
         return entries
@@ -226,6 +229,8 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
         best_sp, best_m = "none", -1.0
         for elem in subset:
             for sp, m in by_elem.get(elem, ()):
+                if sp in EXCLUDED_SPECIES:
+                    continue
                 if m > best_m:
                     best_m, best_sp = m, sp
         if best_sp != "none":
@@ -236,6 +241,8 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
     elem_map = row.get("aq_species_element") or {}
     best_sp, best_m = "none", -1.0
     for sp, m in mols.items():
+        if sp in EXCLUDED_SPECIES:
+            continue
         if elem_map.get(sp) in subset and m > best_m:
             best_m, best_sp = m, sp
     if best_sp != "none":

@@ -244,7 +244,13 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
         )
 
         db_key = require_ready(db_rec)
-        sys_tuple = system_elements_from_totals(body.totals, body.system_elements)
+        from ..phreeqc.dummy_medium import EXCLUDED_ELEMENTS
+
+        sys_tuple = tuple(
+            e
+            for e in system_elements_from_totals(body.totals, body.system_elements)
+            if e not in EXCLUDED_ELEMENTS
+        )
         layer_elements = effective_layer_elements(sys_tuple, body.layer_elements)
         if body.gas_phases:
             trace_gases = tuple(body.gas_phases)
