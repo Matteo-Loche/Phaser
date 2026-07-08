@@ -295,6 +295,9 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_O2_LIMIT_ATM` | O₂ water-stability limit in atm (default `0.21`; titration-style overlays only); per-job override `o2_limit_atm` |
 | `PHASER_H2_LIMIT_ATM` | H₂ water-stability limit in atm (default `1.0`; titration-style overlays only); per-job override `h2_limit_atm` |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | Reference pressure for component-gas over-pressure boundaries (default `1.0`) |
+| `PHASER_KNOBS_MODE` | PHREEQC numerical retry ladder: `ladder` (default) or `off` — server-side only, not exposed on the compute API |
+| `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | Skip base-sweep PHREEQC outside the O₂/H₂ water band in titration-style modes (`true` default) |
+| `PHASER_SWEEP_WATER_MARGIN_CELLS` | Extra base-cell margin beyond the analytic water clip before masking (`1.0` default) |
 | `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
 | `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
 | `PHASER_JOB_REAPER_INTERVAL_SEC` | Background reaper wake interval in seconds (default `60`) |
@@ -373,8 +376,24 @@ A **single `SOLUTION`** at the requested `(pH, pe)` with user element totals —
 
 #### Shared
 
-- **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point (O₂/H₂ only in titration-style modes), and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain).
+- **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point (O₂/H₂ only in titration-style modes), and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain, `knobs_level`, optional `synthetic_label`).
 - **`validate_phreeqc_setup`** — loads library and database once before worker spawn (fail-fast with clear errors).
+
+#### KNOBS retry ladder (`knobs.py`, server defaults)
+
+Hard grid points are retried with escalating **KNOBS** numerical settings before the point is marked failed. This is always on by default (`KNOBS_MODE_DEFAULT = ladder`); operators change it via `PHASER_KNOBS_MODE=off` or `config.py` — there is **no** compute API or UI toggle.
+
+For **`dummy_titration`**, attempts run in order: default KNOBS + primary charge guess → default + flip-retry → damped + primary → damped + flip → robust + primary only. Other modes skip flip-retry. Each attempt prefixes an explicit KNOBS block (settings persist on the worker IPhreeqc instance). **`convergence_tolerance` is never loosened** — only path controls (iterations, step sizes, diagonal scale, numerical derivatives) escalate. Successful rescues store **`knobs_level`** on `GridPointResult` (0 = first rung). Selected output is read only on the success path (never after a swallowed exception — stale-output hazard).
+
+Boundary tracing inherits the ladder automatically because `PointEvaluator` calls `evaluate_point`.
+
+#### Water-band sweep mask (`gas_limits.py` + `sweep.py`, server defaults)
+
+In titration-style modes (`dummy_titration`, `titration`), the base grid sweep can skip PHREEQC for points outside the analytic O₂/H₂ window (`SWEEP_SKIP_OUTSIDE_WATER = true` by default). Points with `pe + pH` above the O₂ line or below the H₂ line (plus **`SWEEP_WATER_MARGIN_CELLS`** margin in cell units) receive **synthetic** `GridPointResult` rows: `converged=True`, `synthetic_label` such as `O2(g) > 0.21 atm`, and matching `gas_domain` — no PHREEQC call. Direct mode disables the mask via `water_stability_limits_enabled`.
+
+Synthetic categories flow through packing and adaptive tracing; numeric boundary tracing **skips** cells that mix real chemistry with synthetic gas labels (O₂/H₂ lines remain **analytic** via `trace_gas_limit_segments`). Job metadata may include **`n_skipped_water`** (internal diagnostic only).
+
+Expected savings: roughly 30–40% fewer base-sweep PHREEQC runs on typical pe–pH frames when the water band covers a minority of the plot.
 
 ### Parallel grid sweep (`sweep.py`)
 

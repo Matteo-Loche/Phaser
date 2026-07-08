@@ -47,7 +47,14 @@ def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
         )
         eligible_by_subset.append((sset, elig))
 
+    n_parts = (len(eligible_by_subset) if params.layer_solids else 0) + (
+        len(eligible_by_subset) if params.layer_aqueous else 0
+    )
+
     def signature(row: dict) -> tuple:
+        synth = row.get("synthetic_label")
+        if synth:
+            return (synth,) * n_parts if n_parts else (synth,)
         if not row.get("converged"):
             return ("__none__",)
         parts: list[str] = []
@@ -113,6 +120,9 @@ def run_adaptive_boundary_sweep(
             progress_cb(done, total, phase)
 
     base_points = [(float(p), float(e)) for e in base_pe for p in base_ph]
+    from .sweep import partition_points_for_sweep
+
+    _, _, mask_stats = partition_points_for_sweep(params, base_points)
     base_rows = run_point_sweep(
         params,
         base_points,
@@ -154,6 +164,7 @@ def run_adaptive_boundary_sweep(
             "n_gas_segments": len(gas_segments),
             "refinement_method": "trace",
             "display_mode": "traced",
+            "n_skipped_water": mask_stats.get("n_skipped_water", 0),
         }
         trace_bundle = {
             "method": "traced",
@@ -201,5 +212,6 @@ def run_adaptive_boundary_sweep(
         "n_gas_segments": trace_stats.n_gas_segments,
         "refinement_method": "trace",
         "display_mode": "traced",
+        "n_skipped_water": mask_stats.get("n_skipped_water", 0),
     }
     return params, stats, base_rows, trace_bundle

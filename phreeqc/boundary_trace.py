@@ -24,8 +24,7 @@ from skimage.measure import find_contours
 from .. import config
 from ..diagram.packer import label_is_solid, phase_from_label, subset_key
 from .dummy_medium import EXCLUDED_SPECIES
-from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc
-from .sweep import _point_key
+from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc, point_key
 
 # Floor for absent aqueous species so log(m_A)-log(m_B) brackets at dominance edges
 # even when a species is below top-N at a far cell corner.
@@ -183,7 +182,7 @@ class PointEvaluator:
         self._convergence_crossing_t[key] = t_canon
 
     def eval(self, ph: float, pe: float) -> dict:
-        key = _point_key(ph, pe)
+        key = point_key(ph, pe)
         if key not in self._cache or key not in self._full:
             row = evaluate_point(self._pq, ph=ph, pe=pe, params=self._params)
             self._cache[key] = asdict(row)
@@ -1192,6 +1191,11 @@ def _classify_cell(
     if len(distinct) <= 1:
         return None, None, [], None, False
 
+    from .gas_limits import synthetic_gas_label_set
+
+    if distinct & synthetic_gas_label_set(evaluator._params):
+        return None, None, [], None, False
+
     if len(distinct) == 3:
         triple = _trace_triple_cell(
             evaluator, corners, i, j, base_ph, base_pe, factor,
@@ -1361,7 +1365,7 @@ def _trace_cells_batch(
     """Trace all layers + stability limits for a batch of cells (one worker)."""
     seed: dict[tuple[float, float], dict] = {}
     for row in corner_ij.values():
-        seed[_point_key(float(row["ph"]), float(row["pe"]))] = row
+        seed[point_key(float(row["ph"]), float(row["pe"]))] = row
 
     evaluator = PointEvaluator(trace_params, seed)
     specs = layer_specs(trace_params, db_path)
@@ -1675,7 +1679,7 @@ def run_boundary_trace(
         base_pe=base_pe,
         base_ij=base_ij,
         evaluator=PointEvaluator(trace_params, {
-            _point_key(float(r.ph), float(r.pe)): asdict(r) for r in base_ij.values()
+            point_key(float(r.ph), float(r.pe)): asdict(r) for r in base_ij.values()
         }),
         tolerance=tol,
     )

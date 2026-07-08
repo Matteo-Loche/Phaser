@@ -4,6 +4,7 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from itertools import product
+from typing import Any
 
 import numpy as np
 
@@ -14,6 +15,7 @@ from .engine import (
     evaluate_point,
     grid_job_params_from_dict,
     init_phreeqc,
+    point_key,
 )
 
 _WORKER_PQ = None
@@ -39,7 +41,35 @@ def build_grid(params: GridJobParams) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _point_key(ph: float, pe: float) -> tuple[float, float]:
-    return round(float(ph), 12), round(float(pe), 12)
+    return point_key(ph, pe)
+
+
+def _grid_cell_spacings(params: GridJobParams) -> tuple[float, float]:
+    cell_ph = (params.ph_max - params.ph_min) / max(params.ph_levels - 1, 1)
+    cell_pe = (params.pe_max - params.pe_min) / max(params.pe_levels - 1, 1)
+    return cell_ph, cell_pe
+
+
+def partition_points_for_sweep(
+    params: GridJobParams,
+    points: list[tuple[float, float]],
+) -> tuple[list[tuple[float, float]], list[GridPointResult], dict[str, int]]:
+    """Split points into PHREEQC targets and pre-built synthetic outside-water rows."""
+    from .gas_limits import make_synthetic_water_result, split_water_band_points
+
+    cell_ph, cell_pe = _grid_cell_spacings(params)
+    inside, outside = split_water_band_points(
+        points, params, cell_ph=cell_ph, cell_pe=cell_pe
+    )
+    synthetic = [
+        make_synthetic_water_result(ph, pe, label) for (ph, pe), label in outside
+    ]
+    stats = {
+        "n_skipped_water": len(outside),
+        "n_evaluated": len(inside),
+        "n_total": len(points),
+    }
+    return inside, synthetic, stats
 
 
 def run_point_sweep(
@@ -50,15 +80,22 @@ def run_point_sweep(
     progress_cb=None,
     progress_offset: int = 0,
     progress_total: int | None = None,
-    map_chunksize: int | None = None,
+    apply_water_mask: bool = True,
 ) -> list[GridPointResult]:
     """Evaluate an explicit list of (pH, pe) points."""
+    from .gas_limits import water_band_active
+
+    synthetic: list[GridPointResult] = []
+    eval_points = points
+    if apply_water_mask and water_band_active(params):
+        eval_points, synthetic, _ = partition_points_for_sweep(params, points)
+
     unique: dict[tuple[float, float], tuple[float, float]] = {}
-    for ph, pe in points:
+    for ph, pe in eval_points:
         unique[_point_key(ph, pe)] = (float(ph), float(pe))
     tasks_list = list(unique.values())
-    total = progress_total if progress_total is not None else len(tasks_list)
-    if not tasks_list:
+    total = progress_total if progress_total is not None else len(points)
+    if not tasks_list and not synthetic:
         return []
 
     if len(params.phases) > config.MAX_PHASES_PER_JOB:
@@ -66,12 +103,15 @@ def run_point_sweep(
             f"{len(params.phases)} phases selected; limit is {config.MAX_PHASES_PER_JOB}."
         )
 
+    results: list[GridPointResult] = list(synthetic)
+    if not tasks_list:
+        return results
+
     workers = max_workers if max_workers is not None else config.MAX_WORKERS
-    chunksize = map_chunksize if map_chunksize is not None else config.SWEEP_MAP_CHUNKSIZE
+    chunksize = config.SWEEP_MAP_CHUNKSIZE
     chunksize = max(1, int(chunksize))
     params_dict = asdict(params)
 
-    results: list[GridPointResult] = []
     done = progress_offset
     with ProcessPoolExecutor(
         max_workers=workers,
@@ -93,7 +133,7 @@ def run_grid_sweep(
     max_workers: int | None = None,
     progress_cb=None,
     map_chunksize: int | None = None,
-) -> list[GridPointResult]:
+) -> tuple[list[GridPointResult], dict[str, Any]]:
     ph_axis, pe_axis = build_grid(params)
     total = len(ph_axis) * len(pe_axis)
     if total > config.MAX_GRID_POINTS:
@@ -102,10 +142,12 @@ def run_grid_sweep(
             "Reduce ph_levels or pe_levels."
         )
     points = [(float(p), float(e)) for p, e in product(ph_axis, pe_axis)]
-    return run_point_sweep(
+    _, _, mask_stats = partition_points_for_sweep(params, points)
+    del map_chunksize  # reserved; run_point_sweep uses config.SWEEP_MAP_CHUNKSIZE
+    rows = run_point_sweep(
         params,
         points,
         max_workers=max_workers,
         progress_cb=progress_cb,
-        map_chunksize=map_chunksize,
     )
+    return rows, mask_stats

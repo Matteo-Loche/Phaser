@@ -46,6 +46,8 @@ class GridJobParams:
     layer_elements: bool = False
     solution_mode: str = config.SOLUTION_MODE_DEFAULT
     background_molality: float = 0.0
+    knobs_mode: str = config.KNOBS_MODE_DEFAULT
+    sweep_skip_outside_water: bool = config.SWEEP_SKIP_OUTSIDE_WATER
 
 
 _TUPLE_FIELDS = (
@@ -89,6 +91,13 @@ class GridPointResult:
     si: dict[str, float] = field(default_factory=dict)
     gas_si: dict[str, float] = field(default_factory=dict)
     gas_domain: dict[str, str] = field(default_factory=dict)
+    knobs_level: int = 0
+    synthetic_label: str | None = None
+
+
+def point_key(ph: float, pe: float) -> tuple[float, float]:
+    """Hashable cache key for grid coordinates."""
+    return round(float(ph), 12), round(float(pe), 12)
 
 
 def python_is_64bit() -> bool:
@@ -414,18 +423,39 @@ def _selected_output_row_index(params: GridJobParams) -> int:
 def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> GridPointResult:
     base = GridPointResult(ph=ph, pe=pe, converged=False)
     flip_modes = frozenset({"dummy_titration"})
-    for flip in (False, True):
+    flips = (False, True) if params.solution_mode in flip_modes else (False,)
+
+    if params.knobs_mode == "ladder":
+        from .knobs import KNOBS_LADDER_DEFAULT, KNOBS_PROFILE_INDEX, run_single_profile
+
+        profile_flips: list[tuple[str, bool]] = []
+        for prof in KNOBS_LADDER_DEFAULT:
+            if prof == "robust":
+                profile_flips.append((prof, False))
+            else:
+                profile_flips.extend((prof, flip) for flip in flips)
+    else:
+        profile_flips = [("default", flip) for flip in flips]
+
+    for prof, flip in profile_flips:
         if flip and params.solution_mode not in flip_modes:
-            break
+            continue
         try:
             inp = format_grid_input(ph=ph, pe=pe, params=params, flip_charge=flip)
-            selected = _run_phreeqc_string(phreeqc, inp)
+            if params.knobs_mode == "ladder":
+                selected = run_single_profile(phreeqc, prof, inp)
+                knobs_level = KNOBS_PROFILE_INDEX[prof]
+            else:
+                selected = _run_phreeqc_string(phreeqc, inp)
+                knobs_level = 0
             if not selected or len(selected) < 2:
                 continue
             headers = selected[0]
             data_row = selected[_selected_output_row_index(params)]
             row = dict(zip(headers, data_row))
-            return _parse_grid_row(row, ph=ph, pe=pe, params=params)
+            result = _parse_grid_row(row, ph=ph, pe=pe, params=params)
+            result.knobs_level = knobs_level
+            return result
         except Exception:
             continue
     return base

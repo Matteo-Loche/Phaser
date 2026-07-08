@@ -205,6 +205,9 @@ def category_solid_subset(
     job_phases: tuple[str, ...],
     collision_names: frozenset[str] = frozenset(),
 ) -> str:
+    synth = row.get("synthetic_label")
+    if synth:
+        return synth
     eligible = {p for p in job_phases if p in eligible_phases and not is_gas(p)}
     si = row.get("si") or {}
     finite = {p: si[p] for p in eligible if p in si and si[p] == si[p]}
@@ -222,6 +225,9 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
     that contains a subset element (even alongside others, e.g. ``FeHCO3+`` for
     ``Fe``) is a valid candidate. Mirrors ``category_solid_subset`` for
     aqueous-only predominance maps."""
+    synth = row.get("synthetic_label")
+    if synth:
+        return synth
     if not row.get("converged"):
         return "none"
     by_elem = row.get("aq_species_by_element")

@@ -267,6 +267,16 @@ O2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_O2_LIMIT_ATM", "0.21"))
 H2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_H2_LIMIT_ATM", "1.0"))
 COMPONENT_GAS_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_COMPONENT_GAS_LIMIT_ATM", "1.0"))
 
+# PHREEQC numerical retry ladder (server-side only; not exposed on API).
+KNOBS_MODE_DEFAULT = os.environ.get("PHASER_KNOBS_MODE", "ladder")
+KNOBS_LADDER = ("default", "damped", "robust")
+
+# Skip base-sweep PHREEQC outside the O₂/H₂ water band (titration-style modes).
+SWEEP_SKIP_OUTSIDE_WATER = os.environ.get(
+    "PHASER_SWEEP_SKIP_OUTSIDE_WATER", "true"
+).lower() in ("1", "true", "yes")
+SWEEP_WATER_MARGIN_CELLS = float(os.environ.get("PHASER_SWEEP_WATER_MARGIN_CELLS", "1.0"))
+
 # UI/API concentration units (mol/kgw basis). PHREEQC SOLUTION blocks always
 # receive mmol/kgw (DEFAULT_UNITS); values are converted before engine input.
 UNIT_OPTIONS = ("mol/kgw", "mmol/kgw", "umol/kgw")

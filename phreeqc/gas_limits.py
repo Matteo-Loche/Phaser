@@ -14,8 +14,7 @@ from scipy.optimize import brentq
 
 from .. import config
 from .boundary_trace import PointEvaluator, _edge_coords
-from .engine import GridJobParams
-from .sweep import _point_key
+from .engine import GridJobParams, point_key
 
 _WATER_GASES = ("O2(g)", "H2(g)")
 
@@ -78,6 +77,65 @@ def water_gas_outside_labels(params: GridJobParams) -> tuple[str, str]:
         f"O2(g) > {params.o2_limit_atm:g} atm",
         f"H2(g) > {params.h2_limit_atm:g} atm",
     )
+
+
+def synthetic_gas_label_set(params: GridJobParams) -> frozenset[str]:
+    """Category labels assigned to water-band masked (synthetic) grid points."""
+    return frozenset(water_gas_outside_labels(params))
+
+
+def water_band_active(params: GridJobParams) -> bool:
+    """Whether the sweep should skip PHREEQC outside the O₂/H₂ band."""
+    return bool(params.sweep_skip_outside_water and water_stability_limits_enabled(params))
+
+
+def split_water_band_points(
+    points: list[tuple[float, float]],
+    params: GridJobParams,
+    *,
+    cell_ph: float,
+    cell_pe: float,
+) -> tuple[list[tuple[float, float]], list[tuple[tuple[float, float], str]]]:
+    """Partition grid points into inside-band PHREEQC targets and outside synthetics."""
+    if not water_band_active(params):
+        return points, []
+    lo, hi = water_gas_sum_window(params)
+    margin = config.SWEEP_WATER_MARGIN_CELLS * (cell_ph + cell_pe)
+    o2_lab, h2_lab = water_gas_outside_labels(params)
+    inside: list[tuple[float, float]] = []
+    outside: list[tuple[tuple[float, float], str]] = []
+    for ph, pe in points:
+        s = ph + pe
+        if s > hi + margin:
+            outside.append(((ph, pe), o2_lab))
+        elif s < lo - margin:
+            outside.append(((ph, pe), h2_lab))
+        else:
+            inside.append((ph, pe))
+    return inside, outside
+
+
+def make_synthetic_water_result(
+    ph: float, pe: float, label: str
+) -> "GridPointResult":
+    """Synthetic row for a masked outside-water point (no PHREEQC run)."""
+    from .engine import GridPointResult
+
+    gas_key = "O2(g)" if label.startswith("O2(g)") else "H2(g)"
+    return GridPointResult(
+        ph=ph,
+        pe=pe,
+        converged=True,
+        synthetic_label=label,
+        gas_domain={gas_key: label},
+        knobs_level=0,
+    )
+
+
+def pair_traceable(cat_a: str, cat_b: str, params: GridJobParams) -> bool:
+    """False for edges involving synthetic water-gas categories (analytic lines only)."""
+    syn = synthetic_gas_label_set(params)
+    return not ({cat_a, cat_b} & syn)
 
 
 def water_gas_scalar_grids(
@@ -314,7 +372,7 @@ def trace_gas_limit_segments(
             seed: dict[tuple[float, float], dict] = {}
             for r in base_ij.values():
                 d = r if isinstance(r, dict) else asdict(r)
-                seed[_point_key(float(d["ph"]), float(d["pe"]))] = d
+                seed[point_key(float(d["ph"]), float(d["pe"]))] = d
             evaluator = PointEvaluator(params, seed)
         for gas in component_gases:
             for j in range(n_pe - 1):

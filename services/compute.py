@@ -305,11 +305,11 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             )
             compute_mode = "adaptive"
         else:
-            results = run_grid_sweep(
+            results, mask_stats = run_grid_sweep(
                 params, max_workers=config.MAX_WORKERS, progress_cb=progress
             )
             pack_params = params
-            adapt_stats = {}
+            adapt_stats = dict(mask_stats)
             base_results = results
             trace_bundle = None
             compute_mode = "uniform"
