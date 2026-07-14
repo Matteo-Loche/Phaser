@@ -20,8 +20,12 @@ _WATER_GASES = ("O2(g)", "H2(g)")
 
 
 def water_stability_limits_enabled(params: GridJobParams) -> bool:
-    """Whether analytic O₂/H₂ water-stability overlays apply for this job."""
-    return params.solution_mode != "direct"
+    """Whether analytic O₂/H₂ water-stability overlays apply for this job.
+
+    Always on for current solution modes (both impose redox via O₂(g) fugacity).
+    """
+    del params
+    return True
 
 
 def log_k_o2_water(*, temp_c: float = 25.0) -> float:

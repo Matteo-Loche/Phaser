@@ -399,10 +399,6 @@ def format_grid_input(
     flip_charge: bool = False,
 ) -> str:
     """Dispatch to the input builder for ``params.solution_mode``."""
-    if params.solution_mode == "direct":
-        from .input_direct import format_direct_input
-
-        return format_direct_input(ph=ph, pe=pe, params=params)
     if params.solution_mode == "dummy_titration":
         from .input_dummy_titration import format_dummy_titration_input
 
@@ -415,8 +411,7 @@ def format_grid_input(
 
 
 def _selected_output_row_index(params: GridJobParams) -> int:
-    if params.solution_mode == "direct":
-        return 1
+    del params
     return -1
 
 

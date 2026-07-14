@@ -1,4 +1,7 @@
-"""Charge-balanced titration PHREEQC input (Fix_H+/NaOH + O2 fugacity)."""
+"""Real electrolyte titration PHREEQC input (Fix_H+/NaOH + O2 fugacity).
+
+Cl⁻/Na⁺ keep the solution electroneutral; their inclusion may alter speciation.
+"""
 from __future__ import annotations
 
 from .. import config
@@ -12,10 +15,10 @@ def format_titration_input(
     pe: float,
     params,
 ) -> str:
-    """PhreePlot-style titration: acidic seed + Fix_H+/NaOH + fixed O2 fugacity."""
+    """Real-electrolyte titration: acidic Cl seed + Fix_H+/NaOH + fixed O2 fugacity."""
     lines = totals_lines(params)
     target_log_f_o2 = log_f_o2(ph=ph, pe=pe, temp_c=params.temp_c)
-    return f"""TITLE Phase diagram (titration)
+    return f"""TITLE Phase diagram (real electrolyte titration)
 PHASES
 Fix_H+
     H+ = H+

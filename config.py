@@ -189,7 +189,7 @@ PE_MIN = -10.0
 PE_MAX = 14.0
 GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
 
-# Grid-point PHREEQC input modes (see phreeqc/input_titration.py, input_direct.py,
+# Grid-point PHREEQC input modes (see phreeqc/input_titration.py,
 # input_dummy_titration.py).
 SOLUTION_MODE_DEFAULT = "dummy_titration"
 SOLUTION_MODE_META: dict[str, dict[str, str]] = {
@@ -198,21 +198,14 @@ SOLUTION_MODE_META: dict[str, dict[str, str]] = {
         "description": (
             "Acidic seed solution charge-balanced with fictitious Bgc+/Bga- medium; "
             "pH fixed via Fix_H+/BgcOH and redox by O2(g) fugacity "
-            "(same thermodynamic frame as charge-balanced titration, without Cl/Na)."
+            "(same thermodynamic frame as real electrolyte titration, without Cl/Na)."
         ),
     },
     "titration": {
-        "label": "Charge-balanced titration",
+        "label": "Real electrolyte titration",
         "description": (
-            "Acidic seed solution charge-balanced with Cl⁻; pH fixed via Fix_H⁺/NaOH "
-            "titration and redox via O₂(g) fugacity. Solution remains electroneutral."
-        ),
-    },
-    "direct": {
-        "label": "Direct (fixed pH–pe)",
-        "description": (
-            "Single SOLUTION at each grid point with the requested pH, pe, and totals. "
-            "No charge balancing — electroneutrality may be violated."
+            "Acidic seed charge-balanced with Cl⁻; pH fixed via Fix_H⁺/NaOH titration "
+            "and redox via O₂(g) fugacity. Inclusion of Cl and Na may alter the speciation."
         ),
     },
 }
