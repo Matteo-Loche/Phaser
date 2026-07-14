@@ -1,9 +1,15 @@
-"""PHREEQC SYS-based database catalog scanning."""
+"""Database catalog scanning: ``.dat`` text parsers + optional SI probe.
+
+Inventories (totals, elements, aqueous species, phases, collisions) come from
+database text. A single PHREEQC equilibration remains only for best-effort
+``si_probe`` metadata on phases.
+"""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 from itertools import combinations
+from pathlib import Path
 from typing import Any
 
 from .. import config
@@ -11,7 +17,7 @@ from .. import config
 MAX_SLOTS = 48
 _DELIM = "|"
 # Bump when catalog parsing or stored fields change (invalidates cached SQLite catalogs).
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 
 # Element extraction from PHREEQC phase formulae (PHASES block). O/H/charge are
 # dropped because every aqueous system already contains water; subset
@@ -19,6 +25,9 @@ SCHEMA_VERSION = 5
 _ELEMENT_IN_SPECIES = re.compile(r"([A-Z][a-z]?)[+-]")
 _FORMULA_ELEMENTS = re.compile(r"([A-Z][a-z]?)(?=\d|[A-Z]|\(|\)|\+|-|\s|$)")
 _NON_ELEMENTS = {"O", "H", "E", "e"}
+# SOLUTION_MASTER_SPECIES total keys that name a chemical element (optional redox).
+_MASTER_ELEMENT_KEY = re.compile(r"^([A-Z][a-z]?)(?:\([+-]?\d+\))?$")
+_PURE_ELEMENT = re.compile(r"^[A-Z][a-z]?$")
 
 # Top-level PHREEQC datablock keywords. Used to bound the PHASES block: a
 # database may place PITZER/SIT/EXCHANGE_* blocks after PHASES, and parsing into
@@ -33,10 +42,19 @@ _DB_KEYWORDS = frozenset({
     "EXCHANGE", "SURFACE", "GAS_PHASE", "END", "DATABASE",
     "SELECTED_OUTPUT", "USER_PUNCH", "KNOBS",
 })
-# Phase sub-option lines that must never be treated as phase names.
+# Phase/aqueous sub-option lines that must never be treated as names or reactions.
 _PHASE_OPTION_PREFIXES = (
     "log_k", "logk", "delta_h", "deltah", "-", "analytic", "vm ", "vm\t",
     "t_c", "p_c", "omega", "gas_comp", "add_logk", "add_constant",
+)
+_AQ_OPTION_PREFIXES = _PHASE_OPTION_PREFIXES + (
+    "llnl_gamma", "gamma", "dw ", "dw\t", "erm_ddl", "no_check",
+)
+# Water / electron appear in almost every reaction; never treated as collision targets.
+_AQ_SKIP_TOKENS = frozenset({"H2O", "H2O(l)", "e-", "E-", "e+"})
+# Reaction term: optional stoichiometric coefficient, then a species formula.
+_REACTION_TERM = re.compile(
+    r"^(?:(\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)\s+)?(\S.*)$"
 )
 # When the default probe amount fails to converge, retry at lower multiples of
 # CATALOG_PROBE_AMOUNT (same units). Membership from SYS does not depend on
@@ -70,6 +88,15 @@ class ElementProbeHit:
 class ElementProbeResult:
     count: int
     entries: tuple[ElementProbeHit, ...]
+
+
+@dataclass(frozen=True)
+class MasterSpeciesEntry:
+    """One ``SOLUTION_MASTER_SPECIES`` row."""
+
+    total_key: str
+    primary_species: str
+    element: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,15 +146,26 @@ def element_symbols_from_totals(totals: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def coalesce_totals_per_element(accepted: tuple[str, ...]) -> tuple[str, ...]:
-    """Keep one PHREEQC total key per element for joint probe solutions."""
+    """Keep one PHREEQC total key per element for joint probe solutions.
+
+    Prefer a bare element total (``Fe``) over redox states (``Fe(+3)``). Skip
+    ``H`` / ``O`` / ``E`` — water and electrons are not useful probe totals and
+    some redox oxygen keys (``O(-2)``) are rejected by PHREEQC as concentrations.
+    """
     by_symbol: dict[str, list[str]] = {}
     for key in accepted:
         by_symbol.setdefault(element_from_total_key(key), []).append(key)
     out: list[str] = []
     for sym in sorted(by_symbol):
+        if sym in {"H", "O", "E"}:
+            continue
         keys = by_symbol[sym]
+        bare = [k for k in keys if "(" not in k]
+        if bare:
+            out.append(sorted(bare)[0])
+            continue
         with_redox = [k for k in keys if "(" in k]
-        out.append(with_redox[0] if with_redox else keys[0])
+        out.append(sorted(with_redox)[0] if with_redox else keys[0])
     return tuple(out)
 
 
@@ -459,6 +497,10 @@ def probe_accepted_totals(
     units: str = config.DEFAULT_UNITS,
     amount: float = config.CATALOG_PROBE_AMOUNT,
 ) -> tuple[str, ...]:
+    """Legacy per-total acceptance probe (kept for diagnostics/tests).
+
+    Production catalogs use ``parse_solution_master_species`` instead.
+    """
     accepted: list[str] = []
     for key in candidates:
         if probe_total_accepted(pq, key, units=units, amount=amount):
@@ -467,11 +509,22 @@ def probe_accepted_totals(
 
 
 def detect_solid_aqueous_collisions(
-    phases: tuple[PhaseProbeHit, ...],
-    species_by_element: dict[str, tuple[str, ...]],
+    phases: tuple[PhaseProbeHit, ...] | frozenset[str] | set[str],
+    species_by_element: dict[str, tuple[str, ...]] | frozenset[str] | set[str],
 ) -> frozenset[str]:
-    phase_names = {p.name for p in phases}
-    species_names = {s for names in species_by_element.values() for s in names}
+    """Intersect solid/gas phase names with aqueous species names.
+
+    Accepts either legacy probe tuples/dicts or plain name sets (preferred for
+    text-parsed inventories).
+    """
+    if isinstance(phases, (set, frozenset)):
+        phase_names = set(phases)
+    else:
+        phase_names = {p.name for p in phases}
+    if isinstance(species_by_element, (set, frozenset)):
+        species_names = set(species_by_element)
+    else:
+        species_names = {s for names in species_by_element.values() for s in names}
     return frozenset(phase_names & species_names)
 
 
@@ -480,6 +533,123 @@ def extract_formula_elements(text: str) -> frozenset[str]:
     elems = set(_ELEMENT_IN_SPECIES.findall(text))
     elems.update(_FORMULA_ELEMENTS.findall(text))
     return frozenset(e for e in elems if e not in _NON_ELEMENTS)
+
+
+def reaction_species_tokens(reaction: str) -> tuple[str, ...]:
+    """Aqueous (or solid) formula tokens on both sides of a PHREEQC reaction line."""
+    reaction = reaction.split("#", 1)[0].strip()
+    if "=" not in reaction:
+        return ()
+    out: list[str] = []
+    seen: set[str] = set()
+    for side in reaction.split("="):
+        for part in re.split(r"\s+\+\s+", side.strip()):
+            part = part.strip()
+            if not part:
+                continue
+            m = _REACTION_TERM.match(part)
+            if not m:
+                continue
+            formula = m.group(2).strip()
+            if not formula or formula in _AQ_SKIP_TOKENS or formula in seen:
+                continue
+            seen.add(formula)
+            out.append(formula)
+    return tuple(out)
+
+
+def parse_solution_species_names(db_path: str) -> frozenset[str]:
+    """All aqueous species formulae defined in ``SOLUTION_SPECIES``.
+
+    Collects every stoichiometric formula token on reaction lines (both sides),
+    so complexes written as ``3 H2O + Fe+3 = Fe(OH)3 + 3 H+`` contribute
+    ``Fe(OH)3`` even though it is not the first LHS token. Master-species
+    identity lines ``Fe+2 = Fe+2`` are included the same way.
+
+    Independent of probe pH/pe/T — same completeness argument as
+    ``parse_phase_elements`` for the PHASES block.
+    """
+    lines = Path(db_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    out: set[str] = set()
+    in_block = False
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if raw[:1] not in (" ", "\t"):
+            head = stripped.split()[0].split("#")[0].upper()
+            if head in _DB_KEYWORDS:
+                in_block = head == "SOLUTION_SPECIES"
+                continue
+        if not in_block:
+            continue
+        low = stripped.lower()
+        if low.startswith(_AQ_OPTION_PREFIXES):
+            continue
+        if "=" not in stripped:
+            continue
+        out.update(reaction_species_tokens(stripped))
+    return frozenset(out)
+
+
+def resolve_master_element(total_key: str, gfw_formula: str = "") -> str | None:
+    """Map a master-species total key to a chemical element symbol, if possible.
+
+    Prefer a plain-element ``gfw_formula`` column (USGS style). Fall back to
+    ``Fe`` / ``Fe(2)`` / ``Fe(+3)``-shaped total keys. Skip pseudo-totals
+    (``Alkalinity``, ``Acetate``, ``E``, gas tracers, …).
+    """
+    gfw = (gfw_formula or "").strip()
+    if _PURE_ELEMENT.match(gfw) and gfw != "E":
+        return gfw
+    m = _MASTER_ELEMENT_KEY.match(total_key.strip())
+    if not m:
+        return None
+    sym = m.group(1)
+    if sym == "E":
+        return None
+    return sym
+
+
+def parse_solution_master_species(db_path: str) -> tuple[MasterSpeciesEntry, ...]:
+    """Parse ``SOLUTION_MASTER_SPECIES`` into totals + resolved element symbols.
+
+    Column layout (USGS): ``total_key  primary_species  alk  [gfw_formula] …``.
+    """
+    lines = Path(db_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    out: list[MasterSpeciesEntry] = []
+    seen: set[str] = set()
+    in_block = False
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if raw[:1] not in (" ", "\t"):
+            head = stripped.split()[0].split("#")[0].upper()
+            if head in _DB_KEYWORDS:
+                in_block = head == "SOLUTION_MASTER_SPECIES"
+                continue
+        if not in_block:
+            continue
+        # Strip trailing comments; require at least total + primary species.
+        body = stripped.split("#", 1)[0].strip()
+        parts = body.split()
+        if len(parts) < 2:
+            continue
+        total_key = parts[0]
+        primary = parts[1]
+        gfw = parts[3] if len(parts) >= 4 else ""
+        if total_key in seen:
+            continue
+        seen.add(total_key)
+        out.append(
+            MasterSpeciesEntry(
+                total_key=total_key,
+                primary_species=primary,
+                element=resolve_master_element(total_key, gfw),
+            )
+        )
+    return tuple(out)
 
 
 def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
@@ -497,8 +667,6 @@ def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
       * label suffixes like ``Ferrihydrite(2L)``, by reading composition from
         the reaction rather than the name.
     """
-    from pathlib import Path
-
     lines = Path(db_path).read_text(encoding="utf-8", errors="replace").splitlines()
     out: dict[str, frozenset[str]] = {}
     in_phases = False
@@ -549,35 +717,45 @@ def scan_database_catalog(
     units: str = config.DEFAULT_UNITS,
     amount: float = config.CATALOG_PROBE_AMOUNT,
 ) -> DatabaseCatalogSnapshot:
-    candidates = (
-        known_totals
-        or total_candidates
-        or config.CATALOG_TOTAL_CANDIDATES
+    """Build a catalog snapshot from ``.dat`` text (+ one SI probe).
+
+    ``known_totals`` / ``total_candidates`` optionally restrict which master
+    totals are kept (tests). By default every element-resolvable master total
+    from ``SOLUTION_MASTER_SPECIES`` is accepted — no per-total PHREEQC probes.
+    """
+    master = parse_solution_master_species(db_path)
+    master_by_key = {e.total_key: e for e in master}
+    element_totals = tuple(
+        e.total_key for e in master if e.element is not None
     )
-    accepted = probe_accepted_totals(pq, candidates, units=units, amount=amount)
+
+    if known_totals is not None:
+        accepted = tuple(t for t in known_totals if t in master_by_key)
+    elif total_candidates is not None:
+        accepted = tuple(t for t in total_candidates if t in master_by_key)
+    else:
+        accepted = element_totals
+
+    if not accepted:
+        # Fall back to all resolvable master totals if a restriction emptied the set.
+        accepted = element_totals
+
+    symbols = element_symbols_from_totals(accepted)
+    elements = tuple(ElementProbeHit(name=sym, kind="dis") for sym in symbols)
+
+    # One equilibration for best-effort SI metadata only.
     probe_totals = probe_totals_dict(accepted, amount=amount)
-    # Equilibrate once at a converging concentration so SYS("aq") (species) and
-    # best-effort SI values are available. The probe's temperature/pH/pe are NOT
-    # used to decide which phases exist (see below).
     baseline_phases, probe_totals = converging_phases_probe(
         pq, totals=probe_totals, units=units
     )
-    elements = run_elements_delimited_probe(pq, totals=probe_totals, units=units)
+    del probe_totals  # scaled variant unused after SI attach
 
-    # One equilibration for every aqueous species, then group by element via
-    # formula. Probing each element separately re-equilibrates the full solution
-    # per element and stalls on large databases (e.g. sit.dat, llnl.dat).
-    symbols = element_symbols_from_totals(accepted)
-    all_species = run_aqueous_species_probe(pq, totals=probe_totals, units=units)
+    # Complete aqueous inventory from SOLUTION_SPECIES text.
+    aq_names = parse_solution_species_names(db_path)
+    all_species = tuple(sorted(aq_names))
     species_by_element = group_species_by_element(all_species, symbols)
     species_count = len(all_species)
 
-    # The phase catalog (names, kind, element composition) comes from the
-    # database PHASES block, which is complete and independent of the probe's
-    # temperature / pH / pe. SYS("phases") only reports phases whose redox state
-    # matches the probe solution, so e.g. Fe(III) oxides/oxyhydroxides (Hematite,
-    # Goethite, Magnetite, ...) are dropped at a reducing pe. The probe is used
-    # only for best-effort SI metadata.
     formula_map = parse_phase_elements(db_path)
     si_by_name = {p.name: p.si for p in baseline_phases.phases}
 
@@ -597,12 +775,12 @@ def scan_database_catalog(
         phase_elements[name] = tuple(sorted(elems))
 
     phase_names = {p.name for p in solids} | {p.name for p in gases}
-    collisions = frozenset(phase_names & set(all_species))
+    collisions = frozenset(phase_names & aq_names)
 
     return DatabaseCatalogSnapshot(
         db_path=db_path,
         accepted_totals=accepted,
-        elements=elements.entries,
+        elements=elements,
         solid_phases=tuple(solids),
         gas_phases=tuple(gases),
         species_by_element=species_by_element,
