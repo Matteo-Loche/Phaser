@@ -606,6 +606,11 @@
     .phase-item:last-child { border-bottom: none; }
     .phase-item input { width: 18px; height: 18px; flex: none; }
     .phase-item .pname { font-weight: 600; }
+    .phase-item .pform {
+      color: var(--muted); font-weight: 500; font-size: 0.78rem;
+      font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    }
+    .phase-item .pform sub, .phase-item .pform sup { font-size: 0.72em; }
     .phase-item .pelem { color: var(--muted); font-size: 0.72rem; }
     .swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; border: 1px solid rgba(0,0,0,0.25); }
 
@@ -953,6 +958,14 @@
             <span id="subsetLabel" style="color:var(--muted)">Elements:</span>
             <span id="solidSubsetBoxes"></span>
           </span>
+          <span id="phaseLabelWrap" style="display:inline-flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.6rem">
+            <label style="font-size:0.78rem;color:var(--muted);margin-bottom:0" for="phaseLabelMode">Phase labels</label>
+            <select id="phaseLabelMode" style="min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
+              <option value="name">Name</option>
+              <option value="formula">Formula</option>
+              <option value="both">Name + formula</option>
+            </select>
+          </span>
           <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
           <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
           <div class="spacer" style="flex:1"></div>
@@ -1086,6 +1099,7 @@
       layerElements: false,
       labelsOnly: false,
       showBoundaries: true,
+      phaseLabelMode: "name", // "name" | "formula" | "both" — solids only; aqueous always chem-formatted
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
       colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
     };
@@ -1093,7 +1107,8 @@
     const runtime = {
       cfg: null,
       databases: [],
-      catalog: [],          // discovered phases [{name, elements}]
+      catalog: [],          // discovered phases [{name, elements, formula}]
+      formulaByName: {},   // phase name -> stoichiometric formula from catalog
       allowedSpecies: [],   // species valid for the selected database
       speciesSuggestions: [],
       lastResult: null,
@@ -1567,11 +1582,86 @@
       }
       return state.colorByName[name];
     }
+
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    /** PHREEQC ASCII formula → HTML with chemical subscripts / charge superscripts. */
+    function formatChemHtml(raw) {
+      if (raw == null || raw === "") return "";
+      let s = String(raw);
+      let trail = "";
+      const sp = s.search(/\s/);
+      if (sp >= 0) {
+        trail = escapeHtml(s.slice(sp));
+        s = s.slice(0, sp);
+      }
+      let suffix = "";
+      const suf = s.match(/(\((?:g|s|aq|2[Ll]|disordered|element)\))$/);
+      if (suf) {
+        suffix = suf[1];
+        s = s.slice(0, -suffix.length);
+      }
+      let charge = "";
+      const ch = s.match(/([+-]\d*)$/);
+      if (ch) {
+        charge = ch[1];
+        s = s.slice(0, -charge.length);
+      }
+      let body = escapeHtml(s)
+        .replace(/([A-Z][a-z]?)(\d+(?:\.\d+)?)/g, "$1<sub>$2</sub>")
+        .replace(/\)(\d+(?:\.\d+)?)/g, ")<sub>$1</sub>");
+      if (charge) {
+        const sign = charge[0];
+        const num = charge.slice(1);
+        body += `<sup>${escapeHtml(num ? num + sign : sign)}</sup>`;
+      }
+      return body + escapeHtml(suffix) + trail;
+    }
+
+    function phaseBaseName(name) {
+      return name.endsWith("(s)") ? name.slice(0, -3) : name;
+    }
+
+    function formulaForPhase(name) {
+      const base = phaseBaseName(name);
+      return runtime.formulaByName[base] || base;
+    }
+
+    function displayPhaseName(base) {
+      return base.replace("(2L)", "").replace("(disordered)", "");
+    }
+
     function labelForPhase(name) {
       if (name === "none") return "—";
-      if (name.startsWith("O2(g)")) return name.replace("O2(g)", "O₂");
-      if (name.startsWith("H2(g)")) return name.replace("H2(g)", "H₂");
-      return name.replace("(2L)", "").replace("(disordered)", "");
+      if (isGasDomainLabel(name)) {
+        const m = name.match(/^(O2\(g\)|H2\(g\))(.*)$/);
+        if (m) return formatChemHtml(m[1]) + escapeHtml(m[2]);
+        return formatChemHtml(name);
+      }
+      const solid = name.endsWith("(s)") ? "(s)" : "";
+      const base = phaseBaseName(name);
+      const shown = displayPhaseName(base);
+      const formula = formulaForPhase(base);
+      const nameHtml = formatChemHtml(shown);
+      const formulaHtml = formatChemHtml(formula);
+      // Aqueous / formula-named phases: catalog formula equals the token — modes
+      // collapse to one chem-formatted label (name vs formula is meaningless).
+      if (formula === base || formula === shown) {
+        return nameHtml + solid;
+      }
+      if (state.phaseLabelMode === "formula") {
+        return formulaHtml + solid;
+      }
+      if (state.phaseLabelMode === "both") {
+        return `${nameHtml} (${formulaHtml})${solid}`;
+      }
+      return nameHtml + solid;
     }
 
     function isGasDomainLabel(name) {
@@ -1681,6 +1771,9 @@
       $("solidSubsetWrap").style.display = cfg.elements ? "inline-flex" : "none";
       const lbl = $("subsetLabel");
       if (lbl) lbl.textContent = mode === "aqueous" ? "Aqueous elements:" : "Solid elements:";
+      // Name/formula options only apply to mineral solids; aqueous labels are formulas.
+      const phaseLbl = $("phaseLabelWrap");
+      if (phaseLbl) phaseLbl.style.display = mode === "aqueous" ? "none" : "inline-flex";
     }
 
     // Subset key for the active display: the selected element subset when
@@ -1984,6 +2077,7 @@
       }
       if (state.displayMode === "element") state.displayMode = "aqueous"; // removed mode id
       if (!["solid", "aqueous"].includes(state.displayMode)) state.displayMode = "solid";
+      if (!["name", "formula", "both"].includes(state.phaseLabelMode)) state.phaseLabelMode = "name";
       delete state.targetElement;
       state.layerSolids ??= true;
       state.layerAqueous ??= true;
@@ -2219,6 +2313,7 @@
       const elems = systemElements();
       if (!elems.length) {
         runtime.catalog = [];
+        runtime.formulaByName = {};
         renderPhases();
         return;
       }
@@ -2235,13 +2330,15 @@
         });
         if (seq !== runtime.phaseSeq) return; // stale response
         runtime.catalog = data.phases;
-        // default-select newly seen phases
+        runtime.formulaByName = {};
         runtime.catalog.forEach(p => {
+          runtime.formulaByName[p.name] = p.formula || p.name;
           if (!(p.name in state.phaseSel)) state.phaseSel[p.name] = true;
         });
         renderPhases();
         persist();
         setStatus(`Found ${data.count} candidate phases.`, "ok");
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
       } catch (e) {
         if (seq !== runtime.phaseSeq) return;
         $("phaseBox").innerHTML = `<div class="meta" style="padding:0.6rem;color:var(--err)">${e.message}</div>`;
@@ -2251,17 +2348,25 @@
     function renderPhases() {
       const box = $("phaseBox");
       const q = ($("phaseSearch").value || "").toLowerCase();
-      const list = runtime.catalog.filter(p => !q || p.name.toLowerCase().includes(q));
+      const list = runtime.catalog.filter(p => {
+        if (!q) return true;
+        const form = (p.formula || p.name).toLowerCase();
+        return p.name.toLowerCase().includes(q) || form.includes(q)
+          || (p.elements || []).some(e => e.toLowerCase().includes(q));
+      });
       if (!runtime.catalog.length) {
         box.innerHTML = `<div class="meta" style="padding:0.6rem">No phases match this system.</div>`;
       } else {
         box.innerHTML = list.map(p => {
           const checked = state.phaseSel[p.name] ? "checked" : "";
           const safe = p.name.replace(/"/g, "&quot;");
+          const form = p.formula || p.name;
+          const formHtml = ` <span class="pform">${formatChemHtml(form)}</span>`;
           return `<label class="phase-item">
             <input type="checkbox" data-name="${safe}" ${checked} />
             <span class="swatch" style="background:${colorForPhase(p.name)}"></span>
-            <span><span class="pname">${p.name}</span> <span class="pelem">${p.elements.join(", ")}</span></span>
+            <span><span class="pname">${escapeHtml(p.name)}</span>${formHtml}
+              <span class="pelem">${escapeHtml((p.elements || []).join(", "))}</span></span>
           </label>`;
         }).join("");
         box.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -2621,6 +2726,12 @@
       });
 
       // display-only toggles: re-render last result without recomputing
+      $("phaseLabelMode").addEventListener("change", e => {
+        const v = e.target.value;
+        state.phaseLabelMode = ["name", "formula", "both"].includes(v) ? v : "name";
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
       $("labelsOnly").addEventListener("change", e => {
         state.labelsOnly = e.target.checked; persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
@@ -2704,6 +2815,9 @@
           : roundPe(state.y.peMax);
       $("displayMode").value = state.displayMode;
       syncDisplayFromPlot();
+      $("phaseLabelMode").value = ["name", "formula", "both"].includes(state.phaseLabelMode)
+        ? state.phaseLabelMode
+        : "name";
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
       const mode = state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration";
@@ -3173,7 +3287,7 @@
           anns.push({
             x: x[best[0]], y: y[best[1]],
             text: `<b>${labelForPhase(names[idx])}</b>`,
-            showarrow: false, font: { size: 12, color: "#111" },
+            showarrow: false, font: { size: 14, color: "#111" },
             bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
           });
         }
@@ -3219,7 +3333,7 @@
         anns.push({
           x: c.x, y: c.y,
           text: `<b>${labelForPhase(name)}</b>`,
-          showarrow: false, font: { size: 12, color: "#111" },
+          showarrow: false, font: { size: 14, color: "#111" },
           bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
         });
       }
@@ -3316,14 +3430,14 @@
       }
       const top = deduped.slice(0, n);
       if (!top.length) return "";
-      return top.map(([sp, m]) => `${sp} (${fmtHoverMol(m)})`).join("<br>");
+      return top.map(([sp, m]) => `${formatChemHtml(sp)} (${fmtHoverMol(m)})`).join("<br>");
     }
 
     function buildHoverCustomData(hGrid, hNames, result) {
       const speciesGrid = result.hover_species;
       const filterElems = hoverElementsFilter(result);
       return hGrid.map((row, iy) => row.map((v, ix) => {
-        const phase = v < 0 ? "—" : hNames[v];
+        const phase = v < 0 ? "—" : labelForPhase(hNames[v]);
         const sp = speciesGrid
           ? formatHoverSpecies(speciesGrid[iy]?.[ix], filterElems)
           : "";

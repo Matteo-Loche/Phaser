@@ -17,7 +17,7 @@ from .. import config
 MAX_SLOTS = 48
 _DELIM = "|"
 # Bump when catalog parsing or stored fields change (invalidates cached SQLite catalogs).
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Element extraction from PHREEQC phase formulae (PHASES block). O/H/charge are
 # dropped because every aqueous system already contains water; subset
@@ -52,6 +52,8 @@ _AQ_OPTION_PREFIXES = _PHASE_OPTION_PREFIXES + (
 )
 # Water / electron appear in almost every reaction; never treated as collision targets.
 _AQ_SKIP_TOKENS = frozenset({"H2O", "H2O(l)", "e-", "E-", "e+"})
+# Solvent / charge carriers skipped when picking a PHASES dissolution formula.
+_PHASE_FORMULA_SKIP = _AQ_SKIP_TOKENS | frozenset({"H+", "OH-", "H2", "O2", "O2(g)", "H2(g)"})
 # Reaction term: optional stoichiometric coefficient, then a species formula.
 _REACTION_TERM = re.compile(
     r"^(?:(\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)\s+)?(\S.*)$"
@@ -70,12 +72,22 @@ def is_gas(name: str) -> bool:
 class PhaseProbeHit:
     name: str
     si: float
+    formula: str = ""
 
 
 @dataclass(frozen=True)
 class PhaseProbeResult:
     count: int
     phases: tuple[PhaseProbeHit, ...]
+
+
+@dataclass(frozen=True)
+class ParsedPhase:
+    """One ``PHASES``-block entry from ``.dat`` text."""
+
+    elements: frozenset[str]
+    formula: str
+    reaction: str = ""
 
 
 @dataclass(frozen=True)
@@ -111,6 +123,8 @@ class DatabaseCatalogSnapshot:
     # phase name -> sorted tuple of constituent elements (excluding O/H/charge),
     # parsed from the database PHASES block. Drives element-subset eligibility.
     phase_elements: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # phase name -> stoichiometric formula from the PHASES reaction (display).
+    phase_formulas: dict[str, str] = field(default_factory=dict)
     phase_count: int = 0
     species_count: int = 0
 
@@ -652,23 +666,54 @@ def parse_solution_master_species(db_path: str) -> tuple[MasterSpeciesEntry, ...
     return tuple(out)
 
 
-def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
-    """Map every PHASES-block phase name to its constituent elements.
+def side_species_tokens(side: str) -> tuple[str, ...]:
+    """Formula tokens on one side of a reaction (coefficients stripped)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"\s+\+\s+", side.strip()):
+        part = part.strip()
+        if not part:
+            continue
+        m = _REACTION_TERM.match(part)
+        if not m:
+            continue
+        formula = m.group(2).strip()
+        if not formula or formula in seen:
+            continue
+        seen.add(formula)
+        out.append(formula)
+    return tuple(out)
 
-    Element composition is not exposed by PHREEQC's SYS interface, so it is read
-    from the database PHASES block once. Used to compute element-subset
-    eligibility without per-subset PHREEQC probing.
 
-    Robust against:
-      * other datablocks after PHASES (PITZER/SIT/EXCHANGE_*), which are skipped
-        via top-level keyword tracking rather than fixed end markers;
-      * trailing index numbers on the name line (e.g. ``Brucite 19``), by taking
-        the name as the first whitespace token;
-      * label suffixes like ``Ferrihydrite(2L)``, by reading composition from
-        the reaction rather than the name.
+def formula_from_phase_reaction(reaction: str, phase_name: str = "") -> str:
+    """Stoichiometric solid/gas formula from a PHASES dissolution reaction.
+
+    Prefers the first LHS reactant that is not water / H+ / OH- / e- / H2 / O2.
+    If the phase name itself appears on the LHS, that wins. Falls back to
+    ``phase_name`` when nothing usable is found.
+    """
+    reaction = reaction.split("#", 1)[0].strip()
+    if "=" not in reaction:
+        return phase_name
+    lhs = reaction.split("=", 1)[0]
+    tokens = side_species_tokens(lhs)
+    if phase_name and phase_name in tokens:
+        return phase_name
+    for tok in tokens:
+        if tok in _PHASE_FORMULA_SKIP:
+            continue
+        return tok
+    return phase_name
+
+
+def parse_phases(db_path: str) -> dict[str, ParsedPhase]:
+    """Map every PHASES-block phase name to elements + display formula.
+
+    Element composition and formula come from the dissolution reaction (not the
+    mineral name — e.g. Goethite → ``FeOOH``).
     """
     lines = Path(db_path).read_text(encoding="utf-8", errors="replace").splitlines()
-    out: dict[str, frozenset[str]] = {}
+    out: dict[str, ParsedPhase] = {}
     in_phases = False
     i = 0
     n = len(lines)
@@ -678,7 +723,6 @@ def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
         i += 1
         if not stripped or stripped.startswith("#"):
             continue
-        # Top-level datablock keyword (starts at column 0) toggles the block.
         if raw[:1] not in (" ", "\t"):
             head = stripped.split()[0].split("#")[0].upper()
             if head in _DB_KEYWORDS:
@@ -687,13 +731,9 @@ def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
         if not in_phases:
             continue
         low = stripped.lower()
-        # Reaction lines (have "=") are consumed via the name's lookahead;
-        # option lines (log_k, -analytic, delta_h, -Vm, ...) are not names.
         if "=" in stripped or low.startswith(_PHASE_OPTION_PREFIXES):
             continue
-        # Phase name = first whitespace token (drops trailing index numbers).
         name = stripped.split()[0]
-        # The reaction is the next meaningful line and must contain "=".
         j = i
         while j < n and (not lines[j].strip() or lines[j].strip().startswith("#")):
             j += 1
@@ -701,11 +741,20 @@ def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
             continue
         reaction = lines[j].strip()
         i = j + 1
-        # Composition from the reaction (carries the formula), never the name.
         elems = extract_formula_elements(reaction)
+        formula = formula_from_phase_reaction(reaction, phase_name=name)
         if name and name not in out:
-            out[name] = elems
+            out[name] = ParsedPhase(
+                elements=elems,
+                formula=formula or name,
+                reaction=reaction.split("#", 1)[0].strip(),
+            )
     return out
+
+
+def parse_phase_elements(db_path: str) -> dict[str, frozenset[str]]:
+    """Map every PHASES-block phase name to its constituent elements."""
+    return {name: hit.elements for name, hit in parse_phases(db_path).items()}
 
 
 def scan_database_catalog(
@@ -737,42 +786,42 @@ def scan_database_catalog(
         accepted = element_totals
 
     if not accepted:
-        # Fall back to all resolvable master totals if a restriction emptied the set.
         accepted = element_totals
 
     symbols = element_symbols_from_totals(accepted)
     elements = tuple(ElementProbeHit(name=sym, kind="dis") for sym in symbols)
 
-    # One equilibration for best-effort SI metadata only.
     probe_totals = probe_totals_dict(accepted, amount=amount)
     baseline_phases, probe_totals = converging_phases_probe(
         pq, totals=probe_totals, units=units
     )
-    del probe_totals  # scaled variant unused after SI attach
+    del probe_totals
 
-    # Complete aqueous inventory from SOLUTION_SPECIES text.
     aq_names = parse_solution_species_names(db_path)
     all_species = tuple(sorted(aq_names))
     species_by_element = group_species_by_element(all_species, symbols)
     species_count = len(all_species)
 
-    formula_map = parse_phase_elements(db_path)
+    parsed_phases = parse_phases(db_path)
     si_by_name = {p.name: p.si for p in baseline_phases.phases}
 
     solids: list[PhaseProbeHit] = []
     gases: list[PhaseProbeHit] = []
     phase_elements: dict[str, tuple[str, ...]] = {}
-    for name, elems in formula_map.items():
+    phase_formulas: dict[str, str] = {}
+    for name, hit in parsed_phases.items():
         if "(element)" in name.lower():
             continue
         si = si_by_name.get(name, float("nan"))
+        formula = hit.formula or name
+        phase_formulas[name] = formula
         if is_gas(name):
-            gases.append(PhaseProbeHit(name=name, si=si))
+            gases.append(PhaseProbeHit(name=name, si=si, formula=formula))
             continue
-        if not elems:
+        if not hit.elements:
             continue
-        solids.append(PhaseProbeHit(name=name, si=si))
-        phase_elements[name] = tuple(sorted(elems))
+        solids.append(PhaseProbeHit(name=name, si=si, formula=formula))
+        phase_elements[name] = tuple(sorted(hit.elements))
 
     phase_names = {p.name for p in solids} | {p.name for p in gases}
     collisions = frozenset(phase_names & aq_names)
@@ -786,6 +835,7 @@ def scan_database_catalog(
         species_by_element=species_by_element,
         solid_aqueous_collisions=collisions,
         phase_elements=phase_elements,
+        phase_formulas=phase_formulas,
         phase_count=len(solids) + len(gases),
         species_count=species_count,
     )

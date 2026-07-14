@@ -247,7 +247,7 @@ re-parse the `.dat` on every job).
 |--------------|--------|-----|
 | Accepted totals / dissolved elements | **`.dat` `SOLUTION_MASTER_SPECIES` text** (`parse_solution_master_species`) | Complete and independent of probe conditions. Element-resolvable keys (`Fe`, `Fe(+3)`, `C(4)`, …); pseudo-totals like `Alkalinity` / `Acetate` are omitted from the totals table that drives the element picker |
 | Aqueous species (grouped per element) | **`.dat` `SOLUTION_SPECIES` text** (`parse_solution_species_names`) | Complete and **independent of temperature / pH / pe**. `SYS("aq")` only reports species present at the probe condition and silently drops complexes such as LLNL `Fe(OH)3` |
-| Phase names, kind (solid/gas), element composition | **`.dat` `PHASES` block text** (`parse_phase_elements`) | Complete and **independent of temperature / pH / pe**. `SYS("phases")` is condition-dependent (it drops Fe(III) oxides like Hematite/Goethite/Magnetite at a reducing pe) and exposes no element composition |
+| Phase names, kind (solid/gas), element composition, **display formula** | **`.dat` `PHASES` block text** (`parse_phases`) | Complete and **independent of temperature / pH / pe**. Formula is the stoichiometric LHS reactant from the dissolution reaction (e.g. Goethite → `FeOOH`), not a PHREEQC probe. `SYS("phases")` is condition-dependent and exposes no element composition |
 | Saturation-index metadata (`si_probe`) | **PHREEQC engine** — one `SYS("phases")` equilibration | Best-effort display metadata only — **not** a parse sanity check. Inventories come from text; the probe may miss redox-mismatched solids |
 | Solid/aqueous name collisions | **Derived** — phase names (text) ∩ aqueous species names (text) | e.g. `FeO`, `CuCO3`, `Fe(OH)3` defined as both a solid and an aqueous complex |
 
@@ -510,7 +510,7 @@ Job statuses: `queued` → `running` → `done` | `error`.
 Before compute:
 
 1. Derive **system elements** from total concentrations (e.g. `Fe`, `C(4)` → `Fe`, `C`).
-2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog.
+2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog. Each phase also includes a **`formula`** field parsed from the PHASES reaction for display (mineral name vs stoichiometry can be toggled client-side later without repacking).
 3. User-selected phases (or auto-discovered set) become the `phases` tuple passed to PHREEQC.
 
 ### Result packing (`packer.py`)

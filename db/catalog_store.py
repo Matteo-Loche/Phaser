@@ -83,6 +83,7 @@ def init_schema() -> None:
                     name TEXT NOT NULL,
                     kind TEXT NOT NULL,
                     si_probe REAL,
+                    formula TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (db_key, name)
                 );
                 CREATE TABLE IF NOT EXISTS species (
@@ -105,6 +106,15 @@ def init_schema() -> None:
                 );
                 """
             )
+            # Migrate older catalogs that predate the formula column.
+            cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(phases)").fetchall()
+            }
+            if "formula" not in cols:
+                conn.execute(
+                    "ALTER TABLE phases ADD COLUMN formula TEXT NOT NULL DEFAULT ''"
+                )
             conn.commit()
         finally:
             conn.close()
@@ -223,14 +233,18 @@ def save_snapshot(
                 )
 
             for phase in snapshot.solid_phases:
+                formula = phase.formula or snapshot.phase_formulas.get(phase.name, "")
                 conn.execute(
-                    "INSERT INTO phases (db_key, name, kind, si_probe) VALUES (?, ?, 'solid', ?)",
-                    (db_key, phase.name, phase.si),
+                    "INSERT INTO phases (db_key, name, kind, si_probe, formula) "
+                    "VALUES (?, ?, 'solid', ?, ?)",
+                    (db_key, phase.name, phase.si, formula),
                 )
             for phase in snapshot.gas_phases:
+                formula = phase.formula or snapshot.phase_formulas.get(phase.name, "")
                 conn.execute(
-                    "INSERT INTO phases (db_key, name, kind, si_probe) VALUES (?, ?, 'gas', ?)",
-                    (db_key, phase.name, phase.si),
+                    "INSERT INTO phases (db_key, name, kind, si_probe, formula) "
+                    "VALUES (?, ?, 'gas', ?, ?)",
+                    (db_key, phase.name, phase.si, formula),
                 )
 
             for element, names in snapshot.species_by_element.items():
@@ -386,6 +400,12 @@ def list_phases(
                 (db_key,),
             ).fetchall()
         )
+        formulas = dict(
+            conn.execute(
+                "SELECT name, formula FROM phases WHERE db_key = ?",
+                (db_key,),
+            ).fetchall()
+        )
 
         out: list[dict[str, Any]] = []
         for name in sorted(eligible):
@@ -397,6 +417,7 @@ def list_phases(
             out.append(
                 {
                     "name": name,
+                    "formula": formulas.get(name) or name,
                     "elements": sorted(phase_elements.get(name, frozenset())),
                     "kind": kind or "solid",
                     "si_probe": si_probe.get(name),
