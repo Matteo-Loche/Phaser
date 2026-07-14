@@ -593,9 +593,9 @@ def _traced_cell(
 
     The two edge crossings define a straight dividing line. We emit it in *local*
     fine-node coordinates (0..factor) together with the category on each side, so
-    the display can build a continuous signed-distance field and recover smooth,
-    sub-grid fills that coincide exactly with the boundary line. Returns ``None``
-    if a bracket is lost or the cell is a saddle (caller falls back to sampling).
+    the display can clip the cell rectangle with the same divide used for the
+    world-space boundary segment. Returns ``None`` if a bracket is lost or the
+    cell is a saddle (caller falls back to sampling).
     """
     pts_local: list[tuple[float, float]] = []
     pts_world: list[tuple[float, float]] = []
@@ -1637,35 +1637,42 @@ def run_boundary_trace(
                 factor,
             ),
         ) as pool:
-            for result in pool.map(_trace_worker_job, jobs):
-                chunk_stats = TraceStats(**result["stats"])
-                _merge_stats(stats, chunk_stats)
-                for layer_id, data in result["layers"].items():
-                    if layer_id not in layers_out:
-                        layers_out[layer_id] = {
-                            "node_fi": [],
-                            "node_fj": [],
-                            "node_cat": [],
-                            "cell_lines": [],
-                            "cell_regions": [],
-                            "boundaries": [],
-                        }
-                    layers_out[layer_id]["node_fi"].extend(data["node_fi"])
-                    layers_out[layer_id]["node_fj"].extend(data["node_fj"])
-                    layers_out[layer_id]["node_cat"].extend(data["node_cat"])
-                    layers_out[layer_id]["cell_lines"].extend(
-                        data.get("cell_lines", [])
-                    )
-                    layers_out[layer_id]["cell_regions"].extend(
-                        data.get("cell_regions", data.get("cell_wedges", []))
-                    )
-                    layers_out[layer_id]["boundaries"].extend(
-                        data.get("boundaries", [])
-                    )
-                stability.extend(result["stability"])
-                done += 1
-                if progress_cb:
-                    progress_cb(done, len(chunks))
+            try:
+                for result in pool.map(_trace_worker_job, jobs):
+                    chunk_stats = TraceStats(**result["stats"])
+                    _merge_stats(stats, chunk_stats)
+                    for layer_id, data in result["layers"].items():
+                        if layer_id not in layers_out:
+                            layers_out[layer_id] = {
+                                "node_fi": [],
+                                "node_fj": [],
+                                "node_cat": [],
+                                "cell_lines": [],
+                                "cell_regions": [],
+                                "boundaries": [],
+                            }
+                        layers_out[layer_id]["node_fi"].extend(data["node_fi"])
+                        layers_out[layer_id]["node_fj"].extend(data["node_fj"])
+                        layers_out[layer_id]["node_cat"].extend(data["node_cat"])
+                        layers_out[layer_id]["cell_lines"].extend(
+                            data.get("cell_lines", [])
+                        )
+                        layers_out[layer_id]["cell_regions"].extend(
+                            data.get("cell_regions", data.get("cell_wedges", []))
+                        )
+                        layers_out[layer_id]["boundaries"].extend(
+                            data.get("boundaries", [])
+                        )
+                    stability.extend(result["stability"])
+                    done += 1
+                    if progress_cb:
+                        progress_cb(done, len(chunks))
+            except Exception as exc:
+                # A dead worker leaves ProcessPool map hung/zombie from the UI's
+                # view (progress stuck near end of "boundaries"); surface clearly.
+                raise RuntimeError(
+                    f"Boundary-trace worker pool failed ({type(exc).__name__}): {exc}"
+                ) from exc
 
         stats.n_stability_segments = len(stability)
 

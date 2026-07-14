@@ -3245,7 +3245,9 @@
           type: "scatter", mode: "lines", fill: "toself",
           x: mapped.x, y: mapped.y,
           fillcolor: fill,
-          line: { width: 0, color: fill },
+          // Hairline stroke in the fill color seals antialias gaps between
+          // adjacent per-cell rings (traced boundary cells).
+          line: { width: 1, color: fill },
           hoverinfo: "skip",
           showlegend: false,
         };

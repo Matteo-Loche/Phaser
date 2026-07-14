@@ -226,8 +226,7 @@ MAX_CONCURRENT_JOBS = int(os.environ.get("PHASER_MAX_CONCURRENT_JOBS", "1"))
 # When enabled, compute evaluates the full selected grid first, then traces
 # phase boundaries on mixed cells via root-finding (see boundary_trace.py).
 ADAPTIVE_BOUNDARIES_DEFAULT = True
-# Subdivision factor for the local fallback sub-grid inside unresolved cells and
-# for the fine display raster in diagram/vectors.py (exact line/region SDF fills).
+# Subdivision per base cell for fallback sampling and geometric traced fills.
 ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"))
 # Soft cap on total PHREEQC evaluations in adaptive mode (base grid + trace work).
 MAX_ADAPTIVE_POINTS = int(os.environ.get("PHASER_MAX_ADAPTIVE_POINTS", "120000"))

@@ -3,10 +3,11 @@
 Each display layer is built from the trace bundle:
 
 1. A fine categorical grid (base block-fill + traced overrides for boundary cells).
-2. Per-category signed-distance fields from exact dividing lines (2-category cells)
-   and convex line-bounded regions (3-category triple/band cells).
-3. Zero-level contouring of those fields for smooth fills aligned with the exact
-   boundary segments emitted by the tracer.
+2. Per-cell fill polygons for traced cells, clipped by the same dividing lines /
+   convex regions as the black boundary segments.
+3. Merged mask-contour fills for interior (untraced) regions and for fallback
+   cells (fallback black lines are also mask contours — there is no brentq edge).
+4. Thin boundary polylines from the tracer (unchanged).
 """
 from __future__ import annotations
 
@@ -16,8 +17,8 @@ from typing import Any, Callable
 import numpy as np
 from skimage.measure import find_contours
 
-# Sentinels for the per-category signed-distance fill field.
-_FIELD_BIG = 1.0e4  # interior magnitude; far exceeds any local signed distance
+# Mask-contour sentinels for interior merges and fallback fills.
+_FIELD_BIG = 1.0e4
 _FIELD_PAD = -1.0e6  # border pad: closes regions touching the plot frame
 
 from ..phreeqc.adaptive import fine_axis_levels
@@ -82,11 +83,10 @@ def _field_contours(
     fine_ph: np.ndarray,
     fine_pe: np.ndarray,
 ) -> list[tuple[np.ndarray, np.ndarray]]:
-    """Zero-level contours of a signed field (>0 inside the category region).
+    """Zero-level contours of a signed field (>0 inside the region).
 
-    Padding with a strongly negative constant closes any region that reaches the
-    plot frame, mirroring binary-mask behaviour while letting the interior carry
-    a continuous signed distance so the contour lands exactly on the boundary.
+    Used for merged interior fills and fallback mask fills. Traced boundary
+    cells use geometric half-plane clips instead.
     """
     n_pe, n_ph = field.shape
     padded = np.pad(field, 1, mode="constant", constant_values=_FIELD_PAD)
@@ -131,7 +131,7 @@ def _despeckle(fine: np.ndarray) -> np.ndarray:
 def _parse_cell_lines(
     cell_lines: list[dict[str, Any]], name_index: dict[str, int]
 ) -> list[dict[str, Any]]:
-    """Precompute integer categories and line normals for clean boundary cells."""
+    """Precompute integer categories and local divide endpoints for clean cells."""
     recs: list[dict[str, Any]] = []
     for r in cell_lines:
         x1, y1, x2, y2 = (
@@ -146,6 +146,8 @@ def _parse_cell_lines(
                 "j": int(r["j"]),
                 "x1": x1,
                 "y1": y1,
+                "x2": x2,
+                "y2": y2,
                 "nx": -(y2 - y1),
                 "ny": (x2 - x1),
                 "pos": name_index.get(r["pos"], -1),
@@ -201,22 +203,85 @@ def _parse_cell_regions(
     return dict(by_cat)
 
 
-def _region_field_block(
-    region: dict[str, Any], grid_li: np.ndarray, grid_lj: np.ndarray
-) -> np.ndarray:
-    """Signed field for one convex region: min of its oriented line half-planes.
+def _cell_world_box(
+    i: int, j: int, base_ph: np.ndarray, base_pe: np.ndarray
+) -> list[tuple[float, float]]:
+    """World-space rectangle for base cell ``(i, j)`` (SW→SE→NE→NW)."""
+    ph0, ph1 = float(base_ph[i]), float(base_ph[i + 1])
+    pe0, pe1 = float(base_pe[j]), float(base_pe[j + 1])
+    return [(ph0, pe0), (ph1, pe0), (ph1, pe1), (ph0, pe1)]
 
-    Each line contributes ``sign * cross(A, B, node)`` (positive on the region's
-    side). The per-node minimum is >0 strictly inside and 0 on the bounding lines,
-    so contouring at 0 reproduces the exact edges.
-    """
-    field: np.ndarray | None = None
+
+def _local_to_world(
+    lx: float,
+    ly: float,
+    i: int,
+    j: int,
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    factor: int,
+) -> tuple[float, float]:
+    """Map local fine-node coords (0..factor) on cell ``(i, j)`` to world pH/pe."""
+    f = float(factor) if factor else 1.0
+    ph0, ph1 = float(base_ph[i]), float(base_ph[i + 1])
+    pe0, pe1 = float(base_pe[j]), float(base_pe[j + 1])
+    return (ph0 + (lx / f) * (ph1 - ph0), pe0 + (ly / f) * (pe1 - pe0))
+
+
+def _split_cell_by_line(
+    i: int,
+    j: int,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    factor: int,
+) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    """Clip cell box into (+)/(−) half-planes of a local dividing line."""
+    box = _cell_world_box(i, j, base_ph, base_pe)
+    w1 = _local_to_world(x1, y1, i, j, base_ph, base_pe, factor)
+    w2 = _local_to_world(x2, y2, i, j, base_ph, base_pe, factor)
+    nx = -(w2[1] - w1[1])
+    ny = w2[0] - w1[0]
+
+    def scalar(ph: float, pe: float) -> float:
+        return (ph - w1[0]) * nx + (pe - w1[1]) * ny
+
+    pos = _clip_polygon_halfplane(box, scalar, keep_nonpositive=False)
+    neg = _clip_polygon_halfplane(box, scalar, keep_nonpositive=True)
+    return pos, neg
+
+
+def _clip_cell_by_region(
+    region: dict[str, Any],
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    factor: int,
+) -> list[tuple[float, float]]:
+    """Clip cell box to a convex region (oriented local lines, keep scalar >= 0)."""
+    i, j = int(region["i"]), int(region["j"])
+    verts = _cell_world_box(i, j, base_ph, base_pe)
     for ax, ay, bx, by, sign in region["lines"]:
-        cross = (bx - ax) * (grid_lj - ay) - (by - ay) * (grid_li - ax)
-        contrib = sign * cross
-        field = contrib if field is None else np.minimum(field, contrib)
-    assert field is not None
-    return field
+        aw = _local_to_world(ax, ay, i, j, base_ph, base_pe, factor)
+        bw = _local_to_world(bx, by, i, j, base_ph, base_pe, factor)
+
+        def scalar(
+            ph: float,
+            pe: float,
+            aw: tuple[float, float] = aw,
+            bw: tuple[float, float] = bw,
+            sign: float = float(sign),
+        ) -> float:
+            return sign * (
+                (bw[0] - aw[0]) * (pe - aw[1]) - (bw[1] - aw[1]) * (ph - aw[0])
+            )
+
+        verts = _clip_polygon_halfplane(verts, scalar, keep_nonpositive=False)
+        if len(verts) < 3:
+            return []
+    return verts
 
 
 def _ring_area(xs: np.ndarray, ys: np.ndarray) -> float:
@@ -387,6 +452,36 @@ def _clip_segments_to_sum_window(
     return out
 
 
+def _append_fill_ring(
+    polygons: list[dict[str, Any]],
+    *,
+    cat: int,
+    verts: list[tuple[float, float]],
+    params: GridJobParams,
+    use_water: bool,
+    min_area: float = 1e-12,
+) -> None:
+    if len(verts) < 3:
+        return
+    xs = [float(v[0]) for v in verts]
+    ys = [float(v[1]) for v in verts]
+    if use_water:
+        xs, ys = _clip_polygon_to_water_band(xs, ys, params)
+    if len(xs) < 3:
+        return
+    area = _ring_area(np.array(xs), np.array(ys))
+    if area < min_area:
+        return
+    polygons.append(
+        {
+            "cat": cat,
+            "area": area,
+            "x": xs,
+            "y": ys,
+        }
+    )
+
+
 def _pack_one_layer(
     *,
     base_rows: list[dict],
@@ -398,15 +493,25 @@ def _pack_one_layer(
     n_pe_fine: int,
     fine_ph: np.ndarray,
     fine_pe: np.ndarray,
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
     ph_lookup: dict[float, int],
     pe_lookup: dict[float, int],
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Assemble one display layer: polygons from SDF contouring + boundary lines."""
+    """Assemble one display layer: geometric cell fills + boundary lines."""
     use_water = water_stability_limits_enabled(params)
     node_cats = layer_nodes.get("node_cat") or []
     cell_lines = layer_nodes.get("cell_lines") or []
+    cell_regions = (
+        layer_nodes.get("cell_regions")
+        or layer_nodes.get("cell_wedges")
+        or []
+    )
     line_cat_names = {c for r in cell_lines for c in (r["pos"], r["neg"])}
+    region_cat_names = {
+        r["cat"] for cell in cell_regions for r in (cell.get("regions") or ())
+    }
     if use_water:
         o2_label, h2_label = water_gas_outside_labels(params)
         extra_names = {o2_label, h2_label}
@@ -417,6 +522,7 @@ def _pack_one_layer(
         {cat_fn(r) for r in base_rows}
         | set(node_cats)
         | line_cat_names
+        | region_cat_names
         | extra_names
     )
     name_index = {name: i for i, name in enumerate(names)}
@@ -451,11 +557,6 @@ def _pack_one_layer(
     )
 
     recs = _parse_cell_lines(cell_lines, name_index)
-    cell_regions = (
-        layer_nodes.get("cell_regions")
-        or layer_nodes.get("cell_wedges")
-        or []
-    )
     regions_by_cat = _parse_cell_regions(cell_regions, name_index)
     grid_lj, grid_li = np.meshgrid(
         np.arange(factor + 1, dtype=float),
@@ -481,55 +582,83 @@ def _pack_one_layer(
     ph_lo, ph_hi = float(fine_ph[0]), float(fine_ph[-1])
     pe_lo, pe_hi = float(fine_pe[0]), float(fine_pe[-1])
 
-    recs_by_cat: dict[int, list[tuple[dict[str, Any], float]]] = defaultdict(list)
-    for r in recs:
-        recs_by_cat[r["pos"]].append((r, 1.0))
-        recs_by_cat[r["neg"]].append((r, -1.0))
+    traced_cells: set[tuple[int, int]] = {(r["i"], r["j"]) for r in recs}
+    for cell in cell_regions:
+        traced_cells.add((int(cell["i"]), int(cell["j"])))
+
+    fallback_cells: set[tuple[int, int]] = set()
+    n_ph_cells = params.ph_levels - 1
+    n_pe_cells = params.pe_levels - 1
+    for fi, fj in overrides:
+        ci = int(fi) // factor if factor else 0
+        cj = int(fj) // factor if factor else 0
+        if 0 <= ci < n_ph_cells and 0 <= cj < n_pe_cells and (ci, cj) not in traced_cells:
+            fallback_cells.add((ci, cj))
 
     polygons: list[dict[str, Any]] = []
-    for cat in range(len(names)):
-        if cat == none_idx:
+
+    # Analytic O₂ / H₂ outside fills.
+    for gas_idx, gas in ((o2_idx, "O2(g)"), (h2_idx, "H2(g)")):
+        if gas_idx < 0:
             continue
-        if cat == o2_idx:
-            cx, cy = _gas_outside_polygon(
-                "O2(g)", params, ph_min=ph_lo, ph_max=ph_hi, pe_min=pe_lo, pe_max=pe_hi,
+        cx, cy = _gas_outside_polygon(
+            gas, params, ph_min=ph_lo, ph_max=ph_hi, pe_min=pe_lo, pe_max=pe_hi,
+        )
+        if len(cx) >= 3:
+            polygons.append({
+                "cat": gas_idx,
+                "area": _ring_area(np.array(cx), np.array(cy)),
+                "x": cx,
+                "y": cy,
+            })
+
+    # Exact 2-category cells: split by the same divide as the black boundary.
+    for r in recs:
+        pos_v, neg_v = _split_cell_by_line(
+            r["i"], r["j"], r["x1"], r["y1"], r["x2"], r["y2"],
+            base_ph, base_pe, factor,
+        )
+        if r["pos"] >= 0 and r["pos"] != none_idx and r["pos"] not in (o2_idx, h2_idx):
+            _append_fill_ring(
+                polygons, cat=r["pos"], verts=pos_v, params=params, use_water=use_water
             )
-            if len(cx) >= 3:
-                polygons.append({
-                    "cat": cat,
-                    "area": _ring_area(np.array(cx), np.array(cy)),
-                    "x": cx,
-                    "y": cy,
-                })
-            continue
-        if cat == h2_idx:
-            cx, cy = _gas_outside_polygon(
-                "H2(g)", params, ph_min=ph_lo, ph_max=ph_hi, pe_min=pe_lo, pe_max=pe_hi,
+        if r["neg"] >= 0 and r["neg"] != none_idx and r["neg"] not in (o2_idx, h2_idx):
+            _append_fill_ring(
+                polygons, cat=r["neg"], verts=neg_v, params=params, use_water=use_water
             )
-            if len(cx) >= 3:
-                polygons.append({
-                    "cat": cat,
-                    "area": _ring_area(np.array(cx), np.array(cy)),
-                    "x": cx,
-                    "y": cy,
-                })
+
+    # Exact 3-category / band cells: convex clips matching region rays.
+    for cat, regions in regions_by_cat.items():
+        if cat < 0 or cat == none_idx or cat in (o2_idx, h2_idx):
             continue
-        field = np.where(chem_fine == cat, _FIELD_BIG, -_FIELD_BIG).astype(float)
-        # Exact per-cell contributions replace the raster init in their block.
-        exact: dict[tuple[int, int], np.ndarray] = {}
-        for r, sign in recs_by_cat.get(cat, ()):
-            s = sign * ((grid_li - r["x1"]) * r["nx"] + (grid_lj - r["y1"]) * r["ny"])
-            key = (r["i"], r["j"])
-            exact[key] = s if key not in exact else np.maximum(exact[key], s)
-        for region in regions_by_cat.get(cat, ()):
-            block = _region_field_block(region, grid_li, grid_lj)
-            key = (region["i"], region["j"])
-            exact[key] = block if key not in exact else np.maximum(exact[key], block)
-        for (ci, cj), block in exact.items():
+        for region in regions:
+            verts = _clip_cell_by_region(region, base_ph, base_pe, factor)
+            _append_fill_ring(
+                polygons, cat=cat, verts=verts, params=params, use_water=use_water
+            )
+
+    # Interior (untraced) cells: one merged mask contour per category — not
+    # per-cell rectangles (those leave a white seam grid and fail label area).
+    covered = traced_cells | fallback_cells
+    interior_fine = np.full(chem_fine.shape, -1, dtype=int)
+    for cj in range(n_pe_cells):
+        for ci in range(n_ph_cells):
+            if (ci, cj) in covered:
+                continue
+            cat = int(base_idx[cj, ci])
+            if cat < 0 or cat == none_idx or cat in (o2_idx, h2_idx):
+                continue
             fi0, fj0 = ci * factor, cj * factor
             fi1 = min(fi0 + factor + 1, n_ph_fine)
             fj1 = min(fj0 + factor + 1, n_pe_fine)
-            field[fj0:fj1, fi0:fi1] = block[: fj1 - fj0, : fi1 - fi0]
+            interior_fine[fj0:fj1, fi0:fi1] = cat
+
+    for cat in range(len(names)):
+        if cat == none_idx or cat in (o2_idx, h2_idx):
+            continue
+        if not (interior_fine == cat).any():
+            continue
+        field = np.where(interior_fine == cat, _FIELD_BIG, -_FIELD_BIG).astype(float)
         field = np.minimum(field, inside_dist)
         if not (field > 0.0).any():
             continue
@@ -551,6 +680,44 @@ def _pack_one_layer(
                     "y": cy,
                 }
             )
+
+    # Fallback cells: mask contours on the fine categorical sample. Their black
+    # boundary segments are also marching-squares from that sample (no brentq
+    # line exists), so fills match the *displayed* fallback edges.
+    if fallback_cells:
+        fb_mask = np.zeros(chem_fine.shape, dtype=bool)
+        for ci, cj in fallback_cells:
+            fi0, fj0 = ci * factor, cj * factor
+            fi1 = min(fi0 + factor + 1, n_ph_fine)
+            fj1 = min(fj0 + factor + 1, n_pe_fine)
+            fb_mask[fj0:fj1, fi0:fi1] = True
+        for cat in range(len(names)):
+            if cat == none_idx or cat in (o2_idx, h2_idx):
+                continue
+            field = np.where(
+                (chem_fine == cat) & fb_mask, _FIELD_BIG, -_FIELD_BIG
+            ).astype(float)
+            field = np.minimum(field, inside_dist)
+            if not (field > 0.0).any():
+                continue
+            for xs, ys in _field_contours(field, fine_ph, fine_pe):
+                if use_water:
+                    cx, cy = _clip_polygon_to_water_band(
+                        [float(v) for v in xs], [float(v) for v in ys], params,
+                    )
+                else:
+                    cx = [float(v) for v in xs]
+                    cy = [float(v) for v in ys]
+                if len(cx) < 3:
+                    continue
+                polygons.append(
+                    {
+                        "cat": cat,
+                        "area": _ring_area(np.array(cx), np.array(cy)),
+                        "x": cx,
+                        "y": cy,
+                    }
+                )
 
     # Boundary lines: traced chemistry segments, optionally clipped to the
     # water-stability window plus analytic O₂/H₂ gas-limit lines.
@@ -595,10 +762,11 @@ def pack_traced_display(
 ) -> dict[str, Any]:
     """Build all display layers from a boundary-trace bundle.
 
-    Each layer gets smooth fill polygons (SDF contouring) and thin boundary
-    polylines. The base grid rows supply hover data only; colors come from the
-    traced geometry in ``trace_bundle``.
+    Each layer gets geometric fill polygons (matching traced boundary edges)
+    and thin boundary polylines. The base grid rows supply hover data only;
+    colors come from the traced geometry in ``trace_bundle``.
     """
+    del db_path
     trace_layers = trace_bundle.get("layers") or {}
     factor = int(trace_bundle.get("refine_factor") or 1)
     n_ph_fine = fine_axis_levels(params.ph_levels, factor)
@@ -633,6 +801,8 @@ def pack_traced_display(
         n_pe_fine=n_pe_fine,
         fine_ph=fine_ph,
         fine_pe=fine_pe,
+        base_ph=base_ph,
+        base_pe=base_pe,
         ph_lookup=ph_lookup,
         pe_lookup=pe_lookup,
     )

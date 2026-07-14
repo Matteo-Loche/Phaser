@@ -15,7 +15,7 @@ PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams**
 Key behaviours:
 
 - **Server-side PHREEQC** with multiprocessing grid sweeps and a **CPU queue** (one sweep at a time by default).
-- **Adaptive boundary tracing** — optional mode that evaluates the full selected grid, then locates phase boundaries by root-finding on mixed cells and builds smooth vector fills from exact line geometry (no uniform fine-grid sweep).
+- **Adaptive boundary tracing** — optional mode that evaluates the full selected grid, then locates phase boundaries by root-finding on mixed cells and builds vector fills whose edges share the same divide geometry as the drawn boundary lines.
 - **Selectable diagram layers** — compute solid predominance, aqueous predominance, and/or per-element subset maps independently (`layer_solids`, `layer_aqueous`, `layer_elements`); boundary tracing and packing honour the same toggles.
 - **Per-element aqueous hover** — grid sweep punches the top species per element via PHREEQC `SYS`; hover tooltips show up to four ranked species filtered to the active display context.
 - **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB.
@@ -104,7 +104,7 @@ PHASER/
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
 │   ├── packer.py          # Pack grid results; solid/aqueous name collision labels
-│   └── vectors.py         # Signed-distance vector display from traced boundaries
+│   └── vectors.py         # Vector fills clipped to traced boundaries (+ mask interiors/fallback)
 ├── services/              # Orchestration logic
 │   ├── catalog.py         # Startup / background PHREEQC catalog scans
 │   ├── compute.py         # FIFO compute queue + background grid jobs
@@ -290,7 +290,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_PORT` | Listen port (default `8765`) |
 | `PHASER_MAX_WORKERS` | Server-side parallel PHREEQC worker processes per grid sweep (default `8`; set via compose `.env`, no rebuild; not a compute API field) |
 | `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
-| `PHASER_ADAPTIVE_REFINE_FACTOR` | Display subdivision factor in adaptive mode (default `5`) |
+| `PHASER_ADAPTIVE_REFINE_FACTOR` | Fallback / local-geometry subdivision in adaptive mode (default `5`) |
 | `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
 | `PHASER_O2_LIMIT_ATM` | O₂ water-stability limit in atm (default `0.21`; titration-style overlays only); per-job override `o2_limit_atm` |
 | `PHASER_H2_LIMIT_ATM` | H₂ water-stability limit in atm (default `1.0`; titration-style overlays only); per-job override `h2_limit_atm` |
@@ -428,8 +428,13 @@ The optional **Adaptive boundaries** mode evaluates the full user-selected grid,
    - **2-category saddles** (four edge crossings) — two intersecting dividing lines.
    - **Fallback** — unresolved cells (4+ categories, lost brackets) share one local `(factor+1)²` sub-grid evaluation per cell across all layers, then marching squares on the sampled category field.
    - **Crossing cache** — edge `brentq` results are keyed by canonical grid-node pairs (shared by adjacent cells) and category pair, so each physical edge is root-found once per worker; converged↔failed edges use the same deduplication. Hits apply across layers that share geometry.
-   - **Tolerances** — phase-boundary `brentq` uses `BOUNDARY_TRACE_TOLERANCE` (default `1e-3`); converged↔failed edges use the looser `BOUNDARY_TRACE_STABILITY_TOLERANCE` (default `1e-2`). Straight chord fills dominate display error, so sub-node brentq precision is unnecessary; stability frontiers are numerical artifacts, not thermodynamic boundaries.
-5. **Vector display** (`diagram/vectors.py`) — per layer, a fine categorical grid is assembled from base data, traced overrides, and exact dividing-line geometry. Fills come from **signed-distance fields** whose zero contour matches the traced segments: straight lines for 2-category cells, and per-region line bounds (min of half-planes) for triple/band cells, with disconnected pieces of one category combined by union. Boundary polylines are taken directly from the trace bundle. In titration-style modes, O₂/H₂ overlays and water-band clipping are applied (`water_stability_limits_enabled`); direct mode uses the full plot frame. A despeckle pass removes isolated pixels from fallback regions.
+   - **Tolerances** — phase-boundary `brentq` uses `BOUNDARY_TRACE_TOLERANCE` (default `1e-3`); converged↔failed edges use the looser `BOUNDARY_TRACE_STABILITY_TOLERANCE` (default `1e-2`). Straight chord geometry dominates display error, so sub-node brentq precision is unnecessary; stability frontiers are numerical artifacts, not thermodynamic boundaries.
+5. **Vector display** (`diagram/vectors.py`) — fills are built to share edges with the black boundary polylines from the trace bundle. Per layer:
+   - **Traced 2-category cells** — the base-cell rectangle is clipped by the same local dividing line used for the world-space boundary segment (Sutherland–Hodgman half-planes).
+   - **Traced 3-category / band cells** — the cell rectangle is clipped by the same oriented region lines emitted for convex fill regions.
+   - **Interior (untraced) cells** — merged mask contours of the coarse category field (one ring family per category) so large regions get a single fill suitable for region labels; avoids a per-cell rectangle mesh.
+   - **Fallback cells** — mask contours on the fine categorical sample; their black edges are also marching-squares from that sample (no `brentq` line exists).
+   - **Boundaries** — polylines taken directly from the trace bundle. In titration-style modes, O₂/H₂ overlays and water-band clipping apply (`water_stability_limits_enabled`); direct mode uses the full plot frame. Despeckle removes isolated fallback pixels on the categorical sample before mask fills.
 
 Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SPECIES`, default 4) while keeping explicit `-mol` output for species seen on boundaries.
 
@@ -455,7 +460,7 @@ Limits (`config.py`):
 | `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
 | `MAX_GRID_POINTS` | 40,000 | Hard cap on `ph_levels × pe_levels` for the **base** grid |
 | `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI and API default for adaptive mode |
-| `ADAPTIVE_REFINE_FACTOR` | 5 | Fine display raster + fallback sub-grid factor (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
+| `ADAPTIVE_REFINE_FACTOR` | 5 | Fallback sub-grid + fine-node factor for traced local geometry (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
 | `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evaluations in adaptive mode (env `PHASER_MAX_ADAPTIVE_POINTS`) |
 | `BOUNDARY_TRACE_TOLERANCE` | 1e-3 | Phase-boundary root finding (`brentq` / 2D roots; env `PHASER_BOUNDARY_TRACE_TOLERANCE`) |
 | `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed stability edges (looser; env `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE`) |
@@ -541,12 +546,14 @@ Species molalities in hover are PHREEQC's per-element moles (`stoichiometry × s
 
 ### Vector display (`vectors.py`)
 
-When boundary tracing is active, each plottable layer is converted into:
+When boundary tracing is active, each plottable layer is converted into fill polygons and boundary polylines that are meant to **coincide on the same edges**:
 
-- **Fill polygons** — per-category signed-distance fields built from exact dividing lines (2-category cells) and convex line-bounded regions (3-category triple/band cells), then contoured at zero. Multiple regions of the same category in one cell are combined by union.
-- **Boundary polylines** — taken directly from the trace bundle (not re-derived from fills).
+- **Boundary polylines** — taken directly from the trace bundle (`brentq` / triple rays for clean cells; marching-squares rings for fallback cells).
+- **Fill polygons (traced cells)** — each mixed base cell is clipped in world `(pH, pe)` space by the same dividing line or convex region lines stored with the trace (local `0…factor` coords map linearly onto the cell). Adjacent same-color cells stay as separate rings (no topology library); Plotly paints them with a matching hairline stroke so seams do not show white.
+- **Fill polygons (interiors)** — untraced cells of one category are merged into mask contours so labels (area-gated in the UI) still place on large regions.
+- **Fill polygons (fallback)** — mask contours on the fine categorical sample, matching how fallback boundaries are drawn (there is no separate root-traced edge to match).
 
-A despeckle pass removes isolated fallback pixels before contouring.
+Chemistry rings are clipped to the analytic O₂/H₂ water band in titration-style modes; gas outside regions use closed half-plane polygons.
 
 ---
 
@@ -951,7 +958,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Grid resolution | — | `GRID_LEVELS = 100` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
 | Default solution mode | — | `SOLUTION_MODE_DEFAULT = dummy_titration` | `dummy_titration`, `titration`, or `direct`; exposed in `/api/config` as `default_solution_mode` and `solution_modes` (listed in that order) |
 | Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
-| Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Display subdivision factor in adaptive mode |
+| Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Fallback / local-geometry subdivision in adaptive mode |
 | Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft cap on total PHREEQC runs in adaptive mode |
 | Boundary trace tolerance | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-3` | Phase-boundary root finding along cell edges |
 | Stability trace tolerance | `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed edge root finding |
@@ -1105,7 +1112,7 @@ Generated databases persist via `PHASER_DATA_DIR` (host path) → container `dat
 | `PHASER_MEMORY_LIMIT` | Docker cgroup | Max RAM for the container |
 | `PHASER_MAX_WORKERS` | App | PHREEQC worker processes per sweep |
 | `PHASER_MAX_CONCURRENT_JOBS` | App | Simultaneous diagram jobs |
-| `PHASER_ADAPTIVE_REFINE_FACTOR` | App | Adaptive display subdivision |
+| `PHASER_ADAPTIVE_REFINE_FACTOR` | App | Adaptive fallback / local-geometry subdivision |
 | `PHASER_MAX_ADAPTIVE_POINTS` | App | Soft cap on adaptive PHREEQC evals |
 | `PHASER_JOB_*_TTL_SEC` | App | Job memory / queue retention |
 | `PHASER_RATE_LIMIT` | App | `1` = on, `0` = off |
