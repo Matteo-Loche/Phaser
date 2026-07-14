@@ -253,8 +253,8 @@ re-parse the `.dat` on every job).
 
 Notes:
 
-- The `PHASES` / `SOLUTION_SPECIES` / `SOLUTION_MASTER_SPECIES` parsers are bounded by datablock keywords (so trailing `PITZER`/`SIT`/`EXCHANGE_*` blocks are not mis-read). `SOLUTION_SPECIES` reaction tokens are taken from **both sides** of each `=` line (so complexes written as `3 H2O + Fe+3 = Fe(OH)3 + 3 H+` still yield `Fe(OH)3`).
-- The `PHASES` parser takes the phase name as the first token (drops legacy numbers like `Brucite 19`), and reads composition from the **reaction**, not the label (so suffixes like `Ferrihydrite(2L)` don't inject a spurious element `L`).
+- The `PHASES` / `SOLUTION_SPECIES` / `SOLUTION_MASTER_SPECIES` parsers are bounded by datablock keywords (so trailing `PITZER`/`SIT`/`EXCHANGE_*` blocks are not mis-read). `SOLUTION_SPECIES` reaction tokens are taken from **both sides** of each `=` line (so complexes written as `3 H2O + Fe+3 = Fe(OH)3 + 3 H+` still yield `Fe(OH)3`). Stoichiometric coefficients may be space-separated or **glued** (`1.000Cu+2`, Thermoddem style).
+- The `PHASES` parser takes the phase name as the first token (drops legacy numbers like `Brucite 19`), and reads composition from the **reaction**, not the label (so suffixes like `Ferrihydrite(2L)` don't inject a spurious element `L`). It accepts both two-line entries and same-line `Name = reaction` definitions used by Thermoddem.
 - **Element-subset eligibility** ("which solids can form given only these elements") is pure set logic on stored compositions (`phase elements ⊆ system elements`) — no per-subset PHREEQC probing. Any subset (singles, pairs, triples, full system) resolves correctly, and scans stay fast even for 50+ element databases.
 - **Solid/aqueous collisions** are stored in SQLite and passed to compute on `GridJobParams.solid_aqueous_collisions`; the precipitated solid is labelled `"<name>(s)"` and the aqueous complex keeps the bare name.
 - Some shipped files are **not** full aqueous catalogs (e.g. `Concrete_PHR.dat` is a PHASES-only INCLUDE$ add-on). They may have empty master/species blocks; the registry still indexes them, but they are not used as ordinary compute databases.

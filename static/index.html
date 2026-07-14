@@ -3245,7 +3245,60 @@
     }
 
     // Connected components (4-connectivity) per phase -> one label per region,
-    // placed at the in-region cell nearest the region centroid (guaranteed inside).
+    // at the cell farthest from any foreign/edge cell (max clearance / visual center).
+    // Geometric centroids fail for C-shapes and for regions that wrap holes.
+    function componentClearanceCell(cells, nx, ny) {
+      const inComp = new Set(cells.map(([cx, cy]) => cy * nx + cx));
+      const dist = new Map();
+      const q = [];
+      for (const [cx, cy] of cells) {
+        let border = cx === 0 || cy === 0 || cx === nx - 1 || cy === ny - 1;
+        if (!border) {
+          for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+            if (!inComp.has((cy + dy) * nx + (cx + dx))) {
+              border = true;
+              break;
+            }
+          }
+        }
+        if (border) {
+          dist.set(cy * nx + cx, 0);
+          q.push([cx, cy]);
+        }
+      }
+      for (let i = 0; i < q.length; i++) {
+        const [cx, cy] = q[i];
+        const d = dist.get(cy * nx + cx);
+        for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+          const ax = cx + dx, ay = cy + dy;
+          const key = ay * nx + ax;
+          if (!inComp.has(key) || dist.has(key)) continue;
+          dist.set(key, d + 1);
+          q.push([ax, ay]);
+        }
+      }
+      let best = cells[0], bestD = -1, bestTie = Infinity;
+      // Prefer high clearance; tie-break toward the component's geometric mean
+      // so labels don't drift into an arbitrary corner of a plateau.
+      let mx = 0, my = 0;
+      for (const [cx, cy] of cells) {
+        mx += cx;
+        my += cy;
+      }
+      mx /= cells.length;
+      my /= cells.length;
+      for (const [cx, cy] of cells) {
+        const d = dist.get(cy * nx + cx) ?? 0;
+        const tie = (cx - mx) ** 2 + (cy - my) ** 2;
+        if (d > bestD || (d === bestD && tie < bestTie)) {
+          bestD = d;
+          bestTie = tie;
+          best = [cx, cy];
+        }
+      }
+      return best;
+    }
+
     function componentAnnotations(result) {
       const { ph: x, y, grid, phase_names: names } = result;
       const ny = grid.length, nx = grid[0].length;
@@ -3259,17 +3312,13 @@
           if (seen[sy][sx]) continue;
           const idx = grid[sy][sx];
           if (idx < 0) { seen[sy][sx] = 1; continue; }
-          // BFS flood fill
           const cells = [];
           const stack = [[sx, sy]];
           seen[sy][sx] = 1;
-          let cxSum = 0, cySum = 0;
           while (stack.length) {
             const [cx, cy] = stack.pop();
             cells.push([cx, cy]);
-            cxSum += cx; cySum += cy;
-            const nb = [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]];
-            for (const [ax2, ay2] of nb) {
+            for (const [ax2, ay2] of [[cx - 1, cy], [cx + 1, cy], [cx, cy - 1], [cx, cy + 1]]) {
               if (ax2 < 0 || ay2 < 0 || ax2 >= nx || ay2 >= ny) continue;
               if (seen[ay2][ax2]) continue;
               if (grid[ay2][ax2] !== idx) continue;
@@ -3278,12 +3327,7 @@
             }
           }
           if (cells.length < minCells) continue;
-          const mcx = cxSum / cells.length, mcy = cySum / cells.length;
-          let best = cells[0], bestD = Infinity;
-          for (const [cx, cy] of cells) {
-            const d = (cx - mcx) ** 2 + (cy - mcy) ** 2;
-            if (d < bestD) { bestD = d; best = [cx, cy]; }
-          }
+          const best = componentClearanceCell(cells, nx, ny);
           anns.push({
             x: x[best[0]], y: y[best[1]],
             text: `<b>${labelForPhase(names[idx])}</b>`,
@@ -3291,51 +3335,6 @@
             bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
           });
         }
-      }
-      return anns;
-    }
-
-    function polygonCentroid(xs, ys) {
-      let a = 0, cx = 0, cy = 0;
-      const n = xs.length;
-      if (n < 3) return { x: xs[0] ?? 0, y: ys[0] ?? 0 };
-      for (let i = 0; i < n; i++) {
-        const j = (i + 1) % n;
-        const cross = xs[i] * ys[j] - xs[j] * ys[i];
-        a += cross;
-        cx += (xs[i] + xs[j]) * cross;
-        cy += (ys[i] + ys[j]) * cross;
-      }
-      a *= 0.5;
-      if (Math.abs(a) < 1e-12) {
-        const sx = xs.reduce((s, v) => s + v, 0);
-        const sy = ys.reduce((s, v) => s + v, 0);
-        return { x: sx / n, y: sy / n };
-      }
-      return { x: cx / (6 * a), y: cy / (6 * a) };
-    }
-
-    function vectorPolygonAnnotations(vectorLayer, tempC) {
-      const names = vectorLayer.names || [];
-      const polygons = [...(vectorLayer.polygons || [])].sort((a, b) => (b.area || 0) - (a.area || 0));
-      const plotW = (vectorLayer.plot_ph_span || 10);
-      const plotH = (vectorLayer.plot_pe_span || 20);
-      const minArea = Math.max(1e-4, plotW * plotH * 0.004);
-      const anns = [];
-      const seen = new Set();
-      for (const poly of polygons) {
-        if ((poly.area || 0) < minArea) continue;
-        const name = names[poly.cat] ?? "?";
-        if (name === "none" || seen.has(name)) continue;
-        seen.add(name);
-        const ys = mapPlotXY(poly.x, poly.y, tempC).y;
-        const c = polygonCentroid(poly.x, ys);
-        anns.push({
-          x: c.x, y: c.y,
-          text: `<b>${labelForPhase(name)}</b>`,
-          showarrow: false, font: { size: 14, color: "#111" },
-          bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
-        });
       }
       return anns;
     }
@@ -3529,9 +3528,7 @@
           title: { text: yLabel, font: { size: 18 } },
           range: [Math.min(yLo, yHi), Math.max(yLo, yHi)],
         }, ax),
-        annotations: vectorMode && vectorLayer
-          ? vectorPolygonAnnotations(vectorLayer, result.temp_c)
-          : componentAnnotations(plotResult),
+        annotations: componentAnnotations(plotResult),
       };
       if (!traces.length) {
         traces.push({ type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",

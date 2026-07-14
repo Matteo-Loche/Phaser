@@ -1078,6 +1078,37 @@ def _trace_triple_cell(
     return node_cats, segments, {"i": i, "j": j, "regions": regions}
 
 
+def _saddle_regions(
+    corners: tuple[str, str, str, str],
+    crossings: dict[int, tuple[tuple[float, float], tuple[float, float]]],
+    factor: int,
+) -> list[dict[str, Any]]:
+    """2-category checkerboard cell: one triangle per corner (4 regions).
+
+    Each corner is cut off by the line joining the crossings on its two adjacent
+    edges — same local construction as the singleton wedges of ``_band_regions``.
+    Without these region fills, saddle cells fall through to discrete fallback
+    masks and show white staircase seams next to smoothly traced neighbors.
+    """
+    regions: list[dict[str, Any]] = []
+    for k in range(4):
+        e_prev, e_cur = (k - 1) % 4, k
+        if e_prev not in crossings or e_cur not in crossings:
+            return []
+        (px, py) = crossings[e_prev][0]
+        (qx, qy) = crossings[e_cur][0]
+        cx, cy = _CORNER_LOCAL[k]
+        regions.append(
+            {
+                "cat": corners[k],
+                "lines": [
+                    _line_constraint(px, py, qx, qy, cx * factor, cy * factor),
+                ],
+            }
+        )
+    return regions
+
+
 def _saddle_node_cats(
     corners: tuple[str, str, str, str],
     p02_a: tuple[float, float],
@@ -1129,7 +1160,11 @@ def _trace_saddle_cell(
     tol: float,
     stability_tol: float,
     stats: TraceStats | None = None,
-) -> tuple[dict[tuple[int, int], str], list[dict[str, Any]]] | None:
+) -> tuple[
+    dict[tuple[int, int], str],
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+] | None:
     """2-category cell with four edge crossings (saddle topology)."""
     if len(set(corners)) != 2:
         return None
@@ -1155,7 +1190,11 @@ def _trace_saddle_cell(
             "y": [crossings[1][1][1], crossings[3][1][1]],
         },
     ]
-    return node_cats, segments
+    regions = _saddle_regions(corners, crossings, factor)
+    region_rec = (
+        {"i": i, "j": j, "regions": regions} if regions else None
+    )
+    return node_cats, segments, region_rec
 
 
 def _classify_cell(
@@ -1213,10 +1252,10 @@ def _classify_cell(
             tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if saddle is not None:
-            node_cats, segments = saddle
+            node_cats, segments, region_rec = saddle
             if stats is not None:
                 stats.n_cells_saddle_traced += 1
-            return None, node_cats, segments, None, False
+            return None, node_cats, segments, region_rec, False
 
     if len(distinct) > 2:
         if stats is not None:

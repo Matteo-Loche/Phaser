@@ -17,7 +17,7 @@ from .. import config
 MAX_SLOTS = 48
 _DELIM = "|"
 # Bump when catalog parsing or stored fields change (invalidates cached SQLite catalogs).
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Element extraction from PHREEQC phase formulae (PHASES block). O/H/charge are
 # dropped because every aqueous system already contains water; subset
@@ -55,8 +55,10 @@ _AQ_SKIP_TOKENS = frozenset({"H2O", "H2O(l)", "e-", "E-", "e+"})
 # Solvent / charge carriers skipped when picking a PHASES dissolution formula.
 _PHASE_FORMULA_SKIP = _AQ_SKIP_TOKENS | frozenset({"H+", "OH-", "H2", "O2", "O2(g)", "H2(g)"})
 # Reaction term: optional stoichiometric coefficient, then a species formula.
+# Thermoddem often glues the coefficient (`1.000Cu+2`) with no whitespace;
+# USGS files typically use a space (`1.000 Cu+2` or `2 H+`).
 _REACTION_TERM = re.compile(
-    r"^(?:(\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)\s+)?(\S.*)$"
+    r"^(?:(\d+(?:\.\d*)?(?:[Ee][+-]?\d+)?)(?:\s+|(?=[A-Za-z(])))?(.+)$"
 )
 # When the default probe amount fails to converge, retry at lower multiples of
 # CATALOG_PROBE_AMOUNT (same units). Membership from SYS does not depend on
@@ -565,7 +567,8 @@ def reaction_species_tokens(reaction: str) -> tuple[str, ...]:
             if not m:
                 continue
             formula = m.group(2).strip()
-            if not formula or formula in _AQ_SKIP_TOKENS or formula in seen:
+            # Reject glued leftovers that still look like bare coefficients.
+            if not formula or formula[:1].isdigit() or formula in _AQ_SKIP_TOKENS or formula in seen:
                 continue
             seen.add(formula)
             out.append(formula)
@@ -678,7 +681,7 @@ def side_species_tokens(side: str) -> tuple[str, ...]:
         if not m:
             continue
         formula = m.group(2).strip()
-        if not formula or formula in seen:
+        if not formula or formula[:1].isdigit() or formula in seen:
             continue
         seen.add(formula)
         out.append(formula)
@@ -711,12 +714,28 @@ def parse_phases(db_path: str) -> dict[str, ParsedPhase]:
 
     Element composition and formula come from the dissolution reaction (not the
     mineral name — e.g. Goethite → ``FeOOH``).
+
+    Accepts both two-line entries (name, then reaction) and Thermoddem-style
+    same-line entries (``CuCl = 1.000Cu+ + 1.000Cl-``).
     """
     lines = Path(db_path).read_text(encoding="utf-8", errors="replace").splitlines()
     out: dict[str, ParsedPhase] = {}
     in_phases = False
     i = 0
     n = len(lines)
+
+    def _store(name: str, reaction: str) -> None:
+        if not name or name in out or "(element)" in name.lower():
+            return
+        rxn = reaction.split("#", 1)[0].strip()
+        elems = extract_formula_elements(rxn)
+        formula = formula_from_phase_reaction(rxn, phase_name=name)
+        out[name] = ParsedPhase(
+            elements=elems,
+            formula=formula or name,
+            reaction=rxn,
+        )
+
     while i < n:
         raw = lines[i]
         stripped = raw.strip()
@@ -731,8 +750,17 @@ def parse_phases(db_path: str) -> dict[str, ParsedPhase]:
         if not in_phases:
             continue
         low = stripped.lower()
-        if "=" in stripped or low.startswith(_PHASE_OPTION_PREFIXES):
+        if low.startswith(_PHASE_OPTION_PREFIXES):
             continue
+        # Same-line: "Name [= coeffs…] = reaction" — left of first "=" is the name.
+        if "=" in stripped:
+            left = stripped.split("=", 1)[0].strip()
+            if not left or left.lower().startswith(_PHASE_OPTION_PREFIXES):
+                continue
+            name = left.split()[0]
+            _store(name, stripped)
+            continue
+        # Two-line: name, then a reaction on a following non-comment line.
         name = stripped.split()[0]
         j = i
         while j < n and (not lines[j].strip() or lines[j].strip().startswith("#")):
@@ -741,14 +769,7 @@ def parse_phases(db_path: str) -> dict[str, ParsedPhase]:
             continue
         reaction = lines[j].strip()
         i = j + 1
-        elems = extract_formula_elements(reaction)
-        formula = formula_from_phase_reaction(reaction, phase_name=name)
-        if name and name not in out:
-            out[name] = ParsedPhase(
-                elements=elems,
-                formula=formula or name,
-                reaction=reaction.split("#", 1)[0].strip(),
-            )
+        _store(name, reaction)
     return out
 
 
