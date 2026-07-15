@@ -3268,12 +3268,21 @@
     }
 
     // Connected components (4-connectivity) per phase -> one label per region.
-    // Clearance is scored in *plot* space so log fO₂ shear moves labels correctly.
-    // Geometric index-centroids fail for C-shapes and for regions that wrap holes.
+    // Clearance is scored in *fractional plot* space (axis ranges normalized to
+    // [0,1]²). Raw display units make pe↔Eh pick different cells because pe
+    // spans ~30 units while Eh spans ~2 V — same geometry, different metric.
+    // Fractional scoring is invariant under pe↔Eh (linear y) but still moves
+    // labels under log fO₂ shear. Geometric index-centroids fail for C-shapes.
     function componentClearancePlot(cells, ph, pe, tempC, nx, ny) {
       const inComp = new Set(cells.map(([cx, cy]) => cy * nx + cx));
-      const borderPts = [];
-      const candidates = [];
+      const x0 = ph[0], x1 = ph[ph.length - 1];
+      const y0 = displayYMin(), y1 = displayYMax();
+      const sx = (x1 - x0) || 1;
+      const sy = (y1 - y0) || 1;
+      const toFrac = (px, py) => [(px - x0) / sx, (py - y0) / sy];
+
+      const borderFrac = [];
+      const candidates = []; // {disp: [px,py], frac: [fx,fy]}
       for (const [cx, cy] of cells) {
         let border = cx === 0 || cy === 0 || cx === nx - 1 || cy === ny - 1;
         if (!border) {
@@ -3284,38 +3293,40 @@
             }
           }
         }
-        const pt = cellPlotXY(cx, cy, ph, pe, tempC);
-        if (border) borderPts.push(pt);
-        else candidates.push(pt);
+        const disp = cellPlotXY(cx, cy, ph, pe, tempC);
+        const frac = toFrac(disp[0], disp[1]);
+        if (border) borderFrac.push(frac);
+        else candidates.push({ disp, frac });
       }
-      const pool = candidates.length ? candidates : cells.map(
-        ([cx, cy]) => cellPlotXY(cx, cy, ph, pe, tempC)
-      );
-      // Prefer max distance to the component boundary in display coords;
-      // tie-break toward the plot-space barycenter.
+      const pool = candidates.length
+        ? candidates
+        : cells.map(([cx, cy]) => {
+            const disp = cellPlotXY(cx, cy, ph, pe, tempC);
+            return { disp, frac: toFrac(disp[0], disp[1]) };
+          });
       let bx = 0, by = 0;
-      for (const [px, py] of pool) {
-        bx += px;
-        by += py;
+      for (const { frac } of pool) {
+        bx += frac[0];
+        by += frac[1];
       }
       bx /= pool.length;
       by /= pool.length;
-      let best = pool[0], bestD = -1, bestTie = Infinity;
-      for (const [px, py] of pool) {
+      let best = pool[0].disp, bestD = -1, bestTie = Infinity;
+      for (const { disp, frac } of pool) {
         let dMin = Infinity;
-        if (borderPts.length) {
-          for (const [qx, qy] of borderPts) {
-            const d = (px - qx) ** 2 + (py - qy) ** 2;
+        if (borderFrac.length) {
+          for (const [qx, qy] of borderFrac) {
+            const d = (frac[0] - qx) ** 2 + (frac[1] - qy) ** 2;
             if (d < dMin) dMin = d;
           }
         } else {
           dMin = 0;
         }
-        const tie = (px - bx) ** 2 + (py - by) ** 2;
+        const tie = (frac[0] - bx) ** 2 + (frac[1] - by) ** 2;
         if (dMin > bestD || (dMin === bestD && tie < bestTie)) {
           bestD = dMin;
           bestTie = tie;
-          best = [px, py];
+          best = disp;
         }
       }
       return best;
