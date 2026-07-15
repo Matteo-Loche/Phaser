@@ -968,6 +968,7 @@
           </span>
           <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
           <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
+          <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showSystemLabel" checked /> System label</label>
           <div class="spacer" style="flex:1"></div>
           <span class="meta" id="plotMeta">No diagram yet.</span>
         </div>
@@ -1099,6 +1100,7 @@
       layerElements: false,
       labelsOnly: false,
       showBoundaries: true,
+      showSystemLabel: true,
       phaseLabelMode: "name", // "name" | "formula" | "both" — solids only; aqueous always chem-formatted
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
       colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
@@ -1793,6 +1795,42 @@
       return [...used].sort().join(", ");
     }
 
+    /** Elements shown in the corner system badge (Fe-C-S). */
+    function displayedSystemElements(result = runtime.lastResult) {
+      const full = result?.system_elements || systemElements();
+      const cfg = displayLayerConfig(result);
+      if (cfg.elements && state.solidSubsetElements.length) {
+        const sel = new Set(state.solidSubsetElements);
+        const filtered = full.filter(e => sel.has(e));
+        // Partial subset → checked elements only; all checked → full input system.
+        if (filtered.length && filtered.length < full.length) return filtered;
+      }
+      return full;
+    }
+
+    function chemicalSystemLabelText(result = runtime.lastResult) {
+      return displayedSystemElements(result).join("-");
+    }
+
+    function systemLabelAnnotation(result) {
+      if (!state.showSystemLabel) return null;
+      const text = chemicalSystemLabelText(result);
+      if (!text) return null;
+      return {
+        x: 1, y: 1,
+        xref: "paper", yref: "paper",
+        xanchor: "right", yanchor: "top",
+        xshift: -10, yshift: -10,
+        text: `<b>${escapeHtml(text)}</b>`,
+        showarrow: false,
+        font: { size: 20, color: "#0f172a", family: "system-ui,Segoe UI,sans-serif", weight: 700 },
+        bgcolor: "rgba(255,255,255,0.92)",
+        bordercolor: "#cbd5e1",
+        borderwidth: 1,
+        borderpad: 7,
+      };
+    }
+
     function activeLayer(result, source = null) {
       const src = source || result;
       const layers = src.layers || {};
@@ -2082,6 +2120,7 @@
       state.layerSolids ??= true;
       state.layerAqueous ??= true;
       state.layerElements ??= false;
+      state.showSystemLabel ??= true;
       const modes = (runtime.cfg?.solution_modes || []).map(m => m.id);
       const defaultMode = runtime.cfg?.default_solution_mode || "dummy_titration";
       // Removed "direct" (fixed pH/pe) calculation mode — remap saved sessions.
@@ -2742,6 +2781,10 @@
         state.showBoundaries = e.target.checked; persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       });
+      $("showSystemLabel").addEventListener("change", e => {
+        state.showSystemLabel = e.target.checked; persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
 
       $("addSpeciesBtn").addEventListener("click", () => addSpecies($("speciesPicker").value));
       $("speciesPicker").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addSpecies(e.target.value); } });
@@ -2822,6 +2865,7 @@
         : "name";
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
+      $("showSystemLabel").checked = state.showSystemLabel !== false;
       const mode = state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration";
       document.querySelectorAll('input[name="solutionMode"]').forEach(r => {
         r.checked = r.value === mode;
@@ -3594,6 +3638,8 @@
         }, ax),
         annotations: componentAnnotations(plotResult),
       };
+      const sysAnn = systemLabelAnnotation(result);
+      if (sysAnn) layout.annotations.push(sysAnn);
       if (!traces.length) {
         traces.push({ type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",
           marker: { opacity: 0 }, hoverinfo: "skip", showlegend: false });

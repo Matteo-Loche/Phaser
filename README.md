@@ -738,6 +738,7 @@ Display controls describe the **plotted result**, not pending Configuration togg
 | **Display** | *Solid predominance* and/or *Aqueous predominance* — only modes that were actually computed appear in the dropdown |
 | **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
 | **Labels only** | Region labels without fill colours |
+| **System label** | Corner badge of the displayed chemical system (e.g. `Fe-C`); uses the active element subset when per-element filters are on, otherwise the full input system |
 | **Boundaries** | Phase and gas-limit boundary polylines |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
 
