@@ -2999,6 +2999,12 @@
     }
 
     async function forgetServerJob(jobId) {
+      if (!jobId) return;
+      // Overlapping poll ticks can all see terminal status and DELETE the same
+      // job — first returns 200, the rest 404. Deduplicate client-side.
+      if (!runtime._forgotJobs) runtime._forgotJobs = new Set();
+      if (runtime._forgotJobs.has(jobId)) return;
+      runtime._forgotJobs.add(jobId);
       try { await api(`/api/job/${jobId}`, { method: "DELETE" }); } catch (e) {}
     }
 
@@ -3150,8 +3156,35 @@
       return `Queued — position ${pos} of ${size}`;
     }
 
+    function formatDurationLabel(sec) {
+      const s = Number(sec);
+      if (!Number.isFinite(s) || s <= 0) return null;
+      if (s < 60) return `${Math.round(s)} s`;
+      if (s % 60 === 0) return `${s / 60} min`;
+      const mins = Math.floor(s / 60);
+      const rem = Math.round(s % 60);
+      return rem ? `${mins} min ${rem} s` : `${mins} min`;
+    }
+
+    function jobErrorStatusText(st) {
+      if (st?.error_code === "timed_out") {
+        // Prefer the limit recorded on the job (what actually fired), then /api/config.
+        const sec = Number(
+          st.wall_timeout_sec ?? runtime.cfg?.job_wall_timeout_sec
+        );
+        const label = formatDurationLabel(sec) || "the configured limit";
+        return `Computation timed out after ${label} — server job stopped.`;
+      }
+      if (st?.error_code === "cancelled") {
+        return st.error || "Computation cancelled.";
+      }
+      return st?.error || "Computation failed";
+    }
+
     function pollJob(jobId, cacheKey, modeId) {
       clearInterval(runtime.pollTimer);
+      runtime.pollEpoch = (runtime.pollEpoch || 0) + 1;
+      const epoch = runtime.pollEpoch;
       const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
       runtime.activeJobModeId = jobModeId;
       saveActiveJob(jobId, cacheKey, jobModeId);
@@ -3159,8 +3192,11 @@
       JobProgress.begin(adaptive);
       setLogoComputing(true, "Computing…");
       runtime.pollTimer = setInterval(async () => {
+        // Ignore in-flight ticks from a superseded poll session.
+        if (epoch !== runtime.pollEpoch) return;
         try {
           const st = await api(`/api/job/${jobId}`);
+          if (epoch !== runtime.pollEpoch) return;
           if (st.status === "queued") {
             const q = queueStatusText(st) || "Queued…";
             JobProgress.setQueued(q.replace(/…$/, ""));
@@ -3179,7 +3215,10 @@
             setLogoComputing(true, `${phaseLabel}…`);
             return;
           }
+          // Terminal — bump epoch before DELETE so overlapping async ticks bail out
+          // instead of each repeating DELETE (404 spam after the first 200).
           clearInterval(runtime.pollTimer);
+          runtime.pollEpoch += 1;
           if (st.status === "error") {
             JobProgress.fail();
             setLogoComputing(false);
@@ -3187,12 +3226,14 @@
             $("computeBtn").disabled = false;
             clearActiveJob();
             forgetServerJob(jobId);
-            setStatus(st.error || "Computation failed", "err");
+            setStatus(jobErrorStatusText(st), "err");
             return;
           }
           await fetchAndRenderJobResult(jobId, cacheKey, st, jobModeId);
         } catch (e) {
+          if (epoch !== runtime.pollEpoch) return;
           clearInterval(runtime.pollTimer);
+          runtime.pollEpoch += 1;
           JobProgress.fail();
           setLogoComputing(false);
           runtime.activeJobModeId = null;
@@ -3232,7 +3273,7 @@
           clearActiveJob();
           runtime.activeJobModeId = null;
           forgetServerJob(rec.jobId);
-          setStatus(st.error || "Computation failed", "err");
+          setStatus(jobErrorStatusText(st), "err");
         }
       } catch (e) {
         clearActiveJob();

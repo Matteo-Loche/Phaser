@@ -98,11 +98,15 @@ def run_adaptive_boundary_sweep(
     max_workers: int | None = None,
     progress_cb=None,
     refine_factor: int | None = None,
+    job_id: str | None = None,
 ) -> tuple[GridJobParams, dict[str, Any], list[GridPointResult], dict[str, Any] | None]:
     """Full base grid sweep + boundary tracing.
 
     Returns ``(base_params, stats, base_rows, trace_bundle)``.
     """
+    from ..services.job_control import check_abort
+
+    check_abort(job_id)
     base_ph, base_pe = build_grid(params)
     n_ph = params.ph_levels
     n_pe = params.pe_levels
@@ -128,7 +132,9 @@ def run_adaptive_boundary_sweep(
         base_points,
         max_workers=max_workers,
         progress_cb=(lambda d, _t: report(d, base_total, "grid")) if progress_cb else None,
+        job_id=job_id,
     )
+    check_abort(job_id)
     base_by_key = {_point_key(r.ph, r.pe): r for r in base_rows}
 
     signature = layer_signature_fn(params)
@@ -192,6 +198,7 @@ def run_adaptive_boundary_sweep(
         progress_cb=(
             (lambda d, t: report(d, t, "boundaries")) if progress_cb else None
         ),
+        job_id=job_id,
     )
     report(n_progress, n_progress, "boundaries")
 

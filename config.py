@@ -252,6 +252,9 @@ JOB_RESULT_TTL_SEC = int(os.environ.get("PHASER_JOB_RESULT_TTL_SEC", "3600"))
 # Queued jobs that were never polled are removed (abandoned tab / never returned).
 JOB_QUEUE_TTL_SEC = int(os.environ.get("PHASER_JOB_QUEUE_TTL_SEC", "7200"))
 JOB_REAPER_INTERVAL_SEC = int(os.environ.get("PHASER_JOB_REAPER_INTERVAL_SEC", "60"))
+# Hard wall-clock limit once a job is running (not including queue wait).
+# Exceeding this terminates ProcessPool workers and frees the concurrent slot.
+JOB_WALL_TIMEOUT_SEC = int(os.environ.get("PHASER_JOB_WALL_TIMEOUT_SEC", "300"))
 
 # Water-stability gas limits (atm) for O₂/H₂ diagram boundaries and labels.
 # Override with PHASER_O2_LIMIT_ATM / PHASER_H2_LIMIT_ATM; UI can set per job.

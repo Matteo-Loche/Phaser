@@ -75,6 +75,7 @@ def get_config():
         "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
         "job_result_ttl_sec": config.JOB_RESULT_TTL_SEC,
         "job_queue_ttl_sec": config.JOB_QUEUE_TTL_SEC,
+        "job_wall_timeout_sec": config.JOB_WALL_TIMEOUT_SEC,
         "rate_limits": {
             "enabled": config.RATE_LIMIT_ENABLED,
             "window_sec": config.RATE_LIMIT_WINDOW_SEC,

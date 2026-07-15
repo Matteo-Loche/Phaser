@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 import os
 from collections import Counter, defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from ..services.job_control import check_abort, managed_process_pool
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any, Callable
 
@@ -1620,8 +1620,10 @@ def run_boundary_trace(
     refine_factor: int | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
     max_workers: int | None = None,
+    job_id: str | None = None,
 ) -> tuple[dict[str, Any], TraceStats]:
     """Trace boundaries across all plottable layers for mixed base cells."""
+    check_abort(job_id)
     tol = tolerance or config.BOUNDARY_TRACE_TOLERANCE
     stability_tol = stability_tolerance or config.BOUNDARY_TRACE_STABILITY_TOLERANCE
     factor = refine_factor or config.ADAPTIVE_REFINE_FACTOR
@@ -1649,6 +1651,7 @@ def run_boundary_trace(
             stability_tol=stability_tol,
             factor=factor,
         )
+        check_abort(job_id)
         if progress_cb:
             progress_cb(1, 1)
     else:
@@ -1662,7 +1665,8 @@ def run_boundary_trace(
         stability: list[dict[str, Any]] = []
         stats = TraceStats()
         done = 0
-        with ProcessPoolExecutor(
+        with managed_process_pool(
+            job_id,
             max_workers=workers,
             initializer=_trace_worker_init,
             initargs=(
@@ -1678,6 +1682,7 @@ def run_boundary_trace(
         ) as pool:
             try:
                 for result in pool.map(_trace_worker_job, jobs):
+                    check_abort(job_id)
                     chunk_stats = TraceStats(**result["stats"])
                     _merge_stats(stats, chunk_stats)
                     for layer_id, data in result["layers"].items():
@@ -1707,8 +1712,14 @@ def run_boundary_trace(
                     if progress_cb:
                         progress_cb(done, len(chunks))
             except Exception as exc:
+                from ..services.job_control import JobAborted
+
+                if isinstance(exc, JobAborted):
+                    raise
                 # A dead worker leaves ProcessPool map hung/zombie from the UI's
                 # view (progress stuck near end of "boundaries"); surface clearly.
+                # After a hard abort the pool may raise BrokenProcessPool — recheck.
+                check_abort(job_id)
                 raise RuntimeError(
                     f"Boundary-trace worker pool failed ({type(exc).__name__}): {exc}"
                 ) from exc

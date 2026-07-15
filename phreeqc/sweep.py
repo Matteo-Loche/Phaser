@@ -1,7 +1,6 @@
 """Multiprocessing grid sweep for phase diagrams."""
 from __future__ import annotations
 
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from itertools import product
 from typing import Any
@@ -9,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .. import config
+from ..services.job_control import check_abort, managed_process_pool
 from .engine import (
     GridJobParams,
     GridPointResult,
@@ -81,9 +81,12 @@ def run_point_sweep(
     progress_offset: int = 0,
     progress_total: int | None = None,
     apply_water_mask: bool = True,
+    job_id: str | None = None,
 ) -> list[GridPointResult]:
     """Evaluate an explicit list of (pH, pe) points."""
     from .gas_limits import water_band_active
+
+    check_abort(job_id)
 
     synthetic: list[GridPointResult] = []
     eval_points = points
@@ -113,12 +116,14 @@ def run_point_sweep(
     params_dict = asdict(params)
 
     done = progress_offset
-    with ProcessPoolExecutor(
+    with managed_process_pool(
+        job_id,
         max_workers=workers,
         initializer=_worker_init,
         initargs=(params.dll_path, params.db_path, params_dict),
     ) as pool:
         for row in pool.map(_worker_eval, tasks_list, chunksize=chunksize):
+            check_abort(job_id)
             results.append(GridPointResult(**row))
             done += 1
             if progress_cb:
@@ -133,6 +138,7 @@ def run_grid_sweep(
     max_workers: int | None = None,
     progress_cb=None,
     map_chunksize: int | None = None,
+    job_id: str | None = None,
 ) -> tuple[list[GridPointResult], dict[str, Any]]:
     ph_axis, pe_axis = build_grid(params)
     total = len(ph_axis) * len(pe_axis)
@@ -149,5 +155,6 @@ def run_grid_sweep(
         points,
         max_workers=max_workers,
         progress_cb=progress_cb,
+        job_id=job_id,
     )
     return rows, mask_stats

@@ -24,6 +24,7 @@ Key behaviours:
 - **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB.
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
+- **Job wall-clock timeout** — running jobs are hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min) so a stuck PHREEQC pool cannot pin the server forever.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
 - **Server usage statistics** — successful Saturation Predominance computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats` and the **Statistics** UI mode (diagram counts, queue timing, 24 h activity).
 - **Per-IP API rate limiting** — sliding-window caps on all `/api/*` routes, burst limits on compute and database registration, and **post-burst cooldowns** with escalating block duration for repeat abuse (see [API rate limiting](#api-rate-limiting)).
@@ -317,6 +318,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
 | `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
 | `PHASER_JOB_REAPER_INTERVAL_SEC` | Background reaper wake interval in seconds (default `60`) |
+| `PHASER_JOB_WALL_TIMEOUT_SEC` | Hard-kill running jobs after this many seconds from `started_at` (default `300`) |
 | `PHASER_CPU_LIMIT` | Docker Compose only — max CPUs for the container cgroup (default `8` in `.env.example`) |
 | `PHASER_MEMORY_LIMIT` | Docker Compose only — max RAM for the container (default `8G`) |
 | `PHASER_DATA_DIR` | Docker Compose only — host path mounted to `data/databases/generated` |
@@ -483,6 +485,7 @@ Limits (`config.py`):
 | `JOB_RESULT_TTL_SEC` | 3600 | Drop finished jobs from memory after this (env `PHASER_JOB_RESULT_TTL_SEC`) |
 | `JOB_QUEUE_TTL_SEC` | 7200 | Drop abandoned queued jobs after this (env `PHASER_JOB_QUEUE_TTL_SEC`) |
 | `JOB_REAPER_INTERVAL_SEC` | 60 | Reaper thread interval (env `PHASER_JOB_REAPER_INTERVAL_SEC`) |
+| `JOB_WALL_TIMEOUT_SEC` | 300 | Hard-kill running jobs after this (env `PHASER_JOB_WALL_TIMEOUT_SEC`); measured from `started_at` |
 
 ### Compute queue (`services/compute.py`)
 
@@ -497,9 +500,10 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
 7. **Page reload during compute:** the UI stores the active `job_id` in `sessionStorage` and resumes polling on load. If the job finished while the tab was away, the result is fetched automatically.
 8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h) and queued jobs that were never started after `JOB_QUEUE_TTL_SEC` (default 2 h). Polls update `last_seen_at` on each job.
-9. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
+9. **Wall-clock timeout:** once a job is `running`, a timer (and the reaper as a safety net) hard-aborts it after `JOB_WALL_TIMEOUT_SEC` (default 5 min): ProcessPool children are terminated, the concurrent slot is freed, and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
+10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
 
-Job statuses: `queued` → `running` → `done` | `error`.
+Job statuses: `queued` → `running` → `done` | `error` (including `error_code` `timed_out` / `cancelled`).
 
 ---
 
@@ -978,6 +982,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
 | Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
+| Job wall timeout | `PHASER_JOB_WALL_TIMEOUT_SEC` | `300` | Hard-kill running jobs (from `started_at`) |
 | Job reaper interval | `PHASER_JOB_REAPER_INTERVAL_SEC` | `60` | Background cleanup wake interval |
 | API rate limits | `PHASER_RATE_LIMIT_*` | see [API rate limiting](#api-rate-limiting) | Per-IP caps; enabled by default |
 | O₂ stability limit | `PHASER_O2_LIMIT_ATM` | `0.21` | `O2_FUGACITY_LIMIT_ATM` — titration water window (atm); per-job `o2_limit_atm` |
