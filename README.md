@@ -804,7 +804,7 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 
 **Coordinate geometry.** `Eh` is a linear, pH-independent rescaling of `pe`. `log fO₂` couples to both `pe` and `pH`, so a rectangular `(pH, pe)` grid maps to a sheared grid in `(pH, log fO₂)`. Vector geometry is transformed **per vertex** (`mapPlotXY(pH, pe)`), which preserves boundary positions when switching axes. O₂/H₂ stability lines are horizontal in a `log fO₂` plot (constant fugacity).
 
-**log fO₂ axis limits** — min/max inputs convert to `pe` at the opposite pH corner: `peMin = fO₂min/4 − pH_max + log K_O₂`, `peMax = fO₂max/4 − pH_min + log K_O₂`. Changing pH refreshes the displayed limits. The hover heatmap uses mid-pH for tick labels; vector fills and boundaries use the exact per-point conversion.
+**log fO₂ axis limits** — min/max inputs convert to `pe` at the same rectangle corners used for the axis extent: `peMin = fO₂min/4 − pH_min + log K_O₂`, `peMax = fO₂max/4 − pH_max + log K_O₂` (so `displayYMin`/`displayYMax` round-trip). Changing pH refreshes the displayed limits. The hover heatmap uses mid-pH for its rectangular y ticks; vector fills, boundaries, and phase labels use the exact per-point conversion.
 
 ---
 

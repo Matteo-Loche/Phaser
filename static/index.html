@@ -2654,7 +2654,8 @@
         const v = parseFloat(e.target.value);
         if (state.y.axis === "eh") state.y.peMin = roundPe(ehToPe(v, state.tempC));
         else if (state.y.axis === "log_fo2") {
-          state.y.peMin = roundPe(logFO2ToPe(v, state.ph.max, state.tempC));
+          // Same corner as displayYMin: axis bottom = fO₂ at (pH_min, pe_min).
+          state.y.peMin = roundPe(logFO2ToPe(v, state.ph.min, state.tempC));
         } else state.y.peMin = roundPe(v);
         commit();
       });
@@ -2662,7 +2663,8 @@
         const v = parseFloat(e.target.value);
         if (state.y.axis === "eh") state.y.peMax = roundPe(ehToPe(v, state.tempC));
         else if (state.y.axis === "log_fo2") {
-          state.y.peMax = roundPe(logFO2ToPe(v, state.ph.min, state.tempC));
+          // Same corner as displayYMax: axis top = fO₂ at (pH_max, pe_max).
+          state.y.peMax = roundPe(logFO2ToPe(v, state.ph.max, state.tempC));
         } else state.y.peMax = roundPe(v);
         commit();
       });
@@ -3244,13 +3246,34 @@
       };
     }
 
-    // Connected components (4-connectivity) per phase -> one label per region,
-    // at the cell farthest from any foreign/edge cell (max clearance / visual center).
-    // Geometric centroids fail for C-shapes and for regions that wrap holes.
-    function componentClearanceCell(cells, nx, ny) {
+    // Map a grid cell center into current display coordinates. log fO₂ must use
+    // the cell's own pH (not mid-pH), matching mapPlotXY for vector geometry.
+    function cellPlotXY(ix, iy, ph, pe, tempC) {
+      const x = ph[ix];
+      const peV = pe[iy];
+      if (state.y.axis === "eh") return [x, peToEh(peV, tempC)];
+      if (state.y.axis === "log_fo2") return [x, peToLogFO2(peV, x, tempC)];
+      return [x, peV];
+    }
+
+    function componentBarycenter(cells, ph, pe, tempC) {
+      let sx = 0, sy = 0;
+      for (const [cx, cy] of cells) {
+        const [px, py] = cellPlotXY(cx, cy, ph, pe, tempC);
+        sx += px;
+        sy += py;
+      }
+      const n = cells.length || 1;
+      return [sx / n, sy / n];
+    }
+
+    // Connected components (4-connectivity) per phase -> one label per region.
+    // Clearance is scored in *plot* space so log fO₂ shear moves labels correctly.
+    // Geometric index-centroids fail for C-shapes and for regions that wrap holes.
+    function componentClearancePlot(cells, ph, pe, tempC, nx, ny) {
       const inComp = new Set(cells.map(([cx, cy]) => cy * nx + cx));
-      const dist = new Map();
-      const q = [];
+      const borderPts = [];
+      const candidates = [];
       for (const [cx, cy] of cells) {
         let border = cx === 0 || cy === 0 || cx === nx - 1 || cy === ny - 1;
         if (!border) {
@@ -3261,46 +3284,49 @@
             }
           }
         }
-        if (border) {
-          dist.set(cy * nx + cx, 0);
-          q.push([cx, cy]);
+        const pt = cellPlotXY(cx, cy, ph, pe, tempC);
+        if (border) borderPts.push(pt);
+        else candidates.push(pt);
+      }
+      const pool = candidates.length ? candidates : cells.map(
+        ([cx, cy]) => cellPlotXY(cx, cy, ph, pe, tempC)
+      );
+      // Prefer max distance to the component boundary in display coords;
+      // tie-break toward the plot-space barycenter.
+      let bx = 0, by = 0;
+      for (const [px, py] of pool) {
+        bx += px;
+        by += py;
+      }
+      bx /= pool.length;
+      by /= pool.length;
+      let best = pool[0], bestD = -1, bestTie = Infinity;
+      for (const [px, py] of pool) {
+        let dMin = Infinity;
+        if (borderPts.length) {
+          for (const [qx, qy] of borderPts) {
+            const d = (px - qx) ** 2 + (py - qy) ** 2;
+            if (d < dMin) dMin = d;
+          }
+        } else {
+          dMin = 0;
         }
-      }
-      for (let i = 0; i < q.length; i++) {
-        const [cx, cy] = q[i];
-        const d = dist.get(cy * nx + cx);
-        for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
-          const ax = cx + dx, ay = cy + dy;
-          const key = ay * nx + ax;
-          if (!inComp.has(key) || dist.has(key)) continue;
-          dist.set(key, d + 1);
-          q.push([ax, ay]);
-        }
-      }
-      let best = cells[0], bestD = -1, bestTie = Infinity;
-      // Prefer high clearance; tie-break toward the component's geometric mean
-      // so labels don't drift into an arbitrary corner of a plateau.
-      let mx = 0, my = 0;
-      for (const [cx, cy] of cells) {
-        mx += cx;
-        my += cy;
-      }
-      mx /= cells.length;
-      my /= cells.length;
-      for (const [cx, cy] of cells) {
-        const d = dist.get(cy * nx + cx) ?? 0;
-        const tie = (cx - mx) ** 2 + (cy - my) ** 2;
-        if (d > bestD || (d === bestD && tie < bestTie)) {
-          bestD = d;
+        const tie = (px - bx) ** 2 + (py - by) ** 2;
+        if (dMin > bestD || (dMin === bestD && tie < bestTie)) {
+          bestD = dMin;
           bestTie = tie;
-          best = [cx, cy];
+          best = [px, py];
         }
       }
       return best;
     }
 
     function componentAnnotations(result) {
-      const { ph: x, y, grid, phase_names: names } = result;
+      // pe must be the native pe axis — never the mid-pH remapped heatmap y.
+      const ph = result.ph;
+      const pe = result.pe || result.y;
+      const { grid, phase_names: names } = result;
+      const tempC = result.temp_c ?? state.tempC;
       const ny = grid.length, nx = grid[0].length;
       const total = nx * ny;
       const minCells = Math.max(4, Math.floor(total * 0.004));
@@ -3327,10 +3353,13 @@
             }
           }
           if (cells.length < minCells) continue;
-          const best = componentClearanceCell(cells, nx, ny);
+          const name = names[idx];
+          const [ax, ay] = isGasDomainLabel(name)
+            ? componentBarycenter(cells, ph, pe, tempC)
+            : componentClearancePlot(cells, ph, pe, tempC, nx, ny);
           anns.push({
-            x: x[best[0]], y: y[best[1]],
-            text: `<b>${labelForPhase(names[idx])}</b>`,
+            x: ax, y: ay,
+            text: `<b>${labelForPhase(name)}</b>`,
             showarrow: false, font: { size: 14, color: "#111" },
             bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
           });
@@ -3466,12 +3495,14 @@
       const vectorLayer = vectorMode ? activeVectorLayer(result) : null;
       const layer = activeLayer(result);
       const x = result.ph;
+      const pe = plotPeAxis(result);
       const y = plotYValues(result);
       const yLabel = plotYLabel();
       const grid = layer.grid;
       const names = layer.names;
       const aqueousSet = new Set(layer.aqueous || []);
-      const plotResult = { ph: x, y, grid, phase_names: names, y_label: yLabel };
+      // Heatmap / grid-boundary helpers use remapped y; labels need native pe.
+      const plotResult = { ph: x, y, pe, grid, phase_names: names, y_label: yLabel, temp_c: result.temp_c };
       const n = names.length;
       const traces = [];
       const hoverTpl = `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<extra></extra>`;
