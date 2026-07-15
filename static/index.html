@@ -3375,10 +3375,32 @@
 
     function vectorFillTraces(layer, aqueousSet, tempC) {
       const names = layer.names || [];
-      const polygons = [...(layer.polygons || [])].sort((a, b) => (b.area || 0) - (a.area || 0));
-      return polygons.map(poly => {
+      // Batch same-category rings into one Plotly trace (null-separated
+      // MultiPolygon). New packs already batch server-side; this also covers
+      // older IndexedDB results that still store one ring per cell fragment.
+      const byCat = new Map();
+      for (const poly of layer.polygons || []) {
         const cat = poly.cat;
-        const name = names[cat] ?? "?";
+        if (!byCat.has(cat)) byCat.set(cat, []);
+        byCat.get(cat).push(poly);
+      }
+      const batched = [];
+      for (const [cat, group] of byCat) {
+        group.sort((a, b) => (b.area || 0) - (a.area || 0));
+        const xs = [], ys = [];
+        let area = 0;
+        for (const poly of group) {
+          if (!poly.x?.length || poly.x.length < 3) continue;
+          if (xs.length) { xs.push(null); ys.push(null); }
+          xs.push(...poly.x);
+          ys.push(...poly.y);
+          area += poly.area || 0;
+        }
+        if (xs.length >= 3) batched.push({ cat, area, x: xs, y: ys });
+      }
+      batched.sort((a, b) => (b.area || 0) - (a.area || 0));
+      return batched.map(poly => {
+        const name = names[poly.cat] ?? "?";
         let fill;
         if (name === "none" || isGasDomainLabel(name)) fill = NONE_COLOR;
         else if (aqueousSet && aqueousSet.has(name)) fill = AQ_GREY;

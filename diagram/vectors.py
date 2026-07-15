@@ -8,6 +8,8 @@ Each display layer is built from the trace bundle:
 3. Merged mask-contour fills for interior (untraced) regions and for fallback
    cells (fallback black lines are also mask contours — there is no brentq edge).
 4. Thin boundary polylines from the tracer (unchanged).
+5. Same-category rings batched into one MultiPolygon (null-separated) so the UI
+   paints one Plotly fill trace per phase, not one per cell fragment.
 """
 from __future__ import annotations
 
@@ -482,6 +484,52 @@ def _append_fill_ring(
     )
 
 
+def batch_polygons_by_category(
+    polygons: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collapse same-``cat`` rings into one null-separated MultiPolygon each.
+
+    Plotly ``scatter`` + ``fill: 'toself'`` treats ``null`` gaps as separate
+    rings inside a single trace. Batching keeps topology as many rings but
+    drops the UI from thousands of SVG traces to one per displayed phase.
+    Rings within a category are ordered by descending area; categories are
+    ordered the same way for painter-stable stacking.
+    """
+    if not polygons:
+        return []
+    by_cat: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for poly in polygons:
+        by_cat[int(poly["cat"])].append(poly)
+
+    out: list[dict[str, Any]] = []
+    for cat, group in by_cat.items():
+        group_sorted = sorted(
+            group, key=lambda p: -float(p.get("area") or 0.0)
+        )
+        xs: list[float | None] = []
+        ys: list[float | None] = []
+        area = 0.0
+        for poly in group_sorted:
+            px = poly.get("x") or []
+            py = poly.get("y") or []
+            if len(px) < 3 or len(py) < 3:
+                continue
+            if xs:
+                xs.append(None)
+                ys.append(None)
+            for v in px:
+                xs.append(None if v is None else float(v))
+            for v in py:
+                ys.append(None if v is None else float(v))
+            area += float(poly.get("area") or 0.0)
+        if len(xs) < 3:
+            continue
+        out.append({"cat": cat, "area": area, "x": xs, "y": ys})
+
+    out.sort(key=lambda p: -float(p.get("area") or 0.0))
+    return out
+
+
 def _pack_one_layer(
     *,
     base_rows: list[dict],
@@ -739,6 +787,10 @@ def _pack_one_layer(
             )
         )
     boundaries = _segments_to_boundary_lines(chem_segments)
+
+    # One MultiPolygon per category — Plotly paint cost tracks #phases, not
+    # #boundary-cell fragments (saddles/triples alone can emit thousands).
+    polygons = batch_polygons_by_category(polygons)
 
     layer: dict[str, Any] = {
         "names": names,
