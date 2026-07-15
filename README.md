@@ -5,12 +5,8 @@
 <p align="center"><em>pH–pe / pH–Eh predominance diagrams from PHREEQC</em></p>
 
 <p align="center">
-  <a href="https://github.com/matteo-loche/phaser/blob/main/LICENSE.txt">
-    <img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL v3" />
-  </a>
-  <a href="https://doi.org/10.5281/zenodo.21145794">
-    <img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21145794.svg" alt="DOI" />
-  </a>
+  <a href="https://github.com/matteo-loche/phaser/blob/main/LICENSE.txt"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL v3" /></a><!--
+  --><a href="https://doi.org/10.5281/zenodo.21145794"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21145794.svg" alt="DOI" /></a>
 </p>
 
 PHASER is a web service for building **pH–pe / pH–Eh predominance diagrams** from PHREEQC thermodynamic databases. Users define a chemical system (total concentrations), select solid phases, and the server evaluates a grid of PHREEQC solutions in parallel to determine which phase or aqueous species is dominant at each point. The application ships as a **Docker image** (Linux IPhreeqc and PHREEQC databases bundled) or can be run from source on Linux/WSL.
@@ -87,6 +83,13 @@ PHASER/
 │   ├── models.py          # Pydantic request bodies
 │   ├── dependencies.py    # DB resolution for routes
 │   └── routes/            # One module per API concern
+│       ├── compute.py     # POST /api/compute, job status / result / DELETE
+│       ├── config_routes.py
+│       ├── databases.py
+│       ├── elements.py
+│       ├── phases.py
+│       ├── stats.py
+│       └── health.py
 ├── chemistry/             # Unit conversion; formal charge guesses (dummy medium)
 │   ├── units.py
 │   └── charges.py         # formal_eq_of_total_key() for charge-side guessing
@@ -97,20 +100,22 @@ PHASER/
 ├── phreeqc/               # PHREEQC solver integration
 │   ├── catalog.py         # .dat text parsers + optional SI probe → catalog snapshot
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
+│   ├── knobs.py           # Numerical KNOBS retry ladder (convergence rescue)
 │   ├── input_titration.py # Real electrolyte (Cl⁻/NaOH) pH + O₂(g) titration input
 │   ├── input_dummy_titration.py # Dummy-electrolyte titration (predominance)
 │   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
 │   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
-│   ├── sweep.py           # Multiprocessing grid sweep
+│   ├── sweep.py           # Multiprocessing grid sweep (killable ProcessPool)
 │   ├── adaptive.py        # Adaptive boundary orchestration
-│   └── boundary_trace.py  # Root-finding tracer (brentq, triple/band regions, fallback)
+│   └── boundary_trace.py  # Root-finding tracer (brentq, triple/band/saddle regions, fallback)
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
 │   ├── packer.py          # Pack grid results; solid/aqueous name collision labels
-│   └── vectors.py         # Vector fills clipped to traced boundaries (+ mask interiors/fallback)
+│   └── vectors.py         # Vector fills + same-category MultiPolygon batching
 ├── services/              # Orchestration logic
 │   ├── catalog.py         # Startup / background catalog scans (text parse + SI probe)
-│   ├── compute.py         # FIFO compute queue + background grid jobs
+│   ├── compute.py         # FIFO compute queue, reaper, wall-clock timeout
+│   ├── job_control.py     # Per-job cancel tokens + ProcessPool hard-kill
 │   ├── stats.py           # Per-server usage statistics recording
 │   └── species.py         # Species picker suggestions
 ├── Icon/                  # Branding assets (served at /icons/)
@@ -149,6 +154,7 @@ flowchart TB
 
     subgraph services [services layer]
         Compute[compute jobs]
+        JobCtl[job_control abort]
         StatsSvc[usage statistics]
     end
 
@@ -176,12 +182,15 @@ flowchart TB
     Routes --> Compute
     Routes --> Registry
     Routes --> Catalog
+    Compute --> JobCtl
     Compute --> Registry
     Compute --> Phases
     Compute --> Engine
     Compute --> Sweep
     Compute --> Adaptive
     Adaptive --> Trace
+    Sweep --> JobCtl
+    Trace --> JobCtl
     Compute --> Packer
     Compute --> Vectors
     Compute --> Catalog
@@ -199,10 +208,10 @@ flowchart TB
 | Layer | Role |
 |-------|------|
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
-| **services** | FIFO compute queue, job lifecycle, species helpers, and usage-statistics recording. No PHREEQC math here. |
+| **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py`), species helpers, and usage-statistics recording. No PHREEQC math here. |
 | **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`); persist per-server compute events (`stats_store.py`). |
-| **phreeqc** | Build PHREEQC input strings, call IPhreeqc, run parallel sweeps, optional adaptive boundary tracing. |
-| **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers. |
+| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing; register live ProcessPools for hard-kill on timeout. |
+| **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers (vector fills batched per category). |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
 
 ---
@@ -261,7 +270,7 @@ Notes:
 - Some shipped files are **not** full aqueous catalogs (e.g. `Concrete_PHR.dat` is a PHASES-only INCLUDE$ add-on). They may have empty master/species blocks; the registry still indexes them, but they are not used as ordinary compute databases.
 - On startup, `services/catalog.py` scans the **default** database synchronously (so the app fails clearly if it is unusable) and scans the rest in a background thread, logging pass/cached/fail per database. Databases listed in **`PHASER_DISABLED_DB_STEMS`** are omitted from the selector and skipped by catalog scans.
 - Each catalog entry is fingerprinted (path, size, mtime, sha256) and tagged with a `SCHEMA_VERSION`; changing the file or bumping the schema triggers an **automatic rebuild** on next startup. Databases whose scan **fails** are marked `failed` and hidden from the UI database selector rather than offered and then erroring.
-- Parser regression checks live under `tests/test_solution_species_parser.py`, `tests/test_catalog_parse_all_dbs.py` (every registry `.dat` + light IPhreeqc total spot-checks), and `tests/test_catalog_parse_pygcc.py` (pygcc-generated PHREEQC fixture).
+- Local parser regression checks (gitignored `tests/`) cover SOLUTION_SPECIES parsing, every registry `.dat` catalog scan, and a pygcc-generated PHREEQC fixture. Can be made available on demand.
 
 ### Registering a generated database
 
@@ -741,9 +750,10 @@ Display controls describe the **plotted result**, not pending Configuration togg
 |---------|--------|
 | **Display** | *Solid predominance* and/or *Aqueous predominance* — only modes that were actually computed appear in the dropdown |
 | **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
+| **Phase labels** | Solid region labels: name, formula, or both (aqueous always chem-formatted) |
 | **Labels only** | Region labels without fill colours |
-| **System label** | Corner badge of the displayed chemical system (e.g. `Fe-C`); uses the active element subset when per-element filters are on, otherwise the full input system |
 | **Boundaries** | Phase and gas-limit boundary polylines |
+| **System label** | Top-right badge of the displayed chemical system (e.g. `Fe-C`); full input system, or the active element subset when per-element filters are on |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
 
 **Configuration vs display.** The sidebar **Compute layers** checkboxes set what the next job will pack and trace. The plot panel dropdown and element filter read from the cached result (`layer_solids`, `layer_aqueous`, `layer_elements` in the packed JSON). Toggling layers before recomputing shows the **stale** pill but does not change the plot or its display options until **Compute diagram** finishes.
