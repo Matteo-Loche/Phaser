@@ -1162,7 +1162,7 @@
       labelsOnly: false,
       showBoundaries: true,
       showSystemLabel: true,
-      phaseLabelMode: "name", // "name" | "formula" | "both" — solids only; aqueous always chem-formatted
+      phaseLabelMode: "name", // "name" | "formula" | "both" — solids + joins; aqueous always chem-formatted
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
       colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
     };
@@ -1885,7 +1885,7 @@
       return base.replace("(2L)", "").replace("(disordered)", "");
     }
 
-    function labelForPhase(name) {
+    function labelForSinglePhase(name) {
       if (name === "none") return "—";
       if (isGasDomainLabel(name)) {
         const m = name.match(/^(O2\(g\)|H2\(g\))(.*)$/);
@@ -1910,6 +1910,15 @@
         return `${nameHtml} (${formulaHtml})${solid}`;
       }
       return nameHtml + solid;
+    }
+
+    // Co-stability / moles-tie joins ("A + B") format each part with the
+    // current name/formula/both mode — formulaByName only keys single phases.
+    function labelForPhase(name) {
+      if (name.includes(" + ")) {
+        return name.split(" + ").map(p => labelForSinglePhase(p.trim())).join(" + ");
+      }
+      return labelForSinglePhase(name);
     }
 
     function isGasDomainLabel(name) {
@@ -3747,33 +3756,42 @@
       return [x, peV];
     }
 
+    // Gas-domain labels: nearest cell to the index-space centroid (axis-
+    // invariant). Display coords only at the end via cellPlotXY.
     function componentBarycenter(cells, ph, pe, tempC) {
       let sx = 0, sy = 0;
       for (const [cx, cy] of cells) {
-        const [px, py] = cellPlotXY(cx, cy, ph, pe, tempC);
-        sx += px;
-        sy += py;
+        sx += cx;
+        sy += cy;
       }
       const n = cells.length || 1;
-      return [sx / n, sy / n];
+      const mx = sx / n, my = sy / n;
+      let bestCx = cells[0][0], bestCy = cells[0][1], bestD = Infinity;
+      for (const [cx, cy] of cells) {
+        const d = (cx - mx) ** 2 + (cy - my) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          bestCx = cx;
+          bestCy = cy;
+        }
+      }
+      return cellPlotXY(bestCx, bestCy, ph, pe, tempC);
     }
 
     // Connected components (4-connectivity) per phase -> one label per region.
-    // Clearance is scored in *fractional plot* space (axis ranges normalized to
-    // [0,1]²). Raw display units make pe↔Eh pick different cells because pe
-    // spans ~30 units while Eh spans ~2 V — same geometry, different metric.
-    // Fractional scoring is invariant under pe↔Eh (linear y) but still moves
-    // labels under log fO₂ shear. Geometric index-centroids fail for C-shapes.
+    // Clearance is scored in *grid-index* space (ix/(nx-1), iy/(ny-1)). That
+    // metric is independent of pe/Eh/log fO₂ and temperature, so the same cell
+    // wins under every Y-axis. Display coords are applied only to the winner
+    // via cellPlotXY. (Display-fractional scoring used to jump on pe↔Eh when
+    // state.tempC ≠ result.temp_c, and on multi-lobe near-ties.)
     function componentClearancePlot(cells, ph, pe, tempC, nx, ny) {
       const inComp = new Set(cells.map(([cx, cy]) => cy * nx + cx));
-      const x0 = ph[0], x1 = ph[ph.length - 1];
-      const y0 = displayYMin(), y1 = displayYMax();
-      const sx = (x1 - x0) || 1;
-      const sy = (y1 - y0) || 1;
-      const toFrac = (px, py) => [(px - x0) / sx, (py - y0) / sy];
+      const sx = (nx - 1) || 1;
+      const sy = (ny - 1) || 1;
+      const toIdx = (cx, cy) => [cx / sx, cy / sy];
 
-      const borderFrac = [];
-      const candidates = []; // {disp: [px,py], frac: [fx,fy]}
+      const borderIdx = [];
+      const candidates = []; // {cx, cy, frac: [fx,fy]}
       for (const [cx, cy] of cells) {
         let border = cx === 0 || cy === 0 || cx === nx - 1 || cy === ny - 1;
         if (!border) {
@@ -3784,17 +3802,13 @@
             }
           }
         }
-        const disp = cellPlotXY(cx, cy, ph, pe, tempC);
-        const frac = toFrac(disp[0], disp[1]);
-        if (border) borderFrac.push(frac);
-        else candidates.push({ disp, frac });
+        const frac = toIdx(cx, cy);
+        if (border) borderIdx.push(frac);
+        else candidates.push({ cx, cy, frac });
       }
       const pool = candidates.length
         ? candidates
-        : cells.map(([cx, cy]) => {
-            const disp = cellPlotXY(cx, cy, ph, pe, tempC);
-            return { disp, frac: toFrac(disp[0], disp[1]) };
-          });
+        : cells.map(([cx, cy]) => ({ cx, cy, frac: toIdx(cx, cy) }));
       let bx = 0, by = 0;
       for (const { frac } of pool) {
         bx += frac[0];
@@ -3802,11 +3816,15 @@
       }
       bx /= pool.length;
       by /= pool.length;
-      let best = pool[0].disp, bestD = -1, bestTie = Infinity;
-      for (const { disp, frac } of pool) {
+      // Near-equal clearance: prefer the index-space centroid so float noise
+      // cannot flip multi-lobe regions between redraws / axis switches.
+      const EPS = 1e-12;
+      let bestCx = pool[0].cx, bestCy = pool[0].cy;
+      let bestD = -1, bestTie = Infinity;
+      for (const { cx, cy, frac } of pool) {
         let dMin = Infinity;
-        if (borderFrac.length) {
-          for (const [qx, qy] of borderFrac) {
+        if (borderIdx.length) {
+          for (const [qx, qy] of borderIdx) {
             const d = (frac[0] - qx) ** 2 + (frac[1] - qy) ** 2;
             if (d < dMin) dMin = d;
           }
@@ -3814,13 +3832,14 @@
           dMin = 0;
         }
         const tie = (frac[0] - bx) ** 2 + (frac[1] - by) ** 2;
-        if (dMin > bestD || (dMin === bestD && tie < bestTie)) {
+        if (dMin > bestD + EPS || (Math.abs(dMin - bestD) <= EPS && tie < bestTie)) {
           bestD = dMin;
           bestTie = tie;
-          best = disp;
+          bestCx = cx;
+          bestCy = cy;
         }
       }
-      return best;
+      return cellPlotXY(bestCx, bestCy, ph, pe, tempC);
     }
 
     function componentAnnotations(result) {
@@ -3971,7 +3990,7 @@
     function fmtHoverMol(m) {
       if (!Number.isFinite(m) || m <= 0) return "—";
       if (m >= 0.01) return String(Number(m.toPrecision(3)));
-      return m.toExponential(1);
+      return m.toExponential(2);
     }
 
     function hoverElementsFilter(result) {
@@ -4004,7 +4023,7 @@
       const pool = (entries || []).filter(e => Number.isFinite(e[1]) && e[1] > 0);
       if (!pool.length) return "";
       return pool.slice(0, n)
-        .map(([sp, m]) => `${formatChemHtml(sp)} (${fmtHoverMol(m)} mol)`)
+        .map(([sp, m]) => `${labelForPhase(sp)} (${fmtHoverMol(m)} mol)`)
         .join("<br>");
     }
 

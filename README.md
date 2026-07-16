@@ -30,7 +30,7 @@ Key behaviours:
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
 - **Server usage statistics** — successful Predominance and Mineral Stability computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats?window=…` and the **Statistics** UI mode (mode rankings, top-15 lists, selectable windows from 24 h to all-time).
 - **Per-IP API rate limiting** — sliding-window caps on all `/api/*` routes, burst limits on compute and database registration, and **post-burst cooldowns** with escalating block duration for repeat abuse (see [API rate limiting](#api-rate-limiting)).
-- **Plotly UI** — single-page shell with **mode navigation** (Predominance · Mineral Stability · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous/mineral layer families, O₂/H₂ gas-limit configuration, vector display, per-element hover species, and browser-side settings/result cache.
+- **Plotly UI** — single-page shell with **mode navigation** (Predominance · Mineral Stability · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous/mineral layer families, O₂/H₂ gas-limit configuration, vector display, phase labels (name / formula / both, including `"A + B"` joins), per-element hover species, and browser-side settings/result cache.
 
 ---
 
@@ -591,7 +591,7 @@ Job statuses: `queued` → `running` → `done` | `error` (including `error_code
 Before compute:
 
 1. Derive **system elements** from total concentrations (e.g. `Fe`, `C(4)` → `Fe`, `C`).
-2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog. Each phase also includes a **`formula`** field parsed from the PHASES reaction for display (mineral name vs stoichiometry can be toggled client-side later without repacking).
+2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog. Each phase also includes a **`formula`** field parsed from the PHASES reaction for display (the UI toggles mineral name / formula / both client-side without repacking; join labels format each part the same way).
 3. User-selected phases (or auto-discovered set) become the `phases` tuple passed to PHREEQC.
 
 ### Result packing (`packer.py`)
@@ -839,7 +839,7 @@ Display controls describe the **plotted result**, not pending Configuration togg
 |---------|--------|
 | **Display** | *Solid predominance* / *Mineral map* (label depends on diagram mode) and/or *Aqueous predominance* — only families that were actually computed appear in the dropdown |
 | **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
-| **Phase labels** | Solid region labels: name, formula, or both (aqueous always chem-formatted) |
+| **Phase labels** | Solid / mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability and moles-tie joins (`"A + B"`) format each part with the same mode. Placement uses max clearance from region edges in grid-index space, so labels stay put when switching **Eh / pe / log fO₂** |
 | **Labels only** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
 | **System label** | Top-right badge of the displayed chemical system (e.g. `Fe-C`); full input system, or the active element subset when per-element filters are on |
@@ -906,7 +906,7 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 
 (`log_k_o2_water()` / `log_f_o2()` in `phreeqc/gas_limits.py`; same relation used for `O2(g)` in equilibration.)
 
-**Coordinate geometry.** `Eh` is a linear, pH-independent rescaling of `pe`. `log fO₂` couples to both `pe` and `pH`, so a rectangular `(pH, pe)` grid maps to a sheared grid in `(pH, log fO₂)`. Vector geometry is transformed **per vertex** (`mapPlotXY(pH, pe)`), which preserves boundary positions when switching axes. O₂/H₂ stability lines are horizontal in a `log fO₂` plot (constant fugacity).
+**Coordinate geometry.** `Eh` is a linear, pH-independent rescaling of `pe`. `log fO₂` couples to both `pe` and `pH`, so a rectangular `(pH, pe)` grid maps to a sheared grid in `(pH, log fO₂)`. Vector geometry is transformed **per vertex** (`mapPlotXY(pH, pe)`), which preserves boundary positions when switching axes. Region label placement is scored in **grid-index** space (clearance from edges for chemistry; index centroid for gas domains), then mapped to the active axis — so pe ↔ Eh ↔ log fO₂ does not re-pick a different cell. O₂/H₂ stability lines are horizontal in a `log fO₂` plot (constant fugacity).
 
 **log fO₂ axis limits** — min/max inputs convert to `pe` at the same rectangle corners used for the axis extent: `peMin = fO₂min/4 − pH_min + log K_O₂`, `peMax = fO₂max/4 − pH_max + log K_O₂` (so `displayYMin`/`displayYMax` round-trip). Changing pH refreshes the displayed limits. The hover heatmap uses mid-pH for its rectangular y ticks; vector fills, boundaries, and phase labels use the exact per-point conversion.
 
