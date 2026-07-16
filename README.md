@@ -841,10 +841,11 @@ Display controls describe the **plotted result**, not pending Configuration togg
 |---------|--------|
 | **Display** | *Solid predominance* / *Mineral map* (label depends on diagram mode) and/or *Aqueous predominance* — only families that were actually computed appear in the dropdown. Foldable sections: **Display** (open by default), **Labels**, **Fill**, **Overlays** |
 | **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
-| **Phase labels** | Solid / mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability and moles-tie joins (`"A + B"`) format each part with the same mode. Placement uses max clearance from region edges in grid-index space, so labels stay put when switching **Eh / pe / log fO₂** |
+| **Phase labels** | Solid / mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability and moles-tie joins (`"A + B"`) format each part with the same mode. Tip uses max clearance inside the **visible** vector fill when tracing is on (base-grid clearance otherwise) |
 | **Label size** | Phase annotation font size in px (default **14**, range 10–20; − / value / +) |
 | **Fill opacity** | Region fill transparency (default **100%**, range 10–100%). Vector fills and uniform heatmaps; boundary polylines stay opaque |
-| **Min label area** | Minimum connected-region size for a name, as **% of grid cells** (default **0.4%**, range 0–1%, step 0.01). Threshold is `max(4, floor(n_cells × pct/100))` so tiny speckles stay unlabeled; at 0% only the 4-cell floor remains |
+| **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%). Slider uses a square curve for finer control near 0%. Threshold is `max(4, floor(n_cells × pct/100))` |
+| **Arrow callout for conflict or small regions** | When on (default), labels that overlap, would cover another tip, or hide their own small patch (≥ ~92% of the visible bbox) shift aside with an arrow when the leader is clear; otherwise they shift without an arrow. When off, all names stay at the region tip (overlap allowed) |
 | **Labels only** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
 | **System label** | Top-right badge of the displayed chemical system (e.g. `Fe-C`); full input system, or the active element subset when per-element filters are on |

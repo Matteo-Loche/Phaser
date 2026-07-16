@@ -1018,7 +1018,7 @@
         <div class="mode-menu" id="modeMenu" role="menu" hidden>
           <button type="button" role="menuitem" data-mode="phase-diagram">
             Predominance
-            <span class="mode-desc">pH–pe / Eh saturation-index maps</span>
+            <span class="mode-desc">Saturation-index maps</span>
           </button>
           <button type="button" role="menuitem" data-mode="mineral-stability">
             Mineral Stability
@@ -1251,13 +1251,17 @@
                   <button type="button" id="labelFontSizeInc" aria-label="Increase label size">+</button>
                 </span>
               </div>
-              <div class="disp-slider" title="Regions smaller than this fraction of the grid stay unlabeled (minimum 4 cells)">
+              <div class="disp-slider" title="Connected regions smaller than this % of the diagram are not labeled (floor: 4 cells). Slider is finer near 0%.">
                 <div class="disp-slider-head">
-                  <label for="labelMinAreaPct">Min area</label>
-                  <span class="disp-val" id="labelMinAreaPctVal">0.4%</span>
+                  <label for="labelMinAreaPct">Hide labels below</label>
+                  <span class="disp-val" id="labelMinAreaPctVal">0.1%</span>
                 </div>
-                <input type="range" id="labelMinAreaPct" min="0" max="1" step="0.01" value="0.4" />
+                <input type="range" id="labelMinAreaPct" min="0" max="1000" step="1" value="316" />
               </div>
+              <label class="toggle" title="Move labels aside with an arrow when they overlap, cover another tip, or hide their own small patch. Off = names stay at the region tip.">
+                <input type="checkbox" id="calloutArrows" checked />
+                Arrow callout for conflict or small regions
+              </label>
             </div>
           </details>
 
@@ -1443,7 +1447,8 @@
       phaseLabelMode: "name", // "name" | "formula" | "both" — solids + joins; aqueous always chem-formatted
       labelFontSize: 14,      // px — Plotly annotation font (10–20)
       fillOpacity: 1,         // 0.1–1 region fill alpha (boundaries stay opaque)
-      labelMinAreaPct: 0.4,   // % of grid cells (0–1); minCells = max(4, floor(total * pct/100))
+      labelMinAreaPct: 0.1,   // % of grid cells (0–1); minCells = max(4, floor(total * pct/100))
+      calloutArrows: true,    // arrow callouts for overlap / tip cover / self-obscure
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
       colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
     };
@@ -2316,13 +2321,37 @@
       if (result) renderSolidSubsetBoxes(result);
     }
 
+    // Area slider: position t∈[0,1] → pct = max·t² so small values get finer control.
+    const AREA_SLIDER_STEPS = 1000;
+    const LABEL_MIN_AREA_MAX = 1;   // %
+    const AREA_SLIDER_POWER = 2;
+
+    function areaSliderToPct(sliderVal, maxPct) {
+      const u = Math.min(1, Math.max(0, Number(sliderVal) / AREA_SLIDER_STEPS));
+      return maxPct * Math.pow(u, AREA_SLIDER_POWER);
+    }
+
+    function areaPctToSlider(pct, maxPct) {
+      const p = Math.min(maxPct, Math.max(0, Number(pct) || 0));
+      const u = maxPct > 0 ? Math.pow(p / maxPct, 1 / AREA_SLIDER_POWER) : 0;
+      return Math.round(Math.min(1, Math.max(0, u)) * AREA_SLIDER_STEPS);
+    }
+
+    function formatAreaPct(pct) {
+      const p = Number(pct) || 0;
+      if (p <= 0) return "0%";
+      if (p < 0.1) return `${p.toFixed(3)}%`;
+      if (p < 1) return `${p.toFixed(2)}%`;
+      return `${parseFloat(p.toFixed(2))}%`;
+    }
+
     function syncDisplayStyleReadouts() {
       const fsEl = $("labelFontSize");
       const op = $("fillOpacityVal");
       const ar = $("labelMinAreaPctVal");
       if (fsEl && document.activeElement !== fsEl) fsEl.value = String(state.labelFontSize);
       if (op) op.textContent = `${Math.round(state.fillOpacity * 100)}%`;
-      if (ar) ar.textContent = `${parseFloat((Number(state.labelMinAreaPct) || 0).toFixed(2))}%`;
+      if (ar) ar.textContent = formatAreaPct(state.labelMinAreaPct);
     }
 
     function clampLabelFontSize(v) {
@@ -2331,17 +2360,23 @@
 
     function clampLabelMinAreaPct(v) {
       const pct = Number(v);
-      if (!Number.isFinite(pct)) return 0.4;
-      return Math.min(1, Math.max(0, Math.round(pct * 100) / 100));
+      if (!Number.isFinite(pct)) return 0.1;
+      return Math.min(LABEL_MIN_AREA_MAX, Math.max(0, Math.round(pct * 1000) / 1000));
     }
 
     function syncDisplayStyleControls() {
       const fsEl = $("labelFontSize");
       const opEl = $("fillOpacity");
       const arEl = $("labelMinAreaPct");
+      const coEl = $("calloutArrows");
       if (fsEl) fsEl.value = String(state.labelFontSize);
       if (opEl) opEl.value = String(Math.round(state.fillOpacity * 100));
-      if (arEl) arEl.value = String(state.labelMinAreaPct);
+      if (arEl) {
+        arEl.min = "0";
+        arEl.max = String(AREA_SLIDER_STEPS);
+        arEl.value = String(areaPctToSlider(state.labelMinAreaPct, LABEL_MIN_AREA_MAX));
+      }
+      if (coEl) coEl.checked = state.calloutArrows !== false;
       syncDisplayStyleReadouts();
     }
 
@@ -2748,6 +2783,8 @@
           : 1;
       }
       state.labelMinAreaPct = clampLabelMinAreaPct(state.labelMinAreaPct);
+      state.calloutArrows = state.calloutArrows !== false;
+      delete state.calloutMinAreaPct;
       delete state.targetElement;
       state.layerSolids ??= true;
       state.layerAqueous ??= true;
@@ -3537,9 +3574,16 @@
         redrawDisplay();
       });
       $("labelMinAreaPct").addEventListener("input", e => {
-        state.labelMinAreaPct = clampLabelMinAreaPct(e.target.value);
-        syncDisplayStyleReadouts();
+        state.labelMinAreaPct = clampLabelMinAreaPct(
+          areaSliderToPct(e.target.value, LABEL_MIN_AREA_MAX)
+        );
+        syncDisplayStyleControls();
         redrawDisplay();
+      });
+      $("calloutArrows").addEventListener("change", e => {
+        state.calloutArrows = !!e.target.checked;
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
       });
       $("labelsOnly").addEventListener("change", e => {
         state.labelsOnly = e.target.checked; persist();
@@ -4232,7 +4276,301 @@
       return cellPlotXY(bestCx, bestCy, ph, pe, tempC);
     }
 
-    function componentAnnotations(result) {
+    // Approximate label box in plot pixels (Plotly annotations lack text metrics).
+    function estimateLabelBoxPx(html, fontSize) {
+      const plain = String(html || "").replace(/<[^>]*>/g, "").replace(/&[a-z]+;/gi, " ");
+      const pad = 8;
+      const w = Math.max(28, plain.length * fontSize * 0.58) + pad;
+      const h = fontSize * 1.4 + pad;
+      return { w, h };
+    }
+
+    function labelBoxesOverlap(a, b, gap = 3) {
+      return !(a.r + gap < b.l || a.l - gap > b.r || a.b + gap < b.t || a.t - gap > b.b);
+    }
+
+    function labelBoxFromCenter(cx, cy, w, h) {
+      return { l: cx - w / 2, r: cx + w / 2, t: cy - h / 2, b: cy + h / 2, cx, cy, w, h };
+    }
+
+    // Data → plot-area pixels using current axis ranges and #plotDiv size.
+    function makeLabelPlotMapper(result) {
+      const el = $("plotDiv");
+      const W = Math.max(120, el?.clientWidth || 480);
+      const H = Math.max(120, el?.clientHeight || 480);
+      const ml = 70, mr = 20, mt = 16, mb = 60;
+      const pw = Math.max(1, W - ml - mr);
+      const ph = Math.max(1, H - mt - mb);
+      const x0 = result.ph[0], x1 = result.ph[result.ph.length - 1];
+      const yLo = displayYMin(), yHi = displayYMax();
+      const y0 = Math.min(yLo, yHi), y1 = Math.max(yLo, yHi);
+      const sx = (x1 - x0) || 1;
+      const sy = (y1 - y0) || 1;
+      return {
+        pw, ph,
+        toPx(x, y) {
+          return [((x - x0) / sx) * pw, (1 - (y - y0) / sy) * ph];
+        },
+        fromPx(px, py) {
+          return [x0 + (px / pw) * sx, y0 + (1 - py / ph) * sy];
+        },
+        inBounds(box) {
+          return box.l >= -4 && box.r <= pw + 4 && box.t >= -4 && box.b <= ph + 4;
+        },
+      };
+    }
+
+    function labelCollides(box, placed) {
+      for (const p of placed) {
+        if (labelBoxesOverlap(box, p)) return true;
+      }
+      return false;
+    }
+
+    // True if segment (x0,y0)→(x1,y1) crosses axis-aligned box (with pad).
+    function segmentHitsBox(x0, y0, x1, y1, box, pad = 5) {
+      const l = box.l - pad, r = box.r + pad, t = box.t - pad, b = box.b + pad;
+      let dx = x1 - x0, dy = y1 - y0;
+      let u0 = 0, u1 = 1;
+      const clip = (p, q) => {
+        if (Math.abs(p) < 1e-12) return q >= 0;
+        const u = q / p;
+        if (p < 0) {
+          if (u > u1) return false;
+          if (u > u0) u0 = u;
+        } else {
+          if (u < u0) return false;
+          if (u < u1) u1 = u;
+        }
+        return true;
+      };
+      // Liang–Barsky: hit if any portion of the open segment lies inside the box.
+      if (!clip(-dx, x0 - l)) return false;
+      if (!clip(dx, r - x0)) return false;
+      if (!clip(-dy, y0 - t)) return false;
+      if (!clip(dy, b - y0)) return false;
+      // Ignore a trivial touch only at the start tip (u0≈0,u1≈0).
+      return u1 > 1e-6;
+    }
+
+    function arrowHitsAnyBox(x0, y0, x1, y1, placed, pad = 5) {
+      for (const p of placed) {
+        if (segmentHitsBox(x0, y0, x1, y1, p, pad)) return true;
+      }
+      return false;
+    }
+
+    // Tiny box around a region tip — used so large labels don't cover small domains.
+    function tipGuardBox(tx, ty, pad = 10) {
+      return { l: tx - pad, r: tx + pad, t: ty - pad, b: ty + pad, cx: tx, cy: ty, w: pad * 2, h: pad * 2 };
+    }
+
+    function boxCoversAnyOtherTip(box, tipsPx, selfIdx, pad = 10) {
+      for (let i = 0; i < tipsPx.length; i++) {
+        if (i === selfIdx) continue;
+        const t = tipsPx[i];
+        if (t.x >= box.l - pad && t.x <= box.r + pad && t.y >= box.t - pad && t.y <= box.b + pad) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function arrowHitsAnyTip(x0, y0, x1, y1, tipsPx, selfIdx, pad = 8) {
+      for (let i = 0; i < tipsPx.length; i++) {
+        if (i === selfIdx) continue;
+        if (segmentHitsBox(x0, y0, x1, y1, tipGuardBox(tipsPx[i].x, tipsPx[i].y, pad), 0)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Prefer outward offsets so callout text sits in free space; tip stays at clearance.
+    // Base directions only — actual pixel length is scaled by the label box so large
+    // name+formula strings sit fully outside the tip instead of covering it.
+    const CALLOUT_DIRS = [
+      [1, -1], [1, 1], [-1, -1], [-1, 1],
+      [0, -1], [0, 1], [1, 0], [-1, 0],
+      [1, -0.6], [1, 0.6], [-1, -0.6], [-1, 0.6],
+      [0.6, -1], [-0.6, -1], [0.6, 1], [-0.6, 1],
+    ];
+
+    function calloutOffsetPx(dx, dy, w, h) {
+      // Gap from tip to text *center* so the near edge of the box clears the tip.
+      const gap = 16;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      const half = 0.5 * (w * Math.abs(ux) + h * Math.abs(uy));
+      const dist = half + gap;
+      return [ux * dist, uy * dist];
+    }
+
+    function tipDisplayXY(phV, peV, tempC) {
+      if (state.y.axis === "eh") return [phV, peToEh(peV, tempC)];
+      if (state.y.axis === "log_fo2") return [phV, peToLogFO2(peV, phV, tempC)];
+      return [phV, peV];
+    }
+
+    function splitNullRings(xs, ys) {
+      const rings = [];
+      let rx = [], ry = [];
+      for (let i = 0; i < (xs?.length || 0); i++) {
+        if (xs[i] == null || ys[i] == null) {
+          if (rx.length >= 3) rings.push({ x: rx, y: ry });
+          rx = []; ry = [];
+          continue;
+        }
+        rx.push(+xs[i]); ry.push(+ys[i]);
+      }
+      if (rx.length >= 3) rings.push({ x: rx, y: ry });
+      return rings;
+    }
+
+    function pointInRing(px, py, xs, ys) {
+      let inside = false;
+      for (let i = 0, j = xs.length - 1; i < xs.length; j = i++) {
+        const xi = xs[i], yi = ys[i], xj = xs[j], yj = ys[j];
+        const hit = ((yi > py) !== (yj > py))
+          && (px < (xj - xi) * (py - yi) / ((yj - yi) || 1e-30) + xi);
+        if (hit) inside = !inside;
+      }
+      return inside;
+    }
+
+    function minDistToRing(px, py, xs, ys) {
+      let dMin = Infinity;
+      for (let i = 0; i < xs.length; i++) {
+        const j = (i + 1) % xs.length;
+        const x1 = xs[i], y1 = ys[i], x2 = xs[j], y2 = ys[j];
+        const dx = x2 - x1, dy = y2 - y1;
+        const len2 = dx * dx + dy * dy;
+        let t = len2 > 0 ? ((px - x1) * dx + (py - y1) * dy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const qx = x1 + t * dx, qy = y1 + t * dy;
+        const d = (px - qx) ** 2 + (py - qy) ** 2;
+        if (d < dMin) dMin = d;
+      }
+      return dMin;
+    }
+
+    // Max clearance inside visible polygon rings (native pH/pe). Optional bbox
+    // keeps the tip on the same connected component as the grid label.
+    function tipInPolygonRings(rings, bbox) {
+      if (!rings?.length) return null;
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const r of rings) {
+        for (let i = 0; i < r.x.length; i++) {
+          const x = r.x[i], y = r.y[i];
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+      }
+      if (bbox) {
+        x0 = Math.max(x0, bbox.x0); x1 = Math.min(x1, bbox.x1);
+        y0 = Math.max(y0, bbox.y0); y1 = Math.min(y1, bbox.y1);
+      }
+      if (!(x1 > x0 && y1 > y0)) return null;
+      // Denser sampling for tiny wedges so the tip still lands inside the fill.
+      const span = Math.hypot(x1 - x0, y1 - y0);
+      const n = span < 1e-6 ? 8 : Math.min(36, Math.max(14, Math.ceil(28 / Math.max(span, 0.05))));
+      let best = null, bestD = -1;
+      for (let iy = 0; iy <= n; iy++) {
+        for (let ix = 0; ix <= n; ix++) {
+          const px = x0 + (ix / n) * (x1 - x0);
+          const py = y0 + (iy / n) * (y1 - y0);
+          let inside = false, dMin = Infinity;
+          for (const r of rings) {
+            if (pointInRing(px, py, r.x, r.y)) {
+              inside = true;
+              const d = minDistToRing(px, py, r.x, r.y);
+              if (d < dMin) dMin = d;
+            }
+          }
+          if (!inside) continue;
+          if (dMin > bestD) {
+            bestD = dMin;
+            best = [px, py];
+          }
+        }
+      }
+      return best;
+    }
+
+    function vectorRingsByCat(vectorLayer) {
+      const byCat = new Map();
+      if (!vectorLayer?.polygons?.length) return byCat;
+      for (const poly of vectorLayer.polygons) {
+        const cat = poly.cat;
+        if (cat == null || cat < 0) continue;
+        const rings = splitNullRings(poly.x, poly.y);
+        if (!rings.length) continue;
+        if (!byCat.has(cat)) byCat.set(cat, []);
+        byCat.get(cat).push(...rings);
+      }
+      return byCat;
+    }
+
+    function componentNativeBBox(cells, ph, pe) {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const [cx, cy] of cells) {
+        const x = ph[cx], y = pe[cy];
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+      // Pad by half a cell so thin wedges still overlap their base cells.
+      const dx = ((x1 - x0) || 1) * 0.15 + 1e-6;
+      const dy = ((y1 - y0) || 1) * 0.15 + 1e-6;
+      return { x0: x0 - dx, x1: x1 + dx, y0: y0 - dy, y1: y1 + dy };
+    }
+
+    function ringsNativeBBox(rings, clipBBox) {
+      if (!rings?.length) return null;
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      let n = 0;
+      for (const r of rings) {
+        for (let i = 0; i < r.x.length; i++) {
+          const x = r.x[i], y = r.y[i];
+          if (clipBBox) {
+            if (x < clipBBox.x0 || x > clipBBox.x1 || y < clipBBox.y0 || y > clipBBox.y1) continue;
+          }
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+          n++;
+        }
+      }
+      if (n < 2 || !(x1 > x0 && y1 > y0)) return null;
+      return { x0, x1, y0, y1 };
+    }
+
+    function regionBBoxToPx(map, bbox, tempC) {
+      const [x0d, y0d] = tipDisplayXY(bbox.x0, bbox.y0, tempC);
+      const [x1d, y1d] = tipDisplayXY(bbox.x1, bbox.y1, tempC);
+      const [px0, py0] = map.toPx(x0d, y0d);
+      const [px1, py1] = map.toPx(x1d, y1d);
+      return {
+        l: Math.min(px0, px1), r: Math.max(px0, px1),
+        t: Math.min(py0, py1), b: Math.max(py0, py1),
+      };
+    }
+
+    // Inline label fully covers a patch smaller than the text box — hide the fill.
+    function labelObscuresOwnRegion(labelBox, regionPx, coverFrac = 0.92) {
+      const rw = Math.max(0, regionPx.r - regionPx.l);
+      const rh = Math.max(0, regionPx.b - regionPx.t);
+      if (rw < 2 || rh < 2) return false;
+      const regionArea = rw * rh;
+      const labelArea = labelBox.w * labelBox.h;
+      if (regionArea >= labelArea * 0.9) return false;
+      const il = Math.max(regionPx.l, labelBox.l);
+      const ir = Math.min(regionPx.r, labelBox.r);
+      const it = Math.max(regionPx.t, labelBox.t);
+      const ib = Math.min(regionPx.b, labelBox.b);
+      if (ir <= il || ib <= it) return false;
+      return (ir - il) * (ib - it) >= regionArea * coverFrac;
+    }
+
+    function componentAnnotations(result, vectorLayer = null) {
       // pe must be the native pe axis — never the mid-pH remapped heatmap y.
       const ph = result.ph;
       const pe = result.pe || result.y;
@@ -4240,11 +4578,13 @@
       const tempC = result.temp_c ?? state.tempC;
       const ny = grid.length, nx = grid[0].length;
       const total = nx * ny;
-      const frac = (Number(state.labelMinAreaPct) || 0) / 100;
-      const minCells = Math.max(4, Math.floor(total * frac));
+      const minFrac = (Number(state.labelMinAreaPct) || 0) / 100;
+      const minCells = Math.max(4, Math.floor(total * minFrac));
+      const useArrows = state.calloutArrows !== false;
       const fontSize = clampLabelFontSize(state.labelFontSize);
       const seen = Array.from({ length: ny }, () => new Int8Array(nx));
-      const anns = [];
+      const ringsByCat = vectorRingsByCat(vectorLayer);
+      const candidates = [];
 
       for (let sy = 0; sy < ny; sy++) {
         for (let sx = 0; sx < nx; sx++) {
@@ -4267,16 +4607,127 @@
           }
           if (cells.length < minCells) continue;
           const name = names[idx];
-          const [ax, ay] = isGasDomainLabel(name)
-            ? componentBarycenter(cells, ph, pe, tempC)
-            : componentClearancePlot(cells, ph, pe, tempC, nx, ny);
-          anns.push({
-            x: ax, y: ay,
+          // Prefer tip inside the *visible* vector fill (traced wedges), not the
+          // base-grid cell center — those diverge on small boundary domains.
+          let tip = null;
+          const rings = ringsByCat.get(idx);
+          if (rings?.length && !isGasDomainLabel(name)) {
+            // Stay inside this connected component's bbox — don't jump to another
+            // lobe of the same phase elsewhere on the diagram.
+            const native = tipInPolygonRings(rings, componentNativeBBox(cells, ph, pe));
+            if (native) tip = tipDisplayXY(native[0], native[1], tempC);
+          }
+          if (!tip) {
+            tip = isGasDomainLabel(name)
+              ? componentBarycenter(cells, ph, pe, tempC)
+              : componentClearancePlot(cells, ph, pe, tempC, nx, ny);
+          }
+          const compBBox = componentNativeBBox(cells, ph, pe);
+          let regionBBox = compBBox;
+          if (rings?.length) {
+            const rb = ringsNativeBBox(rings, compBBox);
+            if (rb) regionBBox = rb;
+          }
+          candidates.push({
+            nCells: cells.length,
+            x: tip[0], y: tip[1],
             text: `<b>${labelForPhase(name)}</b>`,
-            showarrow: false, font: { size: fontSize, color: "#111" },
-            bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
+            regionBBox,
           });
         }
+      }
+
+      candidates.sort((a, b) => b.nCells - a.nCells);
+      const map = makeLabelPlotMapper(result);
+      const tipsPx = candidates.map(c => {
+        const [x, y] = map.toPx(c.x, c.y);
+        return { x, y };
+      });
+      const regionPxBoxes = candidates.map(c => regionBBoxToPx(map, c.regionBBox, tempC));
+      const placed = [];
+      const anns = [];
+
+      for (let ci = 0; ci < candidates.length; ci++) {
+        const c = candidates[ci];
+        const { w, h } = estimateLabelBoxPx(c.text, fontSize);
+        const tpx = tipsPx[ci].x, tpy = tipsPx[ci].y;
+        const base = {
+          text: c.text,
+          font: { size: fontSize, color: "#111" },
+          bgcolor: "rgba(255,255,255,0.72)",
+          borderpad: 2,
+          x: c.x, y: c.y,
+        };
+
+        const placementOk = (box) =>
+          map.inBounds(box)
+          && !labelCollides(box, placed)
+          && !boxCoversAnyOtherTip(box, tipsPx, ci, 10);
+
+        // 1) Inline at tip when free (and not self-obscured when arrows are on).
+        const inlineBox = labelBoxFromCenter(tpx, tpy, w, h);
+        const obscuresSelf = labelObscuresOwnRegion(inlineBox, regionPxBoxes[ci]);
+        if (placementOk(inlineBox) && (!useArrows || !obscuresSelf)) {
+          placed.push(inlineBox);
+          anns.push({ ...base, showarrow: false });
+          continue;
+        }
+
+        // Arrows off → always keep the name at the tip (overlap allowed).
+        if (!useArrows) {
+          placed.push(inlineBox);
+          anns.push({ ...base, showarrow: false });
+          continue;
+        }
+
+        // 2) Overlap, tip cover, or self-obscure: shift with an arrow when possible.
+        let placedOff = false;
+        for (const [dx, dy] of CALLOUT_DIRS) {
+          const [ox, oy] = calloutOffsetPx(dx, dy, w, h);
+          const box = labelBoxFromCenter(tpx + ox, tpy + oy, w, h);
+          if (!placementOk(box)) continue;
+          const shorten = 0.92;
+          const ax1 = tpx + ox * shorten, ay1 = tpy + oy * shorten;
+          if (arrowHitsAnyBox(tpx, tpy, ax1, ay1, placed, 5)) continue;
+          if (arrowHitsAnyTip(tpx, tpy, ax1, ay1, tipsPx, ci, 8)) continue;
+          placed.push(box);
+          anns.push({
+            ...base,
+            showarrow: true,
+            axref: "pixel",
+            ayref: "pixel",
+            ax: ox,
+            ay: oy,
+            xanchor: "center",
+            yanchor: "middle",
+            arrowhead: 3,
+            arrowsize: 0.9,
+            arrowwidth: 1.1,
+            arrowcolor: "#444",
+            standoff: 0,
+            startstandoff: 3,
+          });
+          placedOff = true;
+          break;
+        }
+        if (!placedOff) {
+          for (const [dx, dy] of CALLOUT_DIRS) {
+            const [ox, oy] = calloutOffsetPx(dx, dy, w, h);
+            const tx = tpx + ox, ty = tpy + oy;
+            const box = labelBoxFromCenter(tx, ty, w, h);
+            if (!placementOk(box)) continue;
+            const [oxData, oyData] = map.fromPx(tx, ty);
+            placed.push(box);
+            anns.push({ ...base, showarrow: false, x: oxData, y: oyData });
+            placedOff = true;
+            break;
+          }
+        }
+        if (placedOff) continue;
+
+        // 3) No free offset → plain tip label. Only "Hide labels below" removes names.
+        placed.push(inlineBox);
+        anns.push({ ...base, showarrow: false });
       }
       return anns;
     }
@@ -4536,7 +4987,7 @@
           title: { text: yLabel, font: { size: 18 } },
           range: [Math.min(yLo, yHi), Math.max(yLo, yHi)],
         }, ax),
-        annotations: componentAnnotations(plotResult),
+        annotations: componentAnnotations(plotResult, vectorLayer),
       };
       const sysAnn = systemLabelAnnotation(result);
       if (sysAnn) layout.annotations.push(sysAnn);
