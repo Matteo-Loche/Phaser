@@ -28,7 +28,7 @@ Key behaviours:
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Job wall-clock timeout** — running jobs are hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min) so a stuck PHREEQC pool cannot pin the server forever.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Server usage statistics** — successful Predominance and Mineral Stability computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats` and the **Statistics** UI mode (diagram counts, queue timing, 24 h activity).
+- **Server usage statistics** — successful Predominance and Mineral Stability computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats?window=…` and the **Statistics** UI mode (mode rankings, top-15 lists, selectable windows from 24 h to all-time).
 - **Per-IP API rate limiting** — sliding-window caps on all `/api/*` routes, burst limits on compute and database registration, and **post-burst cooldowns** with escalating block duration for repeat abuse (see [API rate limiting](#api-rate-limiting)).
 - **Plotly UI** — single-page shell with **mode navigation** (Predominance · Mineral Stability · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous/mineral layer families, O₂/H₂ gas-limit configuration, vector display, per-element hover species, and browser-side settings/result cache.
 
@@ -765,20 +765,23 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 
 Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB`, gitignored like other `*.sqlite` files). Recorded **only on successful server computes** for Predominance and Mineral Stability (`mode_id` `phase-diagram` / `mineral-stability`) — browser IndexedDB cache hits are excluded.
 
+The dashboard **Period** control selects a trailing window (`24h`, `7d`, `30d` default, `90d`, `1y`, or `all`). KPIs, ranked lists, and activity charts all use that window. Ranked lists are capped at the **top 15** entries.
+
 | Metric | Description |
 |--------|-------------|
-| **Diagram count** | Total successful server jobs |
-| **Top databases** | Most-used `db_id` values |
-| **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) |
-| **Layer configurations** | Solid / aqueous / per-element subset combinations |
-| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C(4) · Mg`), ranked by frequency |
+| **Diagram count** | Successful server jobs in the selected window |
+| **Top mode** | Most-used product mode (`Predominance` / `Mineral Stability`) with a Modes bar chart (`top_modes`) |
+| **Top databases** | Most-used `db_id` values (≤15) |
+| **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) (≤15) |
+| **Layer configurations** | Solid / aqueous / per-element subset combinations (≤15) |
+| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C(4) · Mg`), ranked by frequency (≤15) |
 | **Avg compute time** | Wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds) |
 | **Avg queue at start** | Mean number of jobs ahead when each job began running, captured at enqueue time (`0` = started immediately) |
 | **Avg wait time** | Mean time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
 | **Adaptive vs uniform** | Breakdown of boundary-tracing mode usage |
-| **24h activity** | Compute counts in 5-minute buckets for the trailing 24 hours (`activity_24h`, each `{bucket_start, count, avg_wait_ms}`), rendered as a live Plotly time-series. A companion graph plots the average queue wait (seconds) per bucket. |
+| **Activity** | Compute counts in window-scaled buckets (`activity`, also aliased as `activity_24h`): 5 min (24 h), 30 min (7 d), 2 h (30 d), 6 h (90 d), 12 h (1 y); `all` picks a bucket width from the data span (~250–400 points). Each entry is `{bucket_start, count, avg_wait_ms}`. Companion graph plots average queue wait (seconds) per bucket. |
 
-Schema and queries live in `db/stats_store.py`; events are written from `services/compute.py` after each successful job.
+`GET /api/stats?window=24h|7d|30d|90d|1y|all` (default `30d`). Schema and queries live in `db/stats_store.py`; events are written from `services/compute.py` after each successful job.
 
 ### Header: database
 
@@ -923,7 +926,7 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 | `POST` | `/api/phases` | Discover phases for a chemical system |
 | `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}` |
 | `GET` | `/api/job/{job_id}` | Job status (`queued` \| `running` \| `done` \| `error`), `progress`, `phase`, queue position |
-| `GET` | `/api/stats` | Per-server compute usage summary (diagram counts, top DBs, grid sizes, layers, chemical systems, timing, queue, `activity_24h`) |
+| `GET` | `/api/stats` | Per-server compute usage summary; query `window=24h`, `7d`, `30d` (default), `90d`, `1y`, or `all`. Includes diagram counts, `top_modes`, top-15 DBs/grids/layers/systems, timing, queue, and `activity` |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
 | `DELETE` | `/api/job/{job_id}` | Release job/result from server memory (called by UI after fetch) |
 

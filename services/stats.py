@@ -45,5 +45,5 @@ def record_compute(
         pass
 
 
-def get_summary() -> dict[str, Any]:
-    return stats_store.get_summary()
+def get_summary(window: str | None = None) -> dict[str, Any]:
+    return stats_store.get_summary(window=window)

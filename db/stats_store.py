@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,29 @@ from .. import config
 
 _LOCK = threading.RLock()
 _SCHEMA_VERSION = 1
+
+# Cap ranked lists so the dashboard stays scannable as usage grows.
+TOP_LIMIT = 15
+
+MODE_LABELS = {
+    "phase-diagram": "Predominance",
+    "mineral-stability": "Mineral Stability",
+}
+
+# Trailing windows for GET /api/stats?window=
+# Fixed windows use explicit bucket widths (~250–400 points).
+# ``all`` resolves span + bucket from the earliest event at query time.
+STATS_WINDOWS: dict[str, dict[str, int | None]] = {
+    "24h": {"hours": 24, "bucket_minutes": 5},
+    "7d": {"hours": 24 * 7, "bucket_minutes": 30},
+    "30d": {"hours": 24 * 30, "bucket_minutes": 120},  # 2 h
+    "90d": {"hours": 24 * 90, "bucket_minutes": 360},  # 6 h
+    "1y": {"hours": 24 * 365, "bucket_minutes": 720},  # 12 h
+    "all": {"hours": None, "bucket_minutes": None},
+}
+DEFAULT_STATS_WINDOW = "30d"
+
+_MODE_FILTER = "mode_id IN ('phase-diagram', 'mineral-stability')"
 
 
 def _utcnow() -> str:
@@ -66,6 +90,13 @@ def init_schema() -> None:
             conn.commit()
         finally:
             conn.close()
+
+
+def normalize_stats_window(window: str | None) -> str:
+    key = str(window or DEFAULT_STATS_WINDOW).strip().lower()
+    if key in STATS_WINDOWS:
+        return key
+    return DEFAULT_STATS_WINDOW
 
 
 def layer_config_label(
@@ -146,17 +177,88 @@ def _format_chemical_system(system_elements_json: str) -> str:
     return " · ".join(str(e) for e in elems)
 
 
-def _top_chemical_systems(conn: sqlite3.Connection, limit: int = 12) -> list[dict[str, Any]]:
+def _bucket_minutes_for_span_hours(hours: float) -> int:
+    """Pick a bucket width that keeps roughly 250–400 activity points."""
+    h = max(1.0, float(hours))
+    candidates = (5, 15, 30, 60, 120, 180, 360, 720, 1440)
+    target = 320.0
+    best = 1440
+    best_score = float("inf")
+    for minutes in candidates:
+        n = (h * 60.0) / minutes
+        if n < 60:
+            continue
+        if n > 480:
+            continue
+        score = abs(n - target)
+        if score < best_score:
+            best_score = score
+            best = minutes
+    if (h * 60.0) / best > 480:
+        return 1440
+    return best
+
+
+def _parse_iso_utc(ts: str | None) -> datetime | None:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _resolve_window(
+    conn: sqlite3.Connection,
+    window: str | None,
+) -> tuple[str, datetime, int, int]:
+    """Return ``(window_id, window_start, hours, bucket_minutes)``."""
+    key = normalize_stats_window(window)
+    now = datetime.now(timezone.utc)
+    spec = STATS_WINDOWS[key]
+
+    if key == "all":
+        row = conn.execute(
+            f"""
+            SELECT MIN(finished_at) AS first_at
+            FROM compute_events
+            WHERE {_MODE_FILTER}
+            """
+        ).fetchone()
+        first = _parse_iso_utc(row["first_at"] if row else None)
+        if first is None:
+            return key, now - timedelta(hours=24), 24, 5
+        # Pad slightly so the first event lands inside the first bucket.
+        start = first - timedelta(minutes=1)
+        hours = max(1, int(math.ceil((now - start).total_seconds() / 3600.0)))
+        bucket = _bucket_minutes_for_span_hours(hours)
+        return key, start, hours, bucket
+
+    hours = int(spec["hours"] or 24)
+    bucket = int(spec["bucket_minutes"] or 60)
+    start = now - timedelta(hours=hours)
+    return key, start, hours, bucket
+
+
+def _top_chemical_systems(
+    conn: sqlite3.Connection,
+    *,
+    since: str,
+    limit: int = TOP_LIMIT,
+) -> list[dict[str, Any]]:
     rows = conn.execute(
-        """
+        f"""
         SELECT system_elements, COUNT(*) AS count
         FROM compute_events
-        WHERE mode_id IN ('phase-diagram', 'mineral-stability')
+        WHERE {_MODE_FILTER} AND finished_at >= ?
         GROUP BY system_elements
         ORDER BY count DESC, system_elements ASC
         LIMIT ?
         """,
-        (limit,),
+        (since, limit),
     ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -180,31 +282,58 @@ def _top_chemical_systems(conn: sqlite3.Connection, limit: int = 12) -> list[dic
 def _top_rows(
     conn: sqlite3.Connection,
     sql: str,
-    limit: int = 8,
+    params: tuple[Any, ...],
 ) -> list[dict[str, Any]]:
-    rows = conn.execute(sql, (limit,)).fetchall()
+    rows = conn.execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 
 
-_ACTIVITY_BUCKET_MINUTES = 5
+def _top_modes(
+    conn: sqlite3.Connection,
+    *,
+    since: str,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        f"""
+        SELECT mode_id, COUNT(*) AS count
+        FROM compute_events
+        WHERE {_MODE_FILTER} AND finished_at >= ?
+        GROUP BY mode_id
+        ORDER BY count DESC, mode_id ASC
+        """,
+        (since,),
+    ).fetchall()
+    by_id = {str(r["mode_id"]): int(r["count"]) for r in rows}
+    # Always emit both known modes so the UI can show a stable pair.
+    out: list[dict[str, Any]] = []
+    for mode_id, label in MODE_LABELS.items():
+        out.append(
+            {
+                "mode_id": mode_id,
+                "label": label,
+                "count": by_id.get(mode_id, 0),
+            }
+        )
+    out.sort(key=lambda r: (-r["count"], r["label"]))
+    return out
 
 
-def _activity_last_24h(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Sub-hour compute activity for the trailing 24 hours (oldest first).
-
-    Buckets are ``_ACTIVITY_BUCKET_MINUTES`` wide (96 points at 15 min) so the
-    UI can draw a fine-resolution time series. Each entry is
-    ``{"bucket_start": ISO-UTC, "count": int, "avg_wait_ms": float | None}``.
-    """
-    from datetime import timedelta
-
-    step = timedelta(minutes=_ACTIVITY_BUCKET_MINUTES)
-    n_buckets = (24 * 60) // _ACTIVITY_BUCKET_MINUTES
+def _activity_series(
+    conn: sqlite3.Connection,
+    *,
+    hours: int,
+    bucket_minutes: int,
+) -> list[dict[str, Any]]:
+    """Bucketed compute activity for the trailing ``hours`` (oldest first)."""
+    step = timedelta(minutes=bucket_minutes)
+    n_buckets = max(1, (hours * 60) // bucket_minutes)
 
     now = datetime.now(timezone.utc)
-    floored_minute = (now.minute // _ACTIVITY_BUCKET_MINUTES) * _ACTIVITY_BUCKET_MINUTES
+    floored_minute = (now.minute // bucket_minutes) * bucket_minutes
     current = now.replace(minute=floored_minute, second=0, microsecond=0)
-    buckets: list[datetime] = [current - step * i for i in range(n_buckets - 1, -1, -1)]
+    buckets: list[datetime] = [
+        current - step * i for i in range(n_buckets - 1, -1, -1)
+    ]
 
     counts = {b.isoformat(): 0 for b in buckets}
     wait_sum = {b.isoformat(): 0.0 for b in buckets}
@@ -212,9 +341,9 @@ def _activity_last_24h(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
     window_start = buckets[0]
     rows = conn.execute(
-        """
+        f"""
         SELECT finished_at, queue_wait_ms FROM compute_events
-        WHERE mode_id IN ('phase-diagram', 'mineral-stability') AND finished_at >= ?
+        WHERE {_MODE_FILTER} AND finished_at >= ?
         """,
         (window_start.isoformat(),),
     ).fetchall()
@@ -229,7 +358,7 @@ def _activity_last_24h(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             continue
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        m = (dt.minute // _ACTIVITY_BUCKET_MINUTES) * _ACTIVITY_BUCKET_MINUTES
+        m = (dt.minute // bucket_minutes) * bucket_minutes
         key = dt.replace(minute=m, second=0, microsecond=0).isoformat()
         if key in counts:
             counts[key] += 1
@@ -251,12 +380,42 @@ def _activity_last_24h(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return out
 
 
-def get_summary() -> dict[str, Any]:
+def get_summary(window: str | None = None) -> dict[str, Any]:
     with _LOCK:
         conn = _connect()
         try:
+            window_id, window_start, hours, bucket_minutes = _resolve_window(
+                conn, window
+            )
+            since = window_start.isoformat()
+            activity = _activity_series(
+                conn,
+                hours=hours,
+                bucket_minutes=bucket_minutes,
+            )
+            empty = {
+                "window": window_id,
+                "window_hours": hours,
+                "bucket_minutes": bucket_minutes,
+                "total_diagrams": 0,
+                "first_compute_at": None,
+                "last_compute_at": None,
+                "avg_compute_ms": None,
+                "avg_queue_position": None,
+                "avg_queue_wait_ms": None,
+                "adaptive_vs_uniform": {"adaptive": 0, "uniform": 0},
+                "top_modes": _top_modes(conn, since=since),
+                "activity": activity,
+                # Back-compat alias for older clients / docs.
+                "activity_24h": activity,
+                "top_databases": [],
+                "top_grid_sizes": [],
+                "top_layer_configs": [],
+                "top_chemical_systems": [],
+            }
+
             agg = conn.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*) AS total_diagrams,
                     MIN(finished_at) AS first_compute_at,
@@ -267,60 +426,53 @@ def get_summary() -> dict[str, Any]:
                     SUM(CASE WHEN adaptive = 1 THEN 1 ELSE 0 END) AS adaptive_count,
                     SUM(CASE WHEN adaptive = 0 THEN 1 ELSE 0 END) AS uniform_count
                 FROM compute_events
-                WHERE mode_id IN ('phase-diagram', 'mineral-stability')
-                """
+                WHERE {_MODE_FILTER} AND finished_at >= ?
+                """,
+                (since,),
             ).fetchone()
 
             total = int(agg["total_diagrams"] or 0)
+            top_modes = _top_modes(conn, since=since)
             if total == 0:
-                return {
-                    "total_diagrams": 0,
-                    "first_compute_at": None,
-                    "last_compute_at": None,
-                    "avg_compute_ms": None,
-                    "avg_queue_position": None,
-                    "avg_queue_wait_ms": None,
-                    "adaptive_vs_uniform": {"adaptive": 0, "uniform": 0},
-                    "activity_24h": _activity_last_24h(conn),
-                    "top_databases": [],
-                    "top_grid_sizes": [],
-                    "top_layer_configs": [],
-                    "top_chemical_systems": [],
-                }
+                empty["top_modes"] = top_modes
+                return empty
 
             top_databases = _top_rows(
                 conn,
-                """
+                f"""
                 SELECT db_id, COUNT(*) AS count
                 FROM compute_events
-                WHERE mode_id IN ('phase-diagram', 'mineral-stability') AND db_id IS NOT NULL AND db_id != ''
+                WHERE {_MODE_FILTER} AND finished_at >= ?
+                  AND db_id IS NOT NULL AND db_id != ''
                 GROUP BY db_id
                 ORDER BY count DESC, db_id ASC
                 LIMIT ?
                 """,
+                (since, TOP_LIMIT),
             )
             top_grid_sizes = _top_rows(
                 conn,
-                """
+                f"""
                 SELECT grid_levels, COUNT(*) AS count
                 FROM compute_events
-                WHERE mode_id IN ('phase-diagram', 'mineral-stability')
+                WHERE {_MODE_FILTER} AND finished_at >= ?
                 GROUP BY grid_levels
                 ORDER BY count DESC, grid_levels DESC
                 LIMIT ?
                 """,
+                (since, TOP_LIMIT),
             )
 
             layer_rows = conn.execute(
-                """
+                f"""
                 SELECT layer_solids, layer_aqueous, layer_elements, COUNT(*) AS count
                 FROM compute_events
-                WHERE mode_id IN ('phase-diagram', 'mineral-stability')
+                WHERE {_MODE_FILTER} AND finished_at >= ?
                 GROUP BY layer_solids, layer_aqueous, layer_elements
                 ORDER BY count DESC
                 LIMIT ?
                 """,
-                (8,),
+                (since, TOP_LIMIT),
             ).fetchall()
             top_layer_configs = [
                 {
@@ -334,9 +486,10 @@ def get_summary() -> dict[str, Any]:
                 for r in layer_rows
             ]
 
-            top_chemical_systems = _top_chemical_systems(conn)
-
             return {
+                "window": window_id,
+                "window_hours": hours,
+                "bucket_minutes": bucket_minutes,
                 "total_diagrams": total,
                 "first_compute_at": agg["first_compute_at"],
                 "last_compute_at": agg["last_compute_at"],
@@ -347,11 +500,13 @@ def get_summary() -> dict[str, Any]:
                     "adaptive": int(agg["adaptive_count"] or 0),
                     "uniform": int(agg["uniform_count"] or 0),
                 },
-                "activity_24h": _activity_last_24h(conn),
+                "top_modes": top_modes,
+                "activity": activity,
+                "activity_24h": activity,
                 "top_databases": top_databases,
                 "top_grid_sizes": top_grid_sizes,
                 "top_layer_configs": top_layer_configs,
-                "top_chemical_systems": top_chemical_systems,
+                "top_chemical_systems": _top_chemical_systems(conn, since=since),
             }
         finally:
             conn.close()

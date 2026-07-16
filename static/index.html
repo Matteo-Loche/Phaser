@@ -305,6 +305,18 @@
       gap: 0.75rem; flex-wrap: wrap;
     }
     .stats-head h2 { margin: 0; font-size: 1.25rem; font-weight: 700; }
+    .stats-head-controls {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem 1rem;
+    }
+    .stats-window-label {
+      display: inline-flex; align-items: center; gap: 0.45rem;
+      font-size: 0.88rem; color: var(--text);
+    }
+    .stats-window-label select {
+      font: inherit; font-size: 0.88rem; color: var(--text);
+      background: var(--panel, #111); border: 1px solid var(--border);
+      border-radius: 6px; padding: 0.28rem 0.55rem; cursor: pointer;
+    }
     .stats-updated { font-size: 0.78rem; color: var(--muted); }
     .stats-kpis {
       display: grid;
@@ -365,17 +377,26 @@
     }
     .stats-error { border-color: var(--err); color: var(--err); }
     .stats-footnote {
-      font-size: 0.76rem; color: var(--muted); line-height: 1.4;
+      font-size: 0.82rem; color: var(--muted); line-height: 1.45;
     }
     .stats-about-body {
-      font-size: 0.84rem; color: var(--muted); line-height: 1.5;
+      font-size: 1.02rem; color: var(--text); line-height: 1.55;
     }
-    .stats-about-body p { margin: 0.35rem 0; }
-    .stats-about-body a { color: #0066FF; text-decoration: none; }
+    .stats-about-body p { margin: 0.45rem 0; }
+    .stats-about-body a {
+      color: #3d8bfd; text-decoration: none; font-weight: 600;
+    }
     .stats-about-body a:hover { text-decoration: underline; }
     .stats-about-body .build-id {
-      font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums;
+      font-size: 0.9rem; color: var(--muted); font-variant-numeric: tabular-nums;
     }
+    .stats-about h3 { font-size: 1.05rem; }
+    .stats-about-badges {
+      display: flex; flex-wrap: wrap; gap: 0.55rem; align-items: center;
+      margin: 0.55rem 0 0.2rem;
+    }
+    .stats-about-badges a { display: inline-flex; line-height: 0; }
+    .stats-about-badges img { height: 22px; }
 
     /* Narrow screens: hide the wordy status, but keep the progress bar visible
        by compacting the button (short label) and shrinking the bar. */
@@ -992,7 +1013,19 @@
         <div class="stats-dashboard" id="statsDashboard">
           <div class="stats-head">
             <h2>Server statistics</h2>
-            <span class="stats-updated" id="statsUpdated">Loading…</span>
+            <div class="stats-head-controls">
+              <label class="stats-window-label">Period
+                <select id="statsWindow" aria-label="Statistics time window">
+                  <option value="24h">Last 24 hours</option>
+                  <option value="7d">Last 7 days</option>
+                  <option value="30d" selected>Last 30 days</option>
+                  <option value="90d">Last 3 months</option>
+                  <option value="1y">Last year</option>
+                  <option value="all">All time</option>
+                </select>
+              </label>
+              <span class="stats-updated" id="statsUpdated">Loading…</span>
+            </div>
           </div>
           <div id="statsBody">
             <div class="stats-empty">Loading statistics…</div>
@@ -1003,7 +1036,8 @@
           </section>
           <p class="stats-footnote">
             Counts successful server computes for Predominance and Mineral Stability
-            (recorded separately by mode). Browser cache hits are not included.
+            in the selected period (recorded separately by mode). Ranked lists show
+            the top 15 entries. Browser cache hits are not included.
             Refreshes automatically every 3 minutes while this page is open.
           </p>
         </div>
@@ -1036,6 +1070,15 @@
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
     const RESULT_CACHE_MAX = 24;
     const STATS_POLL_MS = 3 * 60 * 1000;
+    const STATS_WINDOW_KEY = "phaserStatsWindow.v2";
+    const STATS_WINDOW_LABELS = {
+      "24h": "last 24 hours",
+      "7d": "last 7 days",
+      "30d": "last 30 days",
+      "90d": "last 3 months",
+      "1y": "last year",
+      "all": "all time",
+    };
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
     const LOG_K_O2_25 = 20.75;
     const LOG_K_O2_DT = 0.0018;
@@ -1141,6 +1184,7 @@
       computeStartedAt: null,
       modeMenuOpen: false,
       statsPollTimer: null,
+      statsWindow: "30d",
     };
 
     const MODES = {
@@ -1354,6 +1398,19 @@
 
     function startStatsPolling() {
       stopStatsPolling();
+      const sel = $("statsWindow");
+      if (sel) {
+        try {
+          const saved = localStorage.getItem(STATS_WINDOW_KEY);
+          if (saved && STATS_WINDOW_LABELS[saved]) runtime.statsWindow = saved;
+        } catch (_) { /* ignore */ }
+        sel.value = runtime.statsWindow;
+        sel.onchange = () => {
+          runtime.statsWindow = sel.value || "30d";
+          try { localStorage.setItem(STATS_WINDOW_KEY, runtime.statsWindow); } catch (_) { /* ignore */ }
+          loadStats();
+        };
+      }
       renderStatsAbout();
       loadStats();
       runtime.statsPollTimer = setInterval(loadStats, STATS_POLL_MS);
@@ -1364,6 +1421,23 @@
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/"/g, "&quot;");
+    }
+
+    function licenseBadgeSrc(licenseName) {
+      const raw = String(licenseName || "").trim();
+      if (!raw) return "";
+      // shields.io: spaces -> _, dashes kept; e.g. AGPL-3.0 -> AGPL--3.0 or AGPL_v3
+      let label = raw.replace(/GNU\s+/i, "").replace(/\s+/g, " ").trim();
+      if (/agpl/i.test(label)) label = "AGPL_v3";
+      else if (/gpl/i.test(label) && /3/.test(label)) label = "GPL_v3";
+      else label = label.replace(/\s+/g, "_").replace(/-/g, "--");
+      return `https://img.shields.io/badge/License-${encodeURIComponent(label)}-blue.svg`;
+    }
+
+    function doiBadgeSrc(doiUrl) {
+      const m = String(doiUrl || "").match(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/i);
+      if (!m) return "";
+      return `https://zenodo.org/badge/DOI/${m[0]}.svg`;
     }
 
     function renderStatsAbout() {
@@ -1380,21 +1454,31 @@
         : "";
       const repo = htmlEscape(about.repository_url || "");
       const issues = htmlEscape(about.issues_url || "");
-      const licenseName = htmlEscape(about.license_name || "License");
-      const licenseUrl = about.license_url ? htmlEscape(about.license_url) : "";
-      const doiUrl = about.doi_url ? htmlEscape(about.doi_url) : "";
+      const licenseName = about.license_name || "License";
+      const licenseUrl = about.license_url || "";
+      const doiUrl = about.doi_url || "";
+      const licBadge = licenseBadgeSrc(licenseName);
+      const doiBadge = doiBadgeSrc(doiUrl);
+      const badges = [];
+      if (licBadge && licenseUrl) {
+        badges.push(
+          `<a href="${htmlEscape(licenseUrl)}" target="_blank" rel="noopener noreferrer" title="${htmlEscape(licenseName)}">` +
+          `<img src="${htmlEscape(licBadge)}" alt="${htmlEscape(licenseName)}"></a>`
+        );
+      }
+      if (doiBadge && doiUrl) {
+        badges.push(
+          `<a href="${htmlEscape(doiUrl)}" target="_blank" rel="noopener noreferrer" title="DOI">` +
+          `<img src="${htmlEscape(doiBadge)}" alt="DOI"></a>`
+        );
+      }
       const links = [
         `<a href="${repo}" target="_blank" rel="noopener noreferrer">Source code</a>`,
-        licenseUrl
-          ? `<a href="${licenseUrl}" target="_blank" rel="noopener noreferrer">${licenseName}</a>`
-          : "",
-        doiUrl
-          ? `<a href="${doiUrl}" target="_blank" rel="noopener noreferrer">DOI</a>`
-          : "",
-        `<a href="${issues}" target="_blank" rel="noopener noreferrer">Report a bug</a>`,
+        `<a href="${htmlEscape(issues)}" target="_blank" rel="noopener noreferrer">Report a bug</a>`,
       ].filter(Boolean).join(" · ");
       el.innerHTML = `
         <p><strong>PHASER ${ver}</strong>${build}</p>
+        ${badges.length ? `<div class="stats-about-badges">${badges.join("")}</div>` : ""}
         <p>${links}</p>`;
     }
 
@@ -1412,7 +1496,51 @@
       return v || fallback;
     }
 
-    function drawStatsCharts(buckets) {
+    function statsXAxisOpts(windowId, hours) {
+      const h = Number(hours) || 24;
+      if (windowId === "24h" || h <= 36) {
+        return { tickformat: "%H:%M", nticks: 7, tickangle: 0 };
+      }
+      if (windowId === "7d" || h <= 24 * 10) {
+        return { tickformat: "%a\n%H:%M", nticks: 7, tickangle: 0 };
+      }
+      if (windowId === "30d" || h <= 24 * 40) {
+        return { tickformat: "%b %d", nticks: 8, tickangle: 0 };
+      }
+      if (windowId === "90d" || h <= 24 * 100) {
+        return { tickformat: "%b %d", nticks: 8, tickangle: -30 };
+      }
+      if (windowId === "1y" || h <= 24 * 400) {
+        return { tickformat: "%b %Y", nticks: 8, tickangle: -30 };
+      }
+      return { tickformat: "%b %Y", nticks: 8, tickangle: -30 };
+    }
+
+    function statsCountYAxis(baseYaxis, counts) {
+      const maxCount = Math.max(0, ...counts);
+      const y = {
+        ...baseYaxis,
+        tickformat: "d",
+        automargin: true,
+        separatethousands: false,
+      };
+      if (maxCount <= 0) {
+        y.range = [0, 1];
+        y.dtick = 1;
+        y.nticks = 2;
+      } else if (maxCount <= 8) {
+        y.dtick = 1;
+        y.nticks = maxCount + 1;
+        y.range = [0, maxCount];
+      } else {
+        // Avoid every-integer ticks crowding when counts are large.
+        y.nticks = 5;
+        y.rangemode = "tozero";
+      }
+      return y;
+    }
+
+    function drawStatsCharts(buckets, windowId, hours) {
       const actEl = $("statsActivityPlot");
       const waitEl = $("statsWaitPlot");
       if (!window.Plotly || !actEl || !waitEl) return;
@@ -1423,16 +1551,31 @@
 
       const muted = statsCssVar("--muted", "#888");
       const border = statsCssVar("--border", "#444");
+      const xOpts = statsXAxisOpts(windowId, hours);
       const base = {
-        margin: { l: 38, r: 12, t: 6, b: 28 },
+        margin: { l: 44, r: 14, t: 8, b: xOpts.tickangle ? 48 : 32 },
         height: 200,
         paper_bgcolor: "rgba(0,0,0,0)",
         plot_bgcolor: "rgba(0,0,0,0)",
         font: { size: 11, color: muted },
         showlegend: false,
         hovermode: "x unified",
-        xaxis: { type: "date", gridcolor: border, zerolinecolor: border, tickformat: "%H:%M", color: muted, nticks: 6 },
-        yaxis: { gridcolor: border, zerolinecolor: border, color: muted, rangemode: "tozero" },
+        xaxis: {
+          type: "date",
+          gridcolor: border,
+          zerolinecolor: border,
+          color: muted,
+          automargin: true,
+          ...xOpts,
+        },
+        yaxis: {
+          gridcolor: border,
+          zerolinecolor: border,
+          color: muted,
+          rangemode: "tozero",
+          automargin: true,
+          nticks: 5,
+        },
       };
       const config = { displayModeBar: false, responsive: true };
 
@@ -1441,7 +1584,7 @@
         line: { color: "#00DDFF", width: 1.5, shape: "linear" },
         fill: "tozeroy", fillcolor: "rgba(0,221,255,0.16)",
         hovertemplate: "%{y} diagram(s)<extra></extra>",
-      }], { ...base, yaxis: { ...base.yaxis, dtick: 1, tickformat: "d" } }, config);
+      }], { ...base, yaxis: statsCountYAxis(base.yaxis, counts) }, config);
 
       Plotly.react(waitEl, [{
         x, y: waitS, type: "scatter", mode: "lines",
@@ -1474,12 +1617,14 @@
       const body = $("statsBody");
       const updated = $("statsUpdated");
       if (!body) return;
+      const windowId = data?.window || runtime.statsWindow || "24h";
+      const windowLabel = STATS_WINDOW_LABELS[windowId] || windowId;
       updated.textContent = `Updated ${new Date().toLocaleTimeString()} · auto-refresh every 3 min`;
 
       if (!data || !data.total_diagrams) {
         body.innerHTML = `<div class="stats-empty">
-          No server computes recorded yet. Run a Predominance or Mineral Stability
-          diagram to populate these statistics.
+          No server computes in the ${htmlEscape(windowLabel)}. Run a Predominance or
+          Mineral Stability diagram to populate these statistics, or pick a wider period.
           Browser cache hits are not counted.
         </div>`;
         return;
@@ -1488,19 +1633,28 @@
       const adapt = data.adaptive_vs_uniform || {};
       const adaptTotal = (adapt.adaptive || 0) + (adapt.uniform || 0);
       const adaptPct = adaptTotal ? Math.round((adapt.adaptive / adaptTotal) * 100) : 0;
-      const activity = data.activity_24h || [];
+      const activity = data.activity || data.activity_24h || [];
       const activityTotal = activity.reduce((sum, b) => sum + (b.count || 0), 0);
       const gridItems = (data.top_grid_sizes || []).map(r => ({
         label: `${r.grid_levels}×${r.grid_levels}`,
         count: r.count,
       }));
+      const modes = data.top_modes || [];
+      const topMode = modes.find(m => (m.count || 0) > 0) || modes[0];
+      const topModeLabel = topMode?.label || "—";
+      const topModeCount = topMode?.count || 0;
 
       body.innerHTML = `
         <div class="stats-kpis">
           <div class="stats-kpi" style="--kpi-accent:#0066FF">
             <div class="label">Diagrams</div>
             <div class="value">${data.total_diagrams}</div>
-            <div class="sub">server computes</div>
+            <div class="sub">${htmlEscape(windowLabel)}</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#F472B6">
+            <div class="label">Top mode</div>
+            <div class="value" style="font-size:1.05rem">${htmlEscape(topModeLabel)}</div>
+            <div class="sub">${topModeCount} compute${topModeCount === 1 ? "" : "s"}</div>
           </div>
           <div class="stats-kpi" style="--kpi-accent:#00DDFF">
             <div class="label">Avg compute</div>
@@ -1525,15 +1679,19 @@
         </div>
         <div class="stats-charts">
           <section class="stats-card" style="--card-accent:#00DDFF">
-            <h3>Activity — last 24 hours (${activityTotal} ${activityTotal === 1 ? "diagram" : "diagrams"})</h3>
+            <h3>Activity — ${htmlEscape(windowLabel)} (${activityTotal} ${activityTotal === 1 ? "diagram" : "diagrams"})</h3>
             <div id="statsActivityPlot" class="stats-plot"></div>
           </section>
           <section class="stats-card" style="--card-accent:#FF9900">
-            <h3>Avg wait time — last 24 hours (seconds)</h3>
+            <h3>Avg wait time — ${htmlEscape(windowLabel)} (seconds)</h3>
             <div id="statsWaitPlot" class="stats-plot"></div>
           </section>
         </div>
         <div class="stats-grid">
+          <section class="stats-card" style="--card-accent:#F472B6">
+            <h3>Modes</h3>
+            ${statsBarList(modes, "label", "count")}
+          </section>
           <section class="stats-card" style="--card-accent:#0066FF">
             <h3>Top databases</h3>
             ${statsBarList(data.top_databases, "db_id", "count")}
@@ -1552,14 +1710,15 @@
           </section>
         </div>`;
 
-      drawStatsCharts(activity);
+      drawStatsCharts(activity, windowId, data.window_hours);
     }
 
     async function loadStats() {
       const body = $("statsBody");
       if (!body || activeModeId !== "stats") return;
+      const windowId = runtime.statsWindow || "30d";
       try {
-        const data = await api("/api/stats");
+        const data = await api(`/api/stats?window=${encodeURIComponent(windowId)}`);
         renderStats(data);
       } catch (e) {
         $("statsUpdated").textContent = "Update failed";
