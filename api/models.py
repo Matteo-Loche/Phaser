@@ -24,10 +24,10 @@ class ComputeRequest(BaseModel):
     temp_c: float = config.TEMP_C
     ph_min: float = config.PH_MIN
     ph_max: float = config.PH_MAX
-    ph_levels: int = config.GRID_LEVELS
+    ph_levels: int = Field(default=config.GRID_LEVELS, ge=config.MIN_GRID_LEVELS, le=config.MAX_GRID_LEVELS)
     pe_min: float = config.PE_MIN
     pe_max: float = config.PE_MAX
-    pe_levels: int = config.GRID_LEVELS
+    pe_levels: int = Field(default=config.GRID_LEVELS, ge=config.MIN_GRID_LEVELS, le=config.MAX_GRID_LEVELS)
     totals: dict[str, float]
     units: str = config.DEFAULT_UNITS
     phases: list[str] | None = None

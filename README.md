@@ -19,7 +19,7 @@ Users define a chemical system (total concentrations), select solid phases, and 
 Key behaviours:
 
 - **Server-side PHREEQC** with multiprocessed grid sweeps and root finding with a **CPU queue** (one sweep at a time by default).
-- **Adaptive boundary tracing** — default mode that evaluates the full selected grid, then locates exact category boundaries by root-finding on mixed cells and builds vector fills whose edges share the same divide geometry as the drawn boundary lines (SI predominance and mineral-stability plugins).
+- **Trace phase edges** (API: `adaptive_boundaries`) — default mode that evaluates the full selected grid, then locates exact category boundaries by root-finding on mixed cells and builds vector fills whose edges share the same divide geometry as the drawn boundary lines (SI predominance and mineral-stability plugins).
 - **Two diagram modes** — Predominance (SI) and Mineral Stability (EQUI assemblage); each keeps an independent result cache and session state in the browser.
 - **Selectable diagram layers** — compute solid / mineral, aqueous, and/or per-element subset maps independently (`layer_solids`, `layer_aqueous`, `layer_elements`); boundary tracing and packing honour the same toggles.
 - **Per-element aqueous hover** — grid sweep punches the top species per element via PHREEQC `SYS`; Mineral Stability also shows precipitated moles. Hover tooltips are filtered to the active display context.
@@ -488,7 +488,7 @@ A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
 
 ### Adaptive boundary tracing (`adaptive.py` + `boundary_trace.py`)
 
-The optional **Adaptive boundaries** mode evaluates the full user-selected grid, then traces phase boundaries on mixed cells so the diagram renders as smooth vector geometry without evaluating every fine-grid node.
+The optional **Trace phase edges** mode (`adaptive_boundaries`) evaluates the full user-selected grid, then traces phase boundaries on mixed cells so the diagram renders as smooth vector geometry without evaluating every fine-grid node.
 
 **SI predominance** uses `run_adaptive_boundary_sweep` (`trace_mode="predominance"`). **Mineral stability** uses `run_adaptive_mineral_stability_sweep` with `trace_mode` `mineral_moles` or `mineral_costability` (see [Mineral stability](#mineral-stability-assemblage-modes)). Both share the same cell geometry, ProcessPool, crossing cache, and fallback machinery in `boundary_trace.py`.
 
@@ -545,6 +545,8 @@ Limits (`config.py`):
 | Constant | Default | Purpose |
 |----------|---------|---------|
 | `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
+| `MIN_GRID_LEVELS` | 50 | Minimum allowed `ph_levels` / `pe_levels` |
+| `MAX_GRID_LEVELS` | 200 | Maximum allowed `ph_levels` / `pe_levels` |
 | `MAX_GRID_POINTS` | 40,000 | Hard cap on `ph_levels × pe_levels` for the **base** grid |
 | `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI and API default for adaptive mode |
 | `ADAPTIVE_REFINE_FACTOR` | 5 | Fallback sub-grid + fine-node factor for traced local geometry (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
@@ -748,7 +750,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 | **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **Compute diagram** button, unified spectrum progress bar, short status line, **Database** label + selector + status dot |
 | **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below) |
 | **Diagram** | Square-ish Plotly canvas (`fitPlotBox` allows up to **1:1.2** aspect so the plot grows on narrow windows instead of shrinking to a tiny square) |
-| **Right plot panel** | Display mode, element subset filter, labels/boundaries toggles, diagram metadata |
+| **Right plot panel** | Display mode, element subset filter, label style (name/formula, size, min area), fill opacity, labels/boundaries toggles, diagram metadata |
 | **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets width. Widths persist in `phaserLayout.v1` |
 
 **Responsive behaviour**
@@ -802,7 +804,7 @@ Elements no longer need a manual reload button — everything refreshes when the
 | **Axes** | pH min/max; redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
 | **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips |
-| **Configuration** | Plot resolution slider (`ph_levels` = `pe_levels`), **Adaptive boundaries** toggle, **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability), **O₂/H₂ stability limits** (atm), estimated PHREEQC run count |
+| **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **O₂/H₂ stability limits** (atm) |
 
 Changing units auto-converts species concentrations. Editing chemistry, axes, phases, or layer toggles marks the diagram **stale** until recomputed. Layer toggles in Configuration apply to the **next** compute; display controls in the plot panel always reflect the **currently plotted** result (see below).
 
@@ -812,7 +814,7 @@ Changing units auto-converts species concentrations. Editing chemistry, axes, ph
 
 - The logo animates (`.is-computing` on the brand link).
 - A **single unified progress bar** advances through the whole pipeline — one 0–100% fill, not per-phase resets.
-- A short **status line** names the current step (`Computing grid…`, `Refining boundaries…`, etc.).
+- A short **status line** names the current step (`Computing grid…`, `Tracing phase edges…`, etc.).
 
 **Queued** jobs show status text only — the bar stays hidden until the job starts running.
 
@@ -825,7 +827,7 @@ The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled wi
 | Step | Bar range |
 |------|-----------|
 | Grid sweep | 0–20% |
-| Boundary refinement | 20–90% |
+| Trace phase edges | 20–90% |
 | Packing | 90–95% |
 | Download / cache / render | 95–100% |
 
@@ -837,9 +839,12 @@ Display controls describe the **plotted result**, not pending Configuration togg
 
 | Control | Effect |
 |---------|--------|
-| **Display** | *Solid predominance* / *Mineral map* (label depends on diagram mode) and/or *Aqueous predominance* — only families that were actually computed appear in the dropdown |
+| **Display** | *Solid predominance* / *Mineral map* (label depends on diagram mode) and/or *Aqueous predominance* — only families that were actually computed appear in the dropdown. Foldable sections: **Display** (open by default), **Labels**, **Fill**, **Overlays** |
 | **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
 | **Phase labels** | Solid / mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability and moles-tie joins (`"A + B"`) format each part with the same mode. Placement uses max clearance from region edges in grid-index space, so labels stay put when switching **Eh / pe / log fO₂** |
+| **Label size** | Phase annotation font size in px (default **14**, range 10–20; − / value / +) |
+| **Fill opacity** | Region fill transparency (default **100%**, range 10–100%). Vector fills and uniform heatmaps; boundary polylines stay opaque |
+| **Min label area** | Minimum connected-region size for a name, as **% of grid cells** (default **0.4%**, range 0–1%, step 0.01). Threshold is `max(4, floor(n_cells × pct/100))` so tiny speckles stay unlabeled; at 0% only the 4-cell floor remains |
 | **Labels only** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
 | **System label** | Top-right badge of the displayed chemical system (e.g. `Fe-C`); full input system, or the active element subset when per-element filters are on |
@@ -998,7 +1003,7 @@ Key fields in the JSON body:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C(4)": 1.0}` |
-| `ph_levels`, `pe_levels` | `GRID_LEVELS` | Grid resolution (both axes) |
+| `ph_levels`, `pe_levels` | `GRID_LEVELS` | Grid resolution (both axes; clamped to `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`) |
 | `ph_min`, `ph_max`, `pe_min`, `pe_max` | config defaults | Axis bounds |
 | `phases` | auto-discover | Selected solid phase names |
 | `system_elements` | from totals | Explicit element list for layers |
@@ -1072,7 +1077,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Host / port | `PHASER_HOST`, `PHASER_PORT` | `0.0.0.0:8765` | Used by `run_server.py` and Docker |
 | Catalog SQLite | `PHASER_CATALOG_DB` | `data/catalog.sqlite` | PHREEQC element/phase/species index |
 | Stats SQLite | `PHASER_STATS_DB` | `data/stats.sqlite` | Per-server compute event log |
-| Grid resolution | — | `GRID_LEVELS = 100` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
+| Grid resolution | — | `GRID_LEVELS = 100` (range `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`, 50–200) | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
 | Default solution mode | — | `SOLUTION_MODE_DEFAULT = dummy_titration` | Predominance modes exposed as `/api/config` `solution_modes`; assemblage pair as `assemblage_solution_modes`. All four remain valid on `POST /api/compute`. |
 | Default mineral category | — | `MINERAL_CATEGORY_MODE_DEFAULT = moles` | `moles` or `costability`; exposed as `mineral_category_modes` |
 | Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |

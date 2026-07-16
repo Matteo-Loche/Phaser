@@ -188,6 +188,8 @@ PH_MAX = 12.0
 PE_MIN = -10.0
 PE_MAX = 14.0
 GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
+MIN_GRID_LEVELS = 50  # UI + API floor for ph_levels / pe_levels
+MAX_GRID_LEVELS = 200  # matches MAX_GRID_POINTS = 200×200
 
 # Grid-point PHREEQC input modes (see phreeqc/input_titration.py,
 # input_dummy_titration.py, input_assemblage_*.py).

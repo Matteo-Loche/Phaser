@@ -28,7 +28,7 @@
       --radius: 10px;
       --sidebar-w: clamp(320px, 30vw, 420px);
       --header-h: 64px;
-      --plot-panel-w: clamp(190px, 16vw, 240px);
+      --plot-panel-w: clamp(220px, 18vw, 280px);
       --logo-anim-speed: 1.6s;
       --tap: 40px;
       --fs-base: clamp(0.85rem, 0.8rem + 0.2vw, 0.95rem);
@@ -586,7 +586,19 @@
       border: 1px solid var(--border); border-radius: 8px;
       background: var(--bg);
     }
-    input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    input:focus, select:focus { outline: none; }
+    input:focus-visible:not([type="range"]), select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -1px;
+    }
+    /* Range thumbs already show interaction — no accent focus box. */
+    input[type="range"],
+    input[type="range"]:focus,
+    input[type="range"]:focus-visible {
+      outline: none;
+      box-shadow: none;
+    }
+    input[type="range"]::-moz-focus-outer { border: 0; }
 
     .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0.5rem; }
     .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 0.5rem; }
@@ -671,6 +683,34 @@
     .toggle { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
     .toggle input { width: 18px; height: 18px; }
 
+    /* Soft scrollbars: thin, muted, visible on hover or while scrolling. */
+    .soft-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: transparent transparent;
+    }
+    .soft-scroll:hover,
+    .soft-scroll.soft-scroll-active {
+      scrollbar-color: color-mix(in srgb, var(--muted) 40%, transparent) transparent;
+    }
+    .soft-scroll::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    .soft-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .soft-scroll::-webkit-scrollbar-thumb {
+      background: transparent;
+      border-radius: 999px;
+    }
+    .soft-scroll:hover::-webkit-scrollbar-thumb,
+    .soft-scroll.soft-scroll-active::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--muted) 40%, transparent);
+    }
+    .soft-scroll.soft-scroll-active::-webkit-scrollbar-thumb {
+      background: color-mix(in srgb, var(--muted) 55%, transparent);
+    }
+
     /* ---------- Plot ---------- */
     /* Plotting options live in a resizable column on the right of the diagram. */
     .plot-toolbar {
@@ -679,11 +719,133 @@
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      gap: 0.6rem;
+      gap: 0.55rem;
       overflow-y: auto;
       overscroll-behavior: contain;
+      min-width: 0;
     }
     .plot-toolbar > label { margin-bottom: 0; }
+    .plot-toolbar .disp-select {
+      width: 100%;
+      min-height: var(--tap);
+      padding: 0 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.82rem;
+    }
+    .disp-card {
+      min-width: 0;
+    }
+    .plot-toolbar .disp-card > summary {
+      padding: 0.55rem 0.65rem;
+      font-size: 0.68rem;
+    }
+    .plot-toolbar .disp-card .body {
+      padding: 0 0.65rem 0.65rem;
+      gap: 0.45rem;
+    }
+    .disp-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.45rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-width: 0;
+    }
+    .disp-row > label { margin-bottom: 0; flex: none; }
+    .disp-row .disp-select { width: auto; flex: 1; min-width: 0; }
+    .disp-subset {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.3rem 0.5rem;
+      font-size: 0.78rem;
+    }
+    .disp-slider {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      min-width: 0;
+      width: 100%;
+    }
+    .disp-slider-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.4rem;
+    }
+    .disp-slider-head label { margin-bottom: 0; }
+    .disp-slider input[type="range"],
+    input.disp-slider-range {
+      width: 100%;
+      min-width: 0;
+      height: var(--tap);
+      margin: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .disp-slider .disp-val {
+      flex: none;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+      font-size: 0.78rem;
+    }
+    .disp-stepper {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.15rem;
+      flex: none;
+    }
+    .disp-stepper button {
+      min-width: var(--tap);
+      min-height: var(--tap);
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+    }
+    .disp-stepper button:hover { border-color: var(--accent); color: var(--accent); }
+    .disp-stepper input[type="number"] {
+      width: 2.75rem;
+      min-height: var(--tap);
+      margin: 0;
+      padding: 0 0.25rem;
+      text-align: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+      font-size: 0.82rem;
+      -moz-appearance: textfield;
+    }
+    .disp-stepper input[type="number"]::-webkit-outer-spin-button,
+    .disp-stepper input[type="number"]::-webkit-inner-spin-button {
+      -webkit-appearance: none; margin: 0;
+    }
+    .disp-toggles {
+      gap: 0.35rem;
+    }
+    .disp-toggles .toggle {
+      font-size: 0.78rem;
+      margin: 0;
+    }
+    .plot-toolbar .spacer { min-height: 0.25rem; }
+    .plot-toolbar > .meta {
+      margin-top: auto;
+      padding-top: 0.25rem;
+      border-top: 1px solid var(--border);
+      word-break: break-word;
+    }
     .plot-wrap {
       flex: 1; min-width: 0; min-height: 0;
       display: flex; align-items: center; justify-content: center;
@@ -726,19 +888,64 @@
     }
     #plotDiv { width: 100%; height: 100%; }
 
-    /* Narrow/medium screens: options menu moves on top as a horizontal bar. */
+    /* Narrow/medium screens: options menu moves on top as a wrapping bar. */
     @media (max-width: 1280px) {
       #phaseDiagramMain { flex-direction: column; }
       .plot-resizer { display: none; }
       .plot-toolbar {
         order: -1;
         width: auto;
+        max-width: 100%;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: stretch;
+        gap: 0.45rem;
+        overflow: visible;
+        padding-bottom: 0.15rem;
+      }
+      .plot-toolbar .disp-card {
+        flex: 1 1 11.5rem;
+        max-width: 100%;
+      }
+      .plot-toolbar .disp-card-display {
+        flex: 1 1 14rem;
+      }
+      .plot-toolbar .disp-toggles[open] .body {
         flex-direction: row;
         flex-wrap: wrap;
         align-items: center;
-        overflow: visible;
+        gap: 0.35rem 0.75rem;
       }
-      .plot-toolbar > #displayMode { width: auto; }
+      .plot-toolbar .spacer { display: none; }
+      .plot-toolbar > .meta {
+        flex: 1 1 100%;
+        margin-top: 0;
+        padding-top: 0.35rem;
+        border-top: 1px solid var(--border);
+      }
+      .plot-toolbar > .pill {
+        flex: 1 1 100%;
+      }
+      .disp-slider input[type="range"] {
+        min-width: 6rem;
+      }
+    }
+    @media (max-width: 560px) {
+      .plot-toolbar {
+        gap: 0.4rem;
+      }
+      .plot-toolbar .disp-card {
+        flex: 1 1 100%;
+      }
+      .disp-row {
+        flex-wrap: wrap;
+      }
+      .disp-row .disp-select {
+        flex: 1 1 100%;
+      }
+      .disp-stepper button {
+        min-width: 2.2rem;
+      }
     }
     .meta { font-size: 0.76rem; color: var(--muted); }
     .empty {
@@ -842,7 +1049,7 @@
 
     <div class="backdrop" id="backdrop"></div>
 
-    <aside id="sidebar">
+    <aside id="sidebar" class="soft-scroll">
       <details class="card" id="dbCard">
         <summary>Database <span class="chev">›</span></summary>
         <div class="body">
@@ -909,7 +1116,7 @@
             <button class="btn secondary" id="selAll">All</button>
             <button class="btn secondary" id="selNone">None</button>
           </div>
-          <div class="phase-box" id="phaseBox"><div class="meta" style="padding:0.6rem">Add species to discover phases.</div></div>
+          <div class="phase-box soft-scroll" id="phaseBox"><div class="meta" style="padding:0.6rem">Add species to discover phases.</div></div>
         </div>
       </details>
 
@@ -940,13 +1147,38 @@
         <summary>Configuration <span class="chev">›</span></summary>
         <div class="body">
           <div>
-            <label>Plot resolution: <span id="gridLevelsVal"></span></label>
-            <input id="gridLevels" type="range" min="10" max="200" step="1" />
+            <div class="label-row">
+              <label for="gridLevelsInput">Plot resolution</label>
+              <span class="meta" id="gridLevelsVal" style="margin-left:auto">100 × 100</span>
+            </div>
+            <div class="disp-row" style="margin-bottom:0.35rem">
+              <span class="disp-stepper">
+                <button type="button" id="gridLevelsDec" aria-label="Decrease grid resolution">−</button>
+                <input type="number" id="gridLevelsInput" min="50" max="200" step="1" value="100" />
+                <button type="button" id="gridLevelsInc" aria-label="Increase grid resolution">+</button>
+              </span>
+            </div>
+            <input id="gridLevels" class="disp-slider-range" type="range" min="50" max="200" step="1" value="100" aria-label="Plot resolution slider" />
           </div>
-          <label class="toggle" style="margin-top:0.55rem;font-size:0.82rem">
-            <input type="checkbox" id="adaptiveBoundaries" />
-            Adaptive boundaries <span class="meta">(root-find phase edges)</span>
-          </label>
+          <div style="margin-top:0.55rem">
+            <div class="label-row">
+              <label class="toggle" style="font-size:0.82rem;margin:0" for="adaptiveBoundaries">
+                <input type="checkbox" id="adaptiveBoundaries" />
+                Trace phase edges
+              </label>
+              <button type="button" class="help-tip" id="adaptiveBoundariesHelp"
+                      aria-label="Help: Trace phase edges" aria-expanded="false">?</button>
+            </div>
+            <div class="help-popover" id="adaptiveBoundariesHelpPop" hidden>
+              On: evaluate the full base grid for hover data, then root-find
+              phase contacts only on mixed cells so edges draw as smooth vectors
+              instead of stair-steps. Trace work grows with the number
+              of phase contacts — more elements mean more edges, and enabling
+              per-element subsets multiplies that cost quickly (each subset map
+              is traced separately). This method may create artifacts on very fine stability areas. Off: fill the diagram as a uniform
+              heatmap at the base resolution.
+            </div>
+          </div>
           <div style="margin-top:0.65rem">
             <label>Calculation mode</label>
             <div class="mode-options" id="solutionModeOptions" role="radiogroup" aria-label="Calculation mode"></div>
@@ -983,29 +1215,75 @@
         </div>
         <div class="plot-resizer" id="plotResizer"
              title="Drag to resize · double-click to reset" aria-hidden="true"></div>
-        <div class="plot-toolbar">
+        <div class="plot-toolbar soft-scroll">
           <span class="pill" id="stalePill" style="display:none">stale — recompute</span>
-          <label style="font-size:0.78rem;color:var(--muted)">Display</label>
-          <select id="displayMode" style="min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
-            <option value="solid">Solid predominance</option>
-            <option value="aqueous">Aqueous predominance</option>
-          </select>
-          <span id="solidSubsetWrap" style="display:flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.6rem;font-size:0.78rem">
-            <span id="subsetLabel" style="color:var(--muted)">Elements:</span>
-            <span id="solidSubsetBoxes"></span>
-          </span>
-          <span id="phaseLabelWrap" style="display:inline-flex;flex-wrap:wrap;align-items:center;gap:0.35rem 0.6rem">
-            <label style="font-size:0.78rem;color:var(--muted);margin-bottom:0" for="phaseLabelMode">Phase labels</label>
-            <select id="phaseLabelMode" style="min-height:var(--tap);padding:0 0.5rem;border:1px solid var(--border);border-radius:8px;background:var(--bg)">
-              <option value="name">Name</option>
-              <option value="formula">Formula</option>
-              <option value="both">Name + formula</option>
-            </select>
-          </span>
-          <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
-          <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
-          <label class="toggle" style="font-size:0.78rem"><input type="checkbox" id="showSystemLabel" checked /> System label</label>
-          <div class="spacer" style="flex:1"></div>
+
+          <details class="card disp-card disp-card-display" open>
+            <summary>Display <span class="chev">›</span></summary>
+            <div class="body">
+              <select id="displayMode" class="disp-select" aria-label="Display layer">
+                <option value="solid">Solid predominance</option>
+                <option value="aqueous">Aqueous predominance</option>
+              </select>
+              <span id="solidSubsetWrap" class="disp-subset" style="display:none">
+                <span id="subsetLabel" style="color:var(--muted)">Elements:</span>
+                <span id="solidSubsetBoxes"></span>
+              </span>
+            </div>
+          </details>
+
+          <details class="card disp-card">
+            <summary>Labels <span class="chev">›</span></summary>
+            <div class="body">
+              <div class="disp-row" id="phaseLabelWrap">
+                <label for="phaseLabelMode">Format</label>
+                <select id="phaseLabelMode" class="disp-select">
+                  <option value="name">Name</option>
+                  <option value="formula">Formula</option>
+                  <option value="both">Name + formula</option>
+                </select>
+              </div>
+              <div class="disp-row" title="Phase label font size (px)">
+                <label for="labelFontSize">Size</label>
+                <span class="disp-stepper">
+                  <button type="button" id="labelFontSizeDec" aria-label="Decrease label size">−</button>
+                  <input type="number" id="labelFontSize" min="10" max="20" step="1" value="14" />
+                  <button type="button" id="labelFontSizeInc" aria-label="Increase label size">+</button>
+                </span>
+              </div>
+              <div class="disp-slider" title="Regions smaller than this fraction of the grid stay unlabeled (minimum 4 cells)">
+                <div class="disp-slider-head">
+                  <label for="labelMinAreaPct">Min area</label>
+                  <span class="disp-val" id="labelMinAreaPctVal">0.4%</span>
+                </div>
+                <input type="range" id="labelMinAreaPct" min="0" max="1" step="0.01" value="0.4" />
+              </div>
+            </div>
+          </details>
+
+          <details class="card disp-card">
+            <summary>Fill <span class="chev">›</span></summary>
+            <div class="body">
+              <div class="disp-slider" title="Region fill transparency (boundaries stay opaque)">
+                <div class="disp-slider-head">
+                  <label for="fillOpacity">Opacity</label>
+                  <span class="disp-val" id="fillOpacityVal">100%</span>
+                </div>
+                <input type="range" id="fillOpacity" min="10" max="100" step="5" value="100" />
+              </div>
+            </div>
+          </details>
+
+          <details class="card disp-card disp-toggles">
+            <summary>Overlays <span class="chev">›</span></summary>
+            <div class="body">
+              <label class="toggle"><input type="checkbox" id="labelsOnly" /> Labels only (no fill)</label>
+              <label class="toggle"><input type="checkbox" id="showBoundaries" checked /> Boundaries</label>
+              <label class="toggle"><input type="checkbox" id="showSystemLabel" checked /> System label</label>
+            </div>
+          </details>
+
+          <div class="spacer"></div>
           <span class="meta" id="plotMeta">No diagram yet.</span>
         </div>
       </main>
@@ -1163,6 +1441,9 @@
       showBoundaries: true,
       showSystemLabel: true,
       phaseLabelMode: "name", // "name" | "formula" | "both" — solids + joins; aqueous always chem-formatted
+      labelFontSize: 14,      // px — Plotly annotation font (10–20)
+      fillOpacity: 1,         // 0.1–1 region fill alpha (boundaries stay opaque)
+      labelMinAreaPct: 0.4,   // % of grid cells (0–1); minCells = max(4, floor(total * pct/100))
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
       colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
     };
@@ -1831,6 +2112,24 @@
       return state.colorByName[name];
     }
 
+    /** Apply alpha to #rgb / #rrggbb / rgba(...) / named css (fallback: rgba black). */
+    function withAlpha(color, a) {
+      const alpha = Math.min(1, Math.max(0, Number(a) || 0));
+      const c = String(color || "").trim();
+      const hex = c.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+      if (hex) {
+        let h = hex[1];
+        if (h.length === 3) h = h.split("").map(ch => ch + ch).join("");
+        const r = parseInt(h.slice(0, 2), 16);
+        const g = parseInt(h.slice(2, 4), 16);
+        const b = parseInt(h.slice(4, 6), 16);
+        return `rgba(${r},${g},${b},${alpha})`;
+      }
+      const rgba = c.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*[\d.]+\s*)?\)$/i);
+      if (rgba) return `rgba(${rgba[1]},${rgba[2]},${rgba[3]},${alpha})`;
+      return c || `rgba(0,0,0,${alpha})`;
+    }
+
     function escapeHtml(s) {
       return String(s)
         .replace(/&/g, "&amp;")
@@ -2017,6 +2316,35 @@
       if (result) renderSolidSubsetBoxes(result);
     }
 
+    function syncDisplayStyleReadouts() {
+      const fsEl = $("labelFontSize");
+      const op = $("fillOpacityVal");
+      const ar = $("labelMinAreaPctVal");
+      if (fsEl && document.activeElement !== fsEl) fsEl.value = String(state.labelFontSize);
+      if (op) op.textContent = `${Math.round(state.fillOpacity * 100)}%`;
+      if (ar) ar.textContent = `${parseFloat((Number(state.labelMinAreaPct) || 0).toFixed(2))}%`;
+    }
+
+    function clampLabelFontSize(v) {
+      return Math.min(20, Math.max(10, Math.round(Number(v) || 14)));
+    }
+
+    function clampLabelMinAreaPct(v) {
+      const pct = Number(v);
+      if (!Number.isFinite(pct)) return 0.4;
+      return Math.min(1, Math.max(0, Math.round(pct * 100) / 100));
+    }
+
+    function syncDisplayStyleControls() {
+      const fsEl = $("labelFontSize");
+      const opEl = $("fillOpacity");
+      const arEl = $("labelMinAreaPct");
+      if (fsEl) fsEl.value = String(state.labelFontSize);
+      if (opEl) opEl.value = String(Math.round(state.fillOpacity * 100));
+      if (arEl) arEl.value = String(state.labelMinAreaPct);
+      syncDisplayStyleReadouts();
+    }
+
     // Show only the display modes that were actually computed for this result.
     function populateDisplayModeOptions(result) {
       const sel = $("displayMode");
@@ -2043,7 +2371,7 @@
     function syncDisplayControls(result = runtime.lastResult) {
       const mode = state.displayMode;
       const cfg = displayLayerConfig(result);
-      $("solidSubsetWrap").style.display = cfg.elements ? "inline-flex" : "none";
+      $("solidSubsetWrap").style.display = cfg.elements ? "flex" : "none";
       const lbl = $("subsetLabel");
       if (lbl) {
         const isAsm = result && (
@@ -2056,7 +2384,7 @@
       }
       // Name/formula options only apply to mineral solids; aqueous labels are formulas.
       const phaseLbl = $("phaseLabelWrap");
-      if (phaseLbl) phaseLbl.style.display = mode === "aqueous" ? "none" : "inline-flex";
+      if (phaseLbl) phaseLbl.style.display = mode === "aqueous" ? "none" : "flex";
     }
 
     // Subset key for the active display: the selected element subset when
@@ -2231,7 +2559,7 @@
       const LABELS = {
         grid: "Computing grid",
         compute: "Computing grid",
-        boundaries: "Refining boundaries",
+        boundaries: "Tracing phase edges",
         packing: "Packing diagram",
         download: "Downloading",
         cache: "Caching",
@@ -2365,6 +2693,7 @@
       if (state.gridLevels == null) {
         state.gridLevels = state.ph?.levels ?? state.y?.levels ?? DEFAULT_STATE.gridLevels;
       }
+      state.gridLevels = clampGridLevels(state.gridLevels);
       // Normalize saved redox bounds: internal storage always uses peMin/peMax.
       if (state.y) {
         if (state.y.peMin == null && state.y.min != null) {
@@ -2411,6 +2740,14 @@
       if (state.displayMode === "element") state.displayMode = "aqueous"; // removed mode id
       if (!["solid", "aqueous"].includes(state.displayMode)) state.displayMode = "solid";
       if (!["name", "formula", "both"].includes(state.phaseLabelMode)) state.phaseLabelMode = "name";
+      state.labelFontSize = clampLabelFontSize(state.labelFontSize);
+      {
+        const op = Number(state.fillOpacity);
+        state.fillOpacity = Number.isFinite(op)
+          ? Math.min(1, Math.max(0.1, op > 1 ? op / 100 : op))
+          : 1;
+      }
+      state.labelMinAreaPct = clampLabelMinAreaPct(state.labelMinAreaPct);
       delete state.targetElement;
       state.layerSolids ??= true;
       state.layerAqueous ??= true;
@@ -2820,58 +3157,55 @@
     function adaptiveFactor() {
       return (runtime.cfg && runtime.cfg.adaptive_refine_factor) || 5;
     }
-    // Number of element subsets packed/traced, mirroring diagram.packer.subsets_to_pack.
-    function countSubsets(nEl) {
-      if (nEl <= 0) return 0;
-      if (nEl <= 7) return Math.pow(2, nEl) - 1;
-      return nEl + (nEl * (nEl - 1)) / 2 + 1;
+
+    function gridLevelsBounds() {
+      const d = runtime.cfg?.defaults || {};
+      return {
+        min: Math.max(2, Number(d.min_grid_levels) || 50),
+        max: Math.max(50, Number(d.max_grid_levels) || 200),
+      };
     }
 
-    // Predominance maps actually computed for the current toggles.
-    function layerMapCount() {
-      const nEl = systemElements().length || 1;
-      const nSub = effectiveLayerElements() ? countSubsets(nEl) : 1;
-      const families = (state.layerSolids ? 1 : 0) + (state.layerAqueous ? 1 : 0);
-      return Math.max(1, families * nSub);
+    function clampGridLevels(v) {
+      const { min, max } = gridLevelsBounds();
+      const n = Math.round(Number(v));
+      if (!Number.isFinite(n)) return DEFAULT_STATE.gridLevels;
+      return Math.min(max, Math.max(min, n));
     }
 
-    // Fraction of base cells expected on a boundary, scaled by active layer maps.
-    // Normalized to ≈0.12 when all families and subsets are enabled; shrinks when disabled.
-    function boundaryFraction() {
-      const nEl = systemElements().length || 1;
-      const kAll = 2 * countSubsets(nEl); // both families × all subsets
-      const k = layerMapCount();
-      const p = 0.1;
-      const raw = (x) => 1 - Math.pow(1 - p, x);
-      const denom = raw(kAll) || 1;
-      const weight = Math.min(1, raw(k) / denom);
-      return 0.12 * weight;
+    function syncGridLevelsControls() {
+      const n = state.gridLevels;
+      const range = $("gridLevels");
+      const input = $("gridLevelsInput");
+      const { min, max } = gridLevelsBounds();
+      if (range) {
+        range.min = String(min);
+        range.max = String(max);
+        range.value = String(n);
+      }
+      if (input) {
+        input.min = String(min);
+        input.max = String(max);
+        if (document.activeElement !== input) input.value = String(n);
+      }
     }
 
-    function estimateAdaptiveRuns(n) {
-      const factor = adaptiveFactor();
-      const cap = (runtime.cfg && runtime.cfg.max_adaptive_points) || 120000;
-      const base = n * n;
-      const baseCells = Math.max(0, (n - 1) * (n - 1));
-      const boundaryCells = Math.round(baseCells * boundaryFraction());
-      const newPerCell = (factor + 1) * (factor + 1) - 4;
-      return Math.min(cap, base + boundaryCells * Math.max(0, newPerCell));
+    function setGridLevels(v, { commitChange = true } = {}) {
+      state.gridLevels = clampGridLevels(v);
+      syncGridLevelsControls();
+      renderGridMeta();
+      if (commitChange) commit();
     }
+
     function renderGridMeta() {
       const n = state.gridLevels;
-      $("gridLevelsVal").textContent = n;
-      const total = n * n;
-      if (state.adaptiveBoundaries) {
-        const factor = adaptiveFactor();
-        const est = estimateAdaptiveRuns(n);
-        $("gridMeta").innerHTML =
-          `Base ${n} × ${n} grid · boundary tracing`
-          + ` · ~<b>${est.toLocaleString()}</b> PHREEQC runs`
-          + (est > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
-      } else {
-        $("gridMeta").innerHTML = `${n} × ${n} = <b>${total.toLocaleString()}</b> PHREEQC runs`
-          + (total > 14400 ? ` <span style="color:var(--warn)">(large — may take a while)</span>` : "");
-      }
+      const label = $("gridLevelsVal");
+      if (label) label.textContent = `${n} × ${n}`;
+      const meta = $("gridMeta");
+      if (!meta) return;
+      meta.textContent = state.adaptiveBoundaries
+        ? `Base ${n} × ${n} grid · traced phase edges`
+        : `${n} × ${n} uniform grid`;
     }
 
     /* ---------------- inputs binding ---------------- */
@@ -3095,15 +3429,41 @@
         commit();
       });
       $("gridLevels").addEventListener("input", e => {
-        state.gridLevels = parseInt(e.target.value, 10);
-        renderGridMeta();
-        commit();
+        setGridLevels(e.target.value);
+      });
+      $("gridLevelsDec").addEventListener("click", () => setGridLevels(state.gridLevels - 1));
+      $("gridLevelsInc").addEventListener("click", () => setGridLevels(state.gridLevels + 1));
+      $("gridLevelsInput").addEventListener("change", e => setGridLevels(e.target.value));
+      $("gridLevelsInput").addEventListener("keydown", e => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          setGridLevels(e.target.value);
+          e.target.blur();
+        }
       });
       $("adaptiveBoundaries").addEventListener("change", e => {
         state.adaptiveBoundaries = e.target.checked;
         renderGridMeta();
         commit();
       });
+      {
+        const helpBtn = $("adaptiveBoundariesHelp");
+        const helpPop = $("adaptiveBoundariesHelpPop");
+        if (helpBtn && helpPop) {
+          helpBtn.addEventListener("click", e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const opening = helpPop.hidden;
+            helpPop.hidden = !opening;
+            helpBtn.setAttribute("aria-expanded", opening ? "true" : "false");
+          });
+          document.addEventListener("click", e => {
+            if (helpBtn.contains(e.target) || helpPop.contains(e.target)) return;
+            helpPop.hidden = true;
+            helpBtn.setAttribute("aria-expanded", "false");
+          });
+        }
+      }
       function onLayerToggle(key, el) {
         if (key === "layerElements" && systemElements().length <= 1) {
           el.checked = false;
@@ -3151,6 +3511,35 @@
         state.phaseLabelMode = ["name", "formula", "both"].includes(v) ? v : "name";
         persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      const redrawDisplay = () => {
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      const setLabelFontSize = (v) => {
+        state.labelFontSize = clampLabelFontSize(v);
+        syncDisplayStyleReadouts();
+        redrawDisplay();
+      };
+      $("labelFontSizeDec").addEventListener("click", () => setLabelFontSize(state.labelFontSize - 1));
+      $("labelFontSizeInc").addEventListener("click", () => setLabelFontSize(state.labelFontSize + 1));
+      $("labelFontSize").addEventListener("change", e => setLabelFontSize(e.target.value));
+      $("labelFontSize").addEventListener("keydown", e => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          setLabelFontSize(e.target.value);
+          e.target.blur();
+        }
+      });
+      $("fillOpacity").addEventListener("input", e => {
+        state.fillOpacity = Math.min(1, Math.max(0.1, (Number(e.target.value) || 100) / 100));
+        syncDisplayStyleReadouts();
+        redrawDisplay();
+      });
+      $("labelMinAreaPct").addEventListener("input", e => {
+        state.labelMinAreaPct = clampLabelMinAreaPct(e.target.value);
+        syncDisplayStyleReadouts();
+        redrawDisplay();
       });
       $("labelsOnly").addEventListener("change", e => {
         state.labelsOnly = e.target.checked; persist();
@@ -3219,7 +3608,7 @@
       $("tempC").value = state.tempC;
       $("phMin").value = roundPh(state.ph.min);
       $("phMax").value = roundPh(state.ph.max);
-      $("gridLevels").value = state.gridLevels;
+      syncGridLevelsControls();
       $("adaptiveBoundaries").checked = !!state.adaptiveBoundaries;
       $("layerSolids").checked = !!state.layerSolids;
       $("layerAqueous").checked = !!state.layerAqueous;
@@ -3242,6 +3631,7 @@
       $("phaseLabelMode").value = ["name", "formula", "both"].includes(state.phaseLabelMode)
         ? state.phaseLabelMode
         : "name";
+      syncDisplayStyleControls();
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
       $("showSystemLabel").checked = state.showSystemLabel !== false;
@@ -3624,7 +4014,7 @@
             const phaseLabel = {
               grid: "Computing grid",
               compute: "Computing grid",
-              boundaries: "Refining boundaries",
+              boundaries: "Tracing phase edges",
               packing: "Packing diagram",
             }[phase] || "Computing";
             setLogoComputing(true, `${phaseLabel}…`);
@@ -3850,7 +4240,9 @@
       const tempC = result.temp_c ?? state.tempC;
       const ny = grid.length, nx = grid[0].length;
       const total = nx * ny;
-      const minCells = Math.max(4, Math.floor(total * 0.004));
+      const frac = (Number(state.labelMinAreaPct) || 0) / 100;
+      const minCells = Math.max(4, Math.floor(total * frac));
+      const fontSize = clampLabelFontSize(state.labelFontSize);
       const seen = Array.from({ length: ny }, () => new Int8Array(nx));
       const anns = [];
 
@@ -3881,7 +4273,7 @@
           anns.push({
             x: ax, y: ay,
             text: `<b>${labelForPhase(name)}</b>`,
-            showarrow: false, font: { size: 14, color: "#111" },
+            showarrow: false, font: { size: fontSize, color: "#111" },
             bgcolor: "rgba(255,255,255,0.72)", borderpad: 2,
           });
         }
@@ -3920,20 +4312,27 @@
         if (xs.length >= 3) batched.push({ cat, area, x: xs, y: ys });
       }
       batched.sort((a, b) => (b.area || 0) - (a.area || 0));
+      const alpha = Math.min(1, Math.max(0.1, Number(state.fillOpacity) || 1));
+      // Full opacity: 1px stroke in the fill colour seals antialias gaps between
+      // adjacent per-cell boundary rings. Translucent fills must not stroke —
+      // the hairline outlines every cell as a visible square fringe, and stacked
+      // rgba edges darken the boundary band.
+      const sealSeams = alpha >= 0.999;
       return batched.map(poly => {
         const name = names[poly.cat] ?? "?";
         let fill;
         if (name === "none" || isGasDomainLabel(name)) fill = NONE_COLOR;
         else if (aqueousSet && aqueousSet.has(name)) fill = AQ_GREY;
         else fill = colorForPhase(name);
+        const fillA = sealSeams ? fill : withAlpha(fill, alpha);
         const mapped = mapPlotXY(poly.x, poly.y, tempC);
         return {
           type: "scatter", mode: "lines", fill: "toself",
           x: mapped.x, y: mapped.y,
-          fillcolor: fill,
-          // Hairline stroke in the fill color seals antialias gaps between
-          // adjacent per-cell rings (traced boundary cells).
-          line: { width: 1, color: fill },
+          fillcolor: fillA,
+          line: sealSeams
+            ? { width: 1, color: fill }
+            : { width: 0, color: fillA },
           hoverinfo: "skip",
           showlegend: false,
         };
@@ -4100,6 +4499,7 @@
           zmin: -0.5, zmax: Math.max(n - 0.5, 0.5),
           colorscale: buildDiscreteColorscale(names, aqueousSet),
           showscale: false, xgap: 0, ygap: 0,
+          opacity: Math.min(1, Math.max(0.1, Number(state.fillOpacity) || 1)),
           hoverinfo: "skip",
         });
         if (state.showBoundaries) traces.push(boundaryTrace(plotResult));
@@ -4203,7 +4603,7 @@
         peMin: d.pe_min,
         peMax: d.pe_max,
       };
-      state.gridLevels = d.grid_levels ?? DEFAULT_STATE.gridLevels;
+      state.gridLevels = clampGridLevels(d.grid_levels ?? DEFAULT_STATE.gridLevels);
       state.o2LimitAtm = d.o2_limit_atm ?? DEFAULT_STATE.o2LimitAtm;
       state.h2LimitAtm = d.h2_limit_atm ?? DEFAULT_STATE.h2LimitAtm;
       if (runtime.cfg.adaptive_boundaries_default != null) {
@@ -4228,10 +4628,33 @@
       refreshPhases();
     }
 
+    function initDispCards() {
+      const toolbar = document.querySelector(".plot-toolbar");
+      if (!toolbar) return;
+      toolbar.querySelectorAll("details.disp-card").forEach(el => {
+        el.addEventListener("toggle", () => triggerPlotResize(), { passive: true });
+      });
+    }
+
+    function initSoftScroll() {
+      document.querySelectorAll(".soft-scroll").forEach(el => {
+        let hideTimer = 0;
+        el.addEventListener("scroll", () => {
+          el.classList.add("soft-scroll-active");
+          window.clearTimeout(hideTimer);
+          hideTimer = window.setTimeout(() => {
+            el.classList.remove("soft-scroll-active");
+          }, 700);
+        }, { passive: true });
+      });
+    }
+
     async function init() {
       bindControls();
       initSidebarResizer();
       initPlotResizer();
+      initDispCards();
+      initSoftScroll();
       fitPlotBox();
       if (window.ResizeObserver) {
         const wrap = document.querySelector(".plot-wrap");

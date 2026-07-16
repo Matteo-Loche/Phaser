@@ -51,6 +51,8 @@ def get_config():
             "pe_min": config.PE_MIN,
             "pe_max": config.PE_MAX,
             "grid_levels": config.GRID_LEVELS,
+            "min_grid_levels": config.MIN_GRID_LEVELS,
+            "max_grid_levels": config.MAX_GRID_LEVELS,
             "o2_limit_atm": config.O2_FUGACITY_LIMIT_ATM,
             "h2_limit_atm": config.H2_FUGACITY_LIMIT_ATM,
         },
