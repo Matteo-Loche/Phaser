@@ -497,7 +497,7 @@ The optional **Trace phase edges** mode (`adaptive_boundaries`) evaluates the fu
 1. **Solid/aqueous name collisions** — names shared by a solid phase and an aqueous species come from the SQLite catalog (`solid_aqueous_collisions`, from `PHASES` ∩ `SOLUTION_SPECIES` text at scan time). `services/compute.py` loads them onto `GridJobParams` before the sweep; colliding solids are labelled `"<name>(s)"` during packing and tracing (not inferred from grid results).
 2. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
 3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid/mineral and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners.
-4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with **`_chunk_cells`** batching: ~`workers × TRACE_CHUNK_MULTIPLIER` jobs). Mixed cells are **Morton-sorted** into **contiguous** worker chunks so boundary chains and per-worker point/crossing caches stay local. For each layer and cell:
+4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with **`_chunk_cells`** batching: ~`workers × TRACE_CHUNK_MULTIPLIER` jobs). Mixed cells are **Morton-sorted** into **contiguous** worker chunks so boundary chains and per-worker point/crossing caches stay local; progress is counted as chunks complete, independent of submission order. For each layer and cell:
    - **2-category cells** — `scipy.optimize.brentq` along cell edges locates crossings of a continuous scalar whose zero is the boundary:
      - SI predominance solid↔solid: `SI_A − SI_B`
      - mineral moles solid↔solid: precipitated-mole difference
@@ -556,7 +556,8 @@ Limits (`config.py`):
 | `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N species per element during tracing (env `PHASER_TRACE_TOP_AQ_SPECIES`) |
 | `TOP_AQ_SPECIES_PER_ELEMENT` | 64 | Top-N species per element in the base grid sweep (env `PHASER_TOP_AQ_SPECIES`) |
 | `HOVER_SPECIES_PER_ELEMENT` | 4 | Species kept per element in packed hover data (env `PHASER_HOVER_SPECIES_PER_ELEMENT`) |
-| `TRACE_CHUNK_MULTIPLIER` | 8 | Worker pool chunking multiplier (env `PHASER_TRACE_CHUNK_MULTIPLIER`) |
+| `TRACE_CHUNK_MULTIPLIER` | 16 | Worker pool chunking multiplier (env `PHASER_TRACE_CHUNK_MULTIPLIER`) |
+| `TRACE_MIN_CELLS_PER_CHUNK` | 4 | Minimum mixed cells per trace chunk (env `PHASER_TRACE_MIN_CELLS_PER_CHUNK`) |
 | `SWEEP_MAP_CHUNKSIZE` | 200 | `ProcessPoolExecutor.map` chunksize for base grid sweep (env `PHASER_SWEEP_MAP_CHUNKSIZE`) |
 | `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
 | `MAX_WORKERS` | 8 | Worker processes per sweep (`PHASER_MAX_WORKERS`; server authority) |

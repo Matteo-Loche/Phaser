@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import os
+from concurrent.futures import as_completed
 from collections import Counter, defaultdict
 from ..services.job_control import check_abort, managed_process_pool
 from dataclasses import asdict, dataclass, fields, replace
@@ -1750,8 +1751,23 @@ def run_boundary_trace(
             ),
         ) as pool:
             try:
-                for result in pool.map(_trace_worker_job, jobs):
+                futures = {
+                    pool.submit(_trace_worker_job, job): idx
+                    for idx, job in enumerate(jobs)
+                }
+                completed: list[dict[str, Any] | None] = [None] * len(jobs)
+                for future in as_completed(futures):
                     check_abort(job_id)
+                    completed[futures[future]] = future.result()
+                    done += 1
+                    if progress_cb:
+                        progress_cb(done, len(chunks))
+
+                # Preserve the old deterministic Morton-chunk merge order even
+                # though progress is counted as chunks complete.
+                for result in completed:
+                    if result is None:
+                        continue
                     chunk_stats = TraceStats(**result["stats"])
                     _merge_stats(stats, chunk_stats)
                     for layer_id, data in result["layers"].items():
@@ -1777,9 +1793,6 @@ def run_boundary_trace(
                             data.get("boundaries", [])
                         )
                     stability.extend(result["stability"])
-                    done += 1
-                    if progress_cb:
-                        progress_cb(done, len(chunks))
             except Exception as exc:
                 from ..services.job_control import JobAborted
 

@@ -296,8 +296,8 @@ BOUNDARY_TRACE_STABILITY_TOLERANCE = float(
     os.environ.get("PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE", "1e-2")
 )
 # Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
-TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "8"))
-TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "8"))
+TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "16"))
+TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "4"))
 # Base grid sweep: ProcessPoolExecutor.map chunksize (points per IPC message).
 SWEEP_MAP_CHUNKSIZE = int(os.environ.get("PHASER_SWEEP_MAP_CHUNKSIZE", "200"))
 
