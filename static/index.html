@@ -270,8 +270,13 @@
     /* Only the active mode's panel is shown. The app always carries a mode-*
        class, so these explicit rules win over any flex display on .mode-panel. */
     #phaseDiagramMain, #statsMain { display: none; }
-    .app.mode-phase-diagram #phaseDiagramMain { display: flex; }
+    .app.mode-phase-diagram #phaseDiagramMain,
+    .app.mode-mineral-stability #phaseDiagramMain { display: flex; }
     .app.mode-stats #statsMain { display: flex; }
+    /* Mineral-only plot options (category mode) — hidden on Predominance. */
+    .mineral-only { display: none; }
+    .app.mode-mineral-stability .mineral-only { display: block; }
+    .app.mode-phase-diagram .mineral-only { display: none !important; }
     /* Statistics mode has no sidebar, so collapse the grid to a single full-width
        column (otherwise the sidebar/resizer columns stay reserved and squeeze
        the dashboard into the right third of the screen). */
@@ -779,13 +784,17 @@
         <button class="mode-btn" id="modeBtn" type="button"
                 aria-haspopup="menu" aria-expanded="false" aria-controls="modeMenu">
           <span class="mode-prefix">Mode</span>
-          <span id="modeBtnLabel">Saturation Predominance</span>
+          <span id="modeBtnLabel">Predominance</span>
           <span class="mode-chev" aria-hidden="true">▼</span>
         </button>
         <div class="mode-menu" id="modeMenu" role="menu" hidden>
           <button type="button" role="menuitem" data-mode="phase-diagram">
-            Saturation Predominance
-            <span class="mode-desc">pH–pe / Eh predominance maps</span>
+            Predominance
+            <span class="mode-desc">pH–pe / Eh saturation-index maps</span>
+          </button>
+          <button type="button" role="menuitem" data-mode="mineral-stability">
+            Mineral Stability
+            <span class="mode-desc">Assemblage precipitation maps</span>
           </button>
           <button type="button" role="menuitem" data-mode="stats">
             Statistics
@@ -888,7 +897,8 @@
         <div class="body">
           <div class="meta" style="margin-bottom:0.35rem">Layers to compute and display</div>
           <label class="toggle" style="display:block;margin-bottom:0.3rem">
-            <input type="checkbox" id="layerSolids" checked /> Solid predominance
+            <input type="checkbox" id="layerSolids" checked />
+            <span id="layerSolidsLabel">Solid predominance</span>
           </label>
           <label class="toggle" style="display:block;margin-bottom:0.3rem">
             <input type="checkbox" id="layerAqueous" checked /> Aqueous predominance
@@ -897,6 +907,11 @@
             <input type="checkbox" id="layerElements" /> Per-element subsets
             <span class="meta">(filter map by element; off = one combined map)</span>
           </label>
+          <div class="mineral-only" id="mineralCategoryWrap" style="margin-top:0.75rem">
+            <div class="meta" style="margin-bottom:0.35rem">Mineral category mode</div>
+            <div class="mode-options" id="mineralCategoryOptions" role="radiogroup"
+                 aria-label="Mineral category mode"></div>
+          </div>
         </div>
       </details>
 
@@ -987,8 +1002,9 @@
             <div id="statsAboutBody" class="stats-about-body">Loading…</div>
           </section>
           <p class="stats-footnote">
-            Counts successful server computes for Saturation Predominance only.
-            Browser cache hits are not included. Refreshes automatically every 3 minutes while this page is open.
+            Counts successful server computes for Predominance and Mineral Stability
+            (recorded separately by mode). Browser cache hits are not included.
+            Refreshes automatically every 3 minutes while this page is open.
           </p>
         </div>
       </div>
@@ -1009,13 +1025,14 @@
       "#e67e22","#34495e","#16a085","#c0392b","#8e44ad","#27ae60",
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
-    const LS_KEY = "phaseDiagramState.v7";
+    const LS_KEY = "phaseDiagramState.v8";
     const RESULT_DB = "phaserResultCache.v23";
     const RESULT_STORE = "results";
-    const RESULT_SESSION_KEY = "phaserLastResultKey.v1";
+    const RESULT_SESSION_KEY = "phaserLastResultKey.v2";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v2";
     const MODE_HASH_PREFIX = "#/";
     const DEFAULT_MODE_ID = "phase-diagram";
+    const DIAGRAM_MODE_IDS = new Set(["phase-diagram", "mineral-stability"]);
     const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
     const RESULT_CACHE_MAX = 24;
     const STATS_POLL_MS = 3 * 60 * 1000;
@@ -1093,6 +1110,7 @@
       gridLevels: 100,
       adaptiveBoundaries: true,
       solutionMode: "dummy_titration",
+      mineralCategoryMode: "moles",
       displayMode: "solid",
       solidSubsetElements: [],
       layerSolids: true,
@@ -1128,8 +1146,17 @@
     const MODES = {
       "phase-diagram": {
         id: "phase-diagram",
-        label: "Saturation Predominance",
-        title: "PHASER — Saturation Predominance",
+        label: "Predominance",
+        title: "PHASER — Predominance",
+        hasCompute: true,
+        computeLabelFull: "Compute diagram",
+        computeLabelShort: "Run",
+        emptyHint: "Set your system and press <b>Compute diagram</b>.",
+      },
+      "mineral-stability": {
+        id: "mineral-stability",
+        label: "Mineral Stability",
+        title: "PHASER — Mineral Stability",
         hasCompute: true,
         computeLabelFull: "Compute diagram",
         computeLabelShort: "Run",
@@ -1149,6 +1176,44 @@
     let state = structuredClone(DEFAULT_STATE);
 
     const $ = (id) => document.getElementById(id);
+
+    function isDiagramMode(modeId) {
+      return DIAGRAM_MODE_IDS.has(modeId);
+    }
+
+    function resultMatchesMode(modeId, result) {
+      if (!result || !isDiagramMode(modeId)) return false;
+      const wantAsm = modeId === "mineral-stability";
+      const layers = result.layers || {};
+      const dLayers = (result.display && result.display.layers) || {};
+      const isAsm = result.diagram_kind === "assemblage"
+        || Object.keys(layers.mineral_subsets || {}).length > 0
+        || Object.keys(dLayers.mineral_subsets || {}).length > 0;
+      const isPred = result.diagram_kind === "predominance"
+        || Object.keys(layers.solid_subsets || {}).length > 0
+        || Object.keys(dLayers.solid_subsets || {}).length > 0
+        || (!isAsm && result.diagram_kind == null);
+      return wantAsm ? isAsm : (isPred && !isAsm);
+    }
+
+    function solidFamilyKey(result) {
+      return resultMatchesMode("mineral-stability", result) || result?.diagram_kind === "assemblage"
+        ? "mineral_subsets"
+        : "solid_subsets";
+    }
+
+    function mapSolutionModeForCompute(uiMode, productModeId) {
+      const frame = (uiMode === "titration") ? "titration" : "dummy_titration";
+      if (productModeId === "mineral-stability") {
+        return frame === "titration" ? "assemblage_titration" : "assemblage_dummy_titration";
+      }
+      return frame;
+    }
+
+    function normalizeUiSolutionMode(mode) {
+      if (mode === "assemblage_titration" || mode === "titration") return "titration";
+      return "dummy_titration";
+    }
 
     function getActiveMode() {
       return MODES[activeModeId] || MODES[DEFAULT_MODE_ID];
@@ -1205,19 +1270,30 @@
     function restoreModeView() {
       const mode = getActiveMode();
       document.title = mode.title;
-      $("app").classList.remove("mode-phase-diagram", "mode-stats");
+      $("app").classList.remove("mode-phase-diagram", "mode-mineral-stability", "mode-stats");
       $("app").classList.add(`mode-${activeModeId}`);
       updateModeSwitcherUI();
       updateComputeChrome();
-      if (activeModeId === "phase-diagram") {
-        const result = runtime.modeResults["phase-diagram"] || runtime.lastResult;
-        if (result) {
+      syncMineralPlotOptionLabels();
+      if (isDiagramMode(activeModeId)) {
+        const result = runtime.modeResults[activeModeId];
+        if (result && resultMatchesMode(activeModeId, result)) {
+          runtime.lastResult = result;
+          runtime.hasResult = true;
           drawDiagram(result);
-          // The plot was display:none in other modes, so Plotly may have a
-          // zero-size canvas; force a resize now that it is visible.
           triggerPlotResize();
-        } else if (!runtime.hasResult) {
-          $("plotEmpty").style.display = "";
+        } else {
+          runtime.lastResult = null;
+          runtime.hasResult = false;
+          if (window.Plotly) {
+            try { Plotly.purge("plotDiv"); } catch (e) {}
+          }
+          const empty = $("plotEmpty");
+          if (empty) {
+            empty.style.display = "";
+            const hint = mode.emptyHint || "Set your system and press <b>Compute diagram</b>.";
+            empty.innerHTML = `<div style="font-size:2rem">⬡</div><div>${hint}</div>`;
+          }
         }
         stopStatsPolling();
       } else if (activeModeId === "stats") {
@@ -1242,7 +1318,7 @@
     function dispatchCompute() {
       const mode = getActiveMode();
       if (!mode.hasCompute) return;
-      if (activeModeId === "phase-diagram") return computePhaseDiagram();
+      if (isDiagramMode(activeModeId)) return computeDiagram(activeModeId);
     }
 
     function cachePayloadForMode(modeId, body) {
@@ -1250,11 +1326,21 @@
     }
 
     function renderModeResult(modeId, result) {
+      if (!isDiagramMode(modeId)) return;
       runtime.modeResults[modeId] = result;
-      if (modeId === "phase-diagram") {
+      if (activeModeId === modeId) {
         runtime.lastResult = result;
         runtime.hasResult = true;
-        if (activeModeId === "phase-diagram") drawDiagram(result);
+        drawDiagram(result);
+      }
+    }
+
+    function syncMineralPlotOptionLabels() {
+      const solidLbl = $("layerSolidsLabel");
+      if (solidLbl) {
+        solidLbl.textContent = activeModeId === "mineral-stability"
+          ? "Mineral map"
+          : "Solid predominance";
       }
     }
 
@@ -1392,7 +1478,8 @@
 
       if (!data || !data.total_diagrams) {
         body.innerHTML = `<div class="stats-empty">
-          No server computes recorded yet. Run a Saturation Predominance diagram to populate these statistics.
+          No server computes recorded yet. Run a Predominance or Mineral Stability
+          diagram to populate these statistics.
           Browser cache hits are not counted.
         </div>`;
         return;
@@ -1702,13 +1789,18 @@
       });
     }
 
-    // Which predominance families exist in a computed result.
+    // Which solid/mineral and aqueous families exist in a computed result.
     function availableFamilies(result) {
       const g = result?.layers || {};
       const d = result?.display?.layers || {};
+      const solidKey = solidFamilyKey(result);
       return {
-        solid: Object.keys(g.solid_subsets || {}).length > 0
-          || Object.keys(d.solid_subsets || {}).length > 0,
+        solid: Object.keys(g[solidKey] || {}).length > 0
+          || Object.keys(d[solidKey] || {}).length > 0
+          || Object.keys(g.solid_subsets || {}).length > 0
+          || Object.keys(d.solid_subsets || {}).length > 0
+          || Object.keys(g.mineral_subsets || {}).length > 0
+          || Object.keys(d.mineral_subsets || {}).length > 0,
         aqueous: Object.keys(g.aqueous_subsets || {}).length > 0
           || Object.keys(d.aqueous_subsets || {}).length > 0,
       };
@@ -1731,10 +1823,15 @@
         };
       }
       const fam = availableFamilies(result);
+      const solidKey = solidFamilyKey(result);
       const keys = new Set([
+        ...Object.keys(result.layers?.[solidKey] || {}),
         ...Object.keys(result.layers?.solid_subsets || {}),
+        ...Object.keys(result.layers?.mineral_subsets || {}),
         ...Object.keys(result.layers?.aqueous_subsets || {}),
+        ...Object.keys(result.display?.layers?.[solidKey] || {}),
         ...Object.keys(result.display?.layers?.solid_subsets || {}),
+        ...Object.keys(result.display?.layers?.mineral_subsets || {}),
         ...Object.keys(result.display?.layers?.aqueous_subsets || {}),
       ]);
       return {
@@ -1756,10 +1853,18 @@
     function populateDisplayModeOptions(result) {
       const sel = $("displayMode");
       const avail = displayLayerConfig(result);
+      const isAsm = result && (
+        result.diagram_kind === "assemblage"
+        || resultMatchesMode("mineral-stability", result)
+      );
+      const catMode = result?.mineral_category_mode || state.mineralCategoryMode || "moles";
+      const solidLabel = isAsm
+        ? (catMode === "costability" ? "Co-stability" : "Predominant mineral")
+        : "Solid predominance";
       const opts = [];
-      if (avail.solids) opts.push(["solid", "Solid predominance"]);
+      if (avail.solids) opts.push(["solid", solidLabel]);
       if (avail.aqueous) opts.push(["aqueous", "Aqueous predominance"]);
-      if (!opts.length) opts.push(["solid", "Solid predominance"]);
+      if (!opts.length) opts.push(["solid", solidLabel]);
       sel.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
       if (!opts.some(([v]) => v === state.displayMode)) {
         state.displayMode = opts[0][0];
@@ -1772,7 +1877,15 @@
       const cfg = displayLayerConfig(result);
       $("solidSubsetWrap").style.display = cfg.elements ? "inline-flex" : "none";
       const lbl = $("subsetLabel");
-      if (lbl) lbl.textContent = mode === "aqueous" ? "Aqueous elements:" : "Solid elements:";
+      if (lbl) {
+        const isAsm = result && (
+          result.diagram_kind === "assemblage"
+          || resultMatchesMode("mineral-stability", result)
+        );
+        if (mode === "aqueous") lbl.textContent = "Aqueous elements:";
+        else if (isAsm) lbl.textContent = "Mineral elements:";
+        else lbl.textContent = "Solid elements:";
+      }
       // Name/formula options only apply to mineral solids; aqueous labels are formulas.
       const phaseLbl = $("phaseLabelWrap");
       if (phaseLbl) phaseLbl.style.display = mode === "aqueous" ? "none" : "inline-flex";
@@ -1843,13 +1956,22 @@
           return { grid: layer.grid, names: layer.names, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
         }
       }
-      const solidSubsets = layers.solid_subsets || {};
+      const solidKey = solidFamilyKey(result);
+      const solidSubsets = layers[solidKey] || layers.mineral_subsets || layers.solid_subsets || {};
       const layer = solidSubsets[key] || solidSubsets[subsetKey(elems)];
       if (layer) {
-        const label = `Solids (${subsetLabelText(elems, result)}) + fluid species`;
+        const isAsm = solidKey === "mineral_subsets";
+        const label = isAsm
+          ? `Minerals (${subsetLabelText(elems, result)}) + fluid species`
+          : `Solids (${subsetLabelText(elems, result)}) + fluid species`;
         return { grid: layer.grid, names: layer.names, label, aqueous: layer.aqueous_names || [] };
       }
-      return { grid: src.grid || result.grid, names: src.phase_names || result.phase_names, label: "Predominance", aqueous: [] };
+      return {
+        grid: src.grid || result.grid,
+        names: src.phase_names || result.phase_names,
+        label: solidKey === "mineral_subsets" ? "Mineral stability" : "Predominance",
+        aqueous: [],
+      };
     }
 
     function activeVectorLayer(result) {
@@ -1857,7 +1979,8 @@
       const elems = result.system_elements || systemElements();
       const key = activeSubsetKey(elems, result);
       const aqSubsets = layers.aqueous_subsets || {};
-      const solidSubsets = layers.solid_subsets || {};
+      const solidKey = solidFamilyKey(result);
+      const solidSubsets = layers[solidKey] || layers.mineral_subsets || layers.solid_subsets || {};
       const aqLayer = aqSubsets[key] || aqSubsets[subsetKey(elems)];
       const solidLayer = solidSubsets[key] || solidSubsets[subsetKey(elems)];
       // Prefer the selected family, but fall back to whichever was computed so a
@@ -1866,7 +1989,10 @@
         return { ...aqLayer, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
       }
       if (solidLayer) {
-        const label = `Solids (${subsetLabelText(elems, result)}) + fluid species`;
+        const isAsm = solidKey === "mineral_subsets";
+        const label = isAsm
+          ? `Minerals (${subsetLabelText(elems, result)}) + fluid species`
+          : `Solids (${subsetLabelText(elems, result)}) + fluid species`;
         return { ...solidLayer, label, aqueous: solidLayer.aqueous_names || [] };
       }
       if (aqLayer) {
@@ -2053,7 +2179,8 @@
     }
     function loadLocal() {
       try {
-        const raw = localStorage.getItem(LS_KEY);
+        let raw = localStorage.getItem(LS_KEY);
+        if (!raw) raw = localStorage.getItem("phaseDiagramState.v7");
         if (raw) return JSON.parse(raw);
       } catch (e) {}
       return null;
@@ -2125,8 +2252,15 @@
       const defaultMode = runtime.cfg?.default_solution_mode || "dummy_titration";
       // Removed "direct" (fixed pH/pe) calculation mode — remap saved sessions.
       if (state.solutionMode === "direct") state.solutionMode = defaultMode;
+      state.solutionMode = normalizeUiSolutionMode(state.solutionMode);
       if (!modes.includes(state.solutionMode)) state.solutionMode = defaultMode;
       state.solutionMode ??= defaultMode;
+      const catModes = (runtime.cfg?.mineral_category_modes || []).map(m => m.id);
+      const defaultCat = runtime.cfg?.default_mineral_category_mode || "moles";
+      if (!catModes.includes(state.mineralCategoryMode)) {
+        state.mineralCategoryMode = defaultCat;
+      }
+      state.mineralCategoryMode ??= defaultCat;
       state.layerAqueous ??= true;
       state.layerElements ??= false;
     }
@@ -2289,6 +2423,83 @@
         document.addEventListener("click", e => {
           if (host.contains(e.target)) return;
           closeSolutionModeHelp();
+        });
+      }
+    }
+
+    function closeMineralCategoryHelp(exceptMode = null) {
+      const host = $("mineralCategoryOptions");
+      if (!host) return;
+      host.querySelectorAll(".mode-help-pop").forEach(pop => {
+        if (!exceptMode || pop.dataset.mode !== exceptMode) pop.hidden = true;
+      });
+      host.querySelectorAll(".help-tip[data-cat]").forEach(btn => {
+        if (!exceptMode || btn.dataset.cat !== exceptMode) {
+          btn.setAttribute("aria-expanded", "false");
+        }
+      });
+    }
+
+    function fillMineralCategoryOptions() {
+      const host = $("mineralCategoryOptions");
+      if (!host) return;
+      const modes = runtime.cfg?.mineral_category_modes || [
+        {
+          id: "moles",
+          label: "Predominant mineral",
+          description: "Argmax precipitated moles among eligible solids.",
+        },
+        {
+          id: "costability",
+          label: "Co-stability",
+          description: "All solids with precipitated moles > 0, joined.",
+        },
+      ];
+      host.innerHTML = modes.map(m => {
+        const tip = (m.description || m.label || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const label = (m.label || m.id).replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return `<div class="mode-option-row">
+          <div class="mode-option">
+            <label class="mode-option-main">
+              <input type="radio" name="mineralCategoryMode" value="${m.id}" />
+              <span class="mode-label">${label}</span>
+            </label>
+            <button type="button" class="help-tip" data-cat="${m.id}"
+                    aria-label="Help: ${label}" aria-expanded="false">?</button>
+          </div>
+          <div class="help-popover mode-help-pop" data-mode="${m.id}" hidden>${tip}</div>
+        </div>`;
+      }).join("");
+      const current = state.mineralCategoryMode
+        || runtime.cfg?.default_mineral_category_mode
+        || "moles";
+      host.querySelectorAll('input[name="mineralCategoryMode"]').forEach(r => {
+        r.checked = r.value === current;
+        r.addEventListener("change", () => {
+          if (!r.checked) return;
+          state.mineralCategoryMode = r.value;
+          commit();
+        });
+      });
+      host.querySelectorAll(".help-tip[data-cat]").forEach(btn => {
+        btn.addEventListener("click", e => {
+          e.preventDefault();
+          e.stopPropagation();
+          const cat = btn.dataset.cat;
+          const pop = host.querySelector(`.mode-help-pop[data-mode="${cat}"]`);
+          const opening = pop.hidden;
+          closeMineralCategoryHelp();
+          if (opening) {
+            pop.hidden = false;
+            btn.setAttribute("aria-expanded", "true");
+          }
+        });
+      });
+      if (!host.dataset.helpDismissWired) {
+        host.dataset.helpDismissWired = "1";
+        document.addEventListener("click", e => {
+          if (host.contains(e.target)) return;
+          closeMineralCategoryHelp();
         });
       }
     }
@@ -2866,9 +3077,19 @@
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
       $("showSystemLabel").checked = state.showSystemLabel !== false;
-      const mode = state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration";
+      const mode = normalizeUiSolutionMode(
+        state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration"
+      );
+      state.solutionMode = mode;
       document.querySelectorAll('input[name="solutionMode"]').forEach(r => {
         r.checked = r.value === mode;
+      });
+      const cat = state.mineralCategoryMode
+        || runtime.cfg?.default_mineral_category_mode
+        || "moles";
+      state.mineralCategoryMode = cat;
+      document.querySelectorAll('input[name="mineralCategoryMode"]').forEach(r => {
+        r.checked = r.value === cat;
       });
     }
 
@@ -2963,14 +3184,19 @@
       });
     }
 
-    async function putCachedResult(key, result) {
+    async function putCachedResult(key, result, modeId = null) {
       const db = await openResultDb();
       await new Promise((resolve, reject) => {
         const req = txStore(db, "readwrite").put({ key, result, createdAt: Date.now() });
         req.onsuccess = () => resolve();
         req.onerror = () => reject(req.error);
       });
-      try { sessionStorage.setItem(RESULT_SESSION_KEY, key); } catch (e) {}
+      try {
+        const mid = modeId
+          || runtime.activeJobModeId
+          || (resultMatchesMode("mineral-stability", result) ? "mineral-stability" : "phase-diagram");
+        sessionStorage.setItem(RESULT_SESSION_KEY, JSON.stringify({ key, modeId: mid }));
+      } catch (e) {}
       pruneResultCache().catch(() => {});
     }
 
@@ -3034,20 +3260,20 @@
 
     async function fetchAndRenderJobResult(jobId, cacheKey, st, modeId) {
       const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
-      const adaptive = jobModeId === "phase-diagram" && !!state.adaptiveBoundaries;
+      const adaptive = isDiagramMode(jobModeId) && !!state.adaptiveBoundaries;
       JobProgress.begin(adaptive);
       setLogoComputing(true);
       const result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
         JobProgress.setPhase("download", pct == null ? null : pct / 100);
       });
       JobProgress.setPhase("cache", 0.5);
-      try { await putCachedResult(cacheKey, result); } catch (cacheErr) {}
+      try { await putCachedResult(cacheKey, result, jobModeId); } catch (cacheErr) {}
       clearActiveJob();
       runtime.activeJobModeId = null;
       forgetServerJob(jobId);
       JobProgress.setPhase("render", 0.4);
       renderModeResult(jobModeId, result);
-      if (jobModeId === "phase-diagram") $("stalePill").style.display = "none";
+      if (jobModeId === activeModeId) $("stalePill").style.display = "none";
       JobProgress.finish();
       setLogoComputing(false);
       $("computeBtn").disabled = false;
@@ -3065,20 +3291,28 @@
       $("phaserBrand")?.classList.toggle("is-computing", !!on);
     }
 
-    async function computePhaseDiagram() {
+    async function computeDiagram(modeId) {
+      if (!isDiagramMode(modeId)) return;
       const totals = activeTotals();
       const sel = selectedPhases();
       if (!Object.keys(totals).length) { setStatus("Add at least one species with a concentration.", "err"); return; }
       if (!sel.length) { setStatus("Select at least one phase.", "err"); return; }
       if (!state.layerSolids && !state.layerAqueous) {
-        setStatus("Enable Solid and/or Aqueous predominance.", "err"); return;
+        setStatus(
+          modeId === "mineral-stability"
+            ? "Enable Mineral map and/or Aqueous predominance."
+            : "Enable Solid and/or Aqueous predominance.",
+          "err"
+        );
+        return;
       }
       // Pick a display mode that matches the layers about to be computed.
       if (!state.layerSolids && state.layerAqueous) state.displayMode = "aqueous";
       else if (state.layerSolids && !state.layerAqueous) state.displayMode = "solid";
 
       const t = state.tempC;
-      const modeId = "phase-diagram";
+      const uiSolution = normalizeUiSolutionMode(state.solutionMode || "dummy_titration");
+      state.solutionMode = uiSolution;
 
       const body = {
         db_id: state.dbId,
@@ -3096,8 +3330,11 @@
         layer_solids: !!state.layerSolids,
         layer_aqueous: !!state.layerAqueous,
         layer_elements: effectiveLayerElements(),
-        solution_mode: state.solutionMode || "dummy_titration",
+        solution_mode: mapSolutionModeForCompute(uiSolution, modeId),
       };
+      if (modeId === "mineral-stability") {
+        body.mineral_category_mode = state.mineralCategoryMode || "moles";
+      }
       if (state.adaptiveBoundaries) {
         // Include the factor so the cache key reflects it (changing the factor
         // recomputes instead of serving a stale diagram).
@@ -3117,6 +3354,12 @@
             setStatus("Cached", "ok");
             runtime.activeJobModeId = null;
             $("computeBtn").disabled = false;
+            try {
+              sessionStorage.setItem(
+                RESULT_SESSION_KEY,
+                JSON.stringify({ key: cacheKey, modeId })
+              );
+            } catch (e) {}
             return;
           }
         } catch (cacheErr) {
@@ -3146,6 +3389,10 @@
         runtime.activeJobModeId = null;
         $("computeBtn").disabled = false;
       }
+    }
+
+    async function computePhaseDiagram() {
+      return computeDiagram("phase-diagram");
     }
 
     function queueStatusText(st) {
@@ -3188,7 +3435,7 @@
       const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
       runtime.activeJobModeId = jobModeId;
       saveActiveJob(jobId, cacheKey, jobModeId);
-      const adaptive = jobModeId === "phase-diagram" && !!state.adaptiveBoundaries;
+      const adaptive = isDiagramMode(jobModeId) && !!state.adaptiveBoundaries;
       JobProgress.begin(adaptive);
       setLogoComputing(true, "Computing…");
       runtime.pollTimer = setInterval(async () => {
@@ -3541,10 +3788,25 @@
       };
     }
 
-    function hoverCellHtml(phase, speciesHtml) {
+    function hoverCellHtml(phase, speciesHtml, precipHtml = "") {
       const p = phase ? `<b>${phase}</b>` : "—";
-      if (!speciesHtml) return p;
-      return `${p}<br><span style="color:#cbd5e1;font-size:0.92em">${speciesHtml}</span>`;
+      if (!precipHtml && !speciesHtml) return p;
+      // Predominance: keep compact aqueous-only hover (no section headers).
+      if (!precipHtml) {
+        return `${p}<br><span style="color:#cbd5e1;font-size:0.92em">${speciesHtml}</span>`;
+      }
+      const parts = [p];
+      parts.push(
+        `<span style="color:#94a3b8;font-size:0.85em">Precipitated</span><br>`
+        + `<span style="color:#cbd5e1;font-size:0.92em">${precipHtml}</span>`
+      );
+      if (speciesHtml) {
+        parts.push(
+          `<span style="color:#94a3b8;font-size:0.85em">Aqueous</span><br>`
+          + `<span style="color:#cbd5e1;font-size:0.92em">${speciesHtml}</span>`
+        );
+      }
+      return parts.join("<br>");
     }
 
     function fmtHoverMol(m) {
@@ -3579,15 +3841,30 @@
       return top.map(([sp, m]) => `${formatChemHtml(sp)} (${fmtHoverMol(m)})`).join("<br>");
     }
 
+    function formatHoverPrecip(entries, n = 8) {
+      const pool = (entries || []).filter(e => Number.isFinite(e[1]) && e[1] > 0);
+      if (!pool.length) return "";
+      return pool.slice(0, n)
+        .map(([sp, m]) => `${formatChemHtml(sp)} (${fmtHoverMol(m)} mol)`)
+        .join("<br>");
+    }
+
     function buildHoverCustomData(hGrid, hNames, result) {
       const speciesGrid = result.hover_species;
+      const precipGrid = result.hover_precip;
+      const showPrecip = result.diagram_kind === "assemblage"
+        || !!precipGrid
+        || resultMatchesMode("mineral-stability", result);
       const filterElems = hoverElementsFilter(result);
       return hGrid.map((row, iy) => row.map((v, ix) => {
         const phase = v < 0 ? "—" : labelForPhase(hNames[v]);
         const sp = speciesGrid
           ? formatHoverSpecies(speciesGrid[iy]?.[ix], filterElems)
           : "";
-        return hoverCellHtml(phase, sp);
+        const precip = showPrecip && precipGrid
+          ? formatHoverPrecip(precipGrid[iy]?.[ix])
+          : "";
+        return hoverCellHtml(phase, sp, precip);
       }));
     }
 
@@ -3605,6 +3882,10 @@
     const INVISIBLE_COLORSCALE = [[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]];
 
     function drawDiagram(result) {
+      if (!result) return;
+      if (isDiagramMode(activeModeId) && !resultMatchesMode(activeModeId, result)) {
+        return;
+      }
       runtime.lastResult = result;
       $("plotEmpty").style.display = "none";
       syncDisplayFromPlot();
@@ -3697,12 +3978,28 @@
 
     async function restoreSessionResult() {
       try {
-        const key = sessionStorage.getItem(RESULT_SESSION_KEY);
-        if (!key) return;
+        const raw = sessionStorage.getItem(RESULT_SESSION_KEY);
+        if (!raw) return;
+        let key = raw;
+        let modeId = "phase-diagram";
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object" && parsed.key) {
+            key = parsed.key;
+            modeId = isDiagramMode(parsed.modeId) ? parsed.modeId : "phase-diagram";
+          }
+        } catch (e) {
+          /* Legacy: raw string cache key */
+        }
         const result = await getCachedResult(key);
         if (!result) return;
-        renderModeResult("phase-diagram", result);
-        $("stalePill").style.display = "none";
+        if (!resultMatchesMode(modeId, result)) {
+          modeId = resultMatchesMode("mineral-stability", result)
+            ? "mineral-stability"
+            : "phase-diagram";
+        }
+        renderModeResult(modeId, result);
+        if (activeModeId === modeId) $("stalePill").style.display = "none";
         setStatus("Restored last diagram from this browser session.", "ok");
       } catch (e) {
         /* IndexedDB unavailable or cache miss — ignore */
@@ -3744,6 +4041,8 @@
       fillSpeciesOptions();
       fillUnitOptions();
       fillSolutionModeOptions();
+      fillMineralCategoryOptions();
+      syncMineralPlotOptionLabels();
       renderSpecies();
       syncAxisUI();
       renderGridMeta();

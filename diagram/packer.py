@@ -93,6 +93,50 @@ def pack_hover_species_grid(
     return grid
 
 
+def precip_hover_entries(
+    row: dict,
+    *,
+    collision_names: frozenset[str] = frozenset(),
+    eps: float = 1e-16,
+) -> list[list]:
+    """Non-zero precipitated solids as ``[label, moles]`` for hover (moles desc)."""
+    raw = row.get("phase_moles") or {}
+    if not raw or not row.get("converged"):
+        return []
+    out: list[list] = []
+    for name, moles in raw.items():
+        if moles != moles:
+            continue
+        m = float(moles)
+        if m <= eps:
+            continue
+        if is_gas(str(name)):
+            continue
+        out.append([solid_label(str(name), collision_names), m])
+    out.sort(key=lambda e: e[1], reverse=True)
+    return out
+
+
+def pack_hover_precip_grid(
+    rows: list[dict],
+    *,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+    collision_names: frozenset[str] = frozenset(),
+) -> list[list[list]]:
+    """Per-cell list of precipitated solids with moles > 0 (assemblage hover)."""
+    grid: list[list[list]] = [[[] for _ in range(ph_levels)] for _ in range(pe_levels)]
+    for row in rows:
+        ix = ph_lookup.get(round(float(row["ph"]), 12))
+        iy = pe_lookup.get(round(float(row["pe"]), 12))
+        if ix is None or iy is None:
+            continue
+        grid[iy][ix] = precip_hover_entries(row, collision_names=collision_names)
+    return grid
+
+
 def solid_label(phase: str, collision_names: frozenset[str]) -> str:
     """Display label for a precipitated solid.
 
@@ -116,9 +160,12 @@ def label_is_solid(
     """Whether a category label denotes a precipitated solid (not an aqueous complex).
 
     Structural, not a heuristic: a solid is either ``<phase>(s)`` (a colliding
-    name) or a bare phase name that is not a collision. A bare colliding name
-    therefore always means the aqueous species.
+    name), a co-stability / moles-tie ``"A + B"`` join, or a bare phase name
+    that is not a collision. A bare colliding name therefore always means the
+    aqueous species.
     """
+    if " + " in label:
+        return True
     if label.endswith(SOLID_SUFFIX) and label[: -len(SOLID_SUFFIX)] in solid_set:
         return True
     return label in solid_set and label not in collision_names
@@ -664,6 +711,14 @@ def pack_mineral_grid_results(
             pe_lookup=pe_lookup,
             pe_levels=params.pe_levels,
             ph_levels=params.ph_levels,
+        ),
+        "hover_precip": pack_hover_precip_grid(
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
+            pe_levels=params.pe_levels,
+            ph_levels=params.ph_levels,
+            collision_names=collisions,
         ),
         "n_converged": sum(1 for r in rows if r.get("converged")),
         "n_total": len(rows),

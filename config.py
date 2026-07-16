@@ -209,33 +209,60 @@ SOLUTION_MODE_META: dict[str, dict[str, str]] = {
         ),
     },
     "assemblage_dummy_titration": {
-        "label": "Mineral stability (dummy titration)",
+        "label": "Dummy-electrolyte titration",
         "description": (
-            "Same dummy-electrolyte pH/O₂ pins as dummy_titration, plus selected solids "
-            "in EQUILIBRIUM_PHASES (target SI = 0, initial moles = 0) so precipitation "
-            "and aqueous speciation are retrieved together."
+            "Same dummy-electrolyte pH/O₂ pins as predominance dummy titration, plus "
+            "selected solids in EQUILIBRIUM_PHASES (target SI = 0, initial moles = 0) "
+            "so precipitation and aqueous speciation are retrieved together."
         ),
     },
     "assemblage_titration": {
-        "label": "Mineral stability (real electrolyte titration)",
+        "label": "Real electrolyte titration",
         "description": (
-            "Same Cl⁻/NaOH titration frame as titration, plus selected solids "
-            "in EQUILIBRIUM_PHASES (target SI = 0, initial moles = 0)."
+            "Same Cl⁻/NaOH titration frame as predominance real electrolyte titration, "
+            "plus selected solids in EQUILIBRIUM_PHASES (target SI = 0, initial moles = 0)."
         ),
     },
 }
 SOLUTION_MODES: tuple[str, ...] = tuple(SOLUTION_MODE_META.keys())
+PREDOMINANCE_SOLUTION_MODES: tuple[str, ...] = ("dummy_titration", "titration")
 ASSEMBLAGE_SOLUTION_MODES: frozenset[str] = frozenset(
     {
         "assemblage_dummy_titration",
         "assemblage_titration",
     }
 )
+ASSEMBLAGE_SOLUTION_MODE_ORDER: tuple[str, ...] = (
+    "assemblage_dummy_titration",
+    "assemblage_titration",
+)
 
 
 def is_assemblage_mode(mode: str) -> bool:
     """True for mineral-stability EQUILIBRIUM_PHASES precipitation modes."""
     return mode in ASSEMBLAGE_SOLUTION_MODES
+
+
+MINERAL_CATEGORY_MODES: tuple[str, ...] = ("moles", "costability")
+MINERAL_CATEGORY_MODE_DEFAULT = "moles"
+MINERAL_CATEGORY_MODE_META: dict[str, dict[str, str]] = {
+    "moles": {
+        "label": "Predominant mineral",
+        "description": (
+            "Fill each cell with the solid that has the largest precipitated amount "
+            "(moles) among eligible phases. Near-equal moles may join as \"A + B\". "
+            "When nothing precipitates, the dominant aqueous species is shown."
+        ),
+    },
+    "costability": {
+        "label": "Co-stability",
+        "description": (
+            "Fill each cell with every solid that has precipitated (moles > 0), joined "
+            "as \"A + B + …\". This is the post-precipitation co-stable set held near "
+            "SI ≈ 0 by EQUILIBRIUM_PHASES — not free supersaturation."
+        ),
+    },
+}
 
 MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200

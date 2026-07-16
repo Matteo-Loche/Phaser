@@ -43,6 +43,7 @@ class ComputeRequest(BaseModel):
     layer_aqueous: bool = True
     layer_elements: bool = False
     solution_mode: str = config.SOLUTION_MODE_DEFAULT
+    mineral_category_mode: str = config.MINERAL_CATEGORY_MODE_DEFAULT
 
     @field_validator("solution_mode")
     @classmethod
@@ -51,6 +52,17 @@ class ComputeRequest(BaseModel):
         if mode not in config.SOLUTION_MODES:
             allowed = ", ".join(config.SOLUTION_MODES)
             raise ValueError(f"Unsupported solution_mode: {value!r}. Use one of: {allowed}.")
+        return mode
+
+    @field_validator("mineral_category_mode")
+    @classmethod
+    def _validate_mineral_category_mode(cls, value: str) -> str:
+        mode = (value or "").strip().lower()
+        if mode not in config.MINERAL_CATEGORY_MODES:
+            allowed = ", ".join(config.MINERAL_CATEGORY_MODES)
+            raise ValueError(
+                f"Unsupported mineral_category_mode: {value!r}. Use one of: {allowed}."
+            )
         return mode
 
     @field_validator("units")
@@ -68,7 +80,7 @@ class ComputeRequest(BaseModel):
     def _at_least_one_layer(self) -> ComputeRequest:
         if not (self.layer_solids or self.layer_aqueous):
             raise ValueError(
-                "Enable at least one predominance family "
+                "Enable at least one layer family "
                 "(layer_solids or layer_aqueous)."
             )
         return self

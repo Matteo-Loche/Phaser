@@ -13,11 +13,17 @@ from .. import config
 from ..api.dependencies import resolve_db_record
 from ..api.models import ComputeRequest
 from ..chemistry.units import is_valid_unit, normalize_unit, totals_to_mmol_kgw
-from ..diagram.packer import count_layer_pack_steps, effective_layer_elements, pack_grid_results
+from ..diagram.packer import (
+    count_layer_pack_steps,
+    effective_layer_elements,
+    pack_grid_results,
+    pack_mineral_grid_results,
+)
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
-from ..diagram.vectors import pack_traced_display
+from ..diagram.vectors import pack_traced_display, pack_traced_mineral_display
 from ..phreeqc.engine import GridJobParams, validate_phreeqc_setup
 from ..phreeqc.adaptive import run_adaptive_boundary_sweep
+from ..phreeqc.mineral_stability_trace import run_adaptive_mineral_stability_sweep
 from ..phreeqc.sweep import run_grid_sweep
 from .job_control import (
     JobAborted,
@@ -433,16 +439,31 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
                     _jobs[job_id]["progress"] = done / total if total else 0.0
                     _jobs[job_id]["phase"] = phase
 
+        assemblage = config.is_assemblage_mode(body.solution_mode)
+        category_mode = body.mineral_category_mode
+
         if body.adaptive_boundaries:
-            pack_params, adapt_stats, base_results, trace_bundle = (
-                run_adaptive_boundary_sweep(
-                    params,
-                    max_workers=config.MAX_WORKERS,
-                    progress_cb=progress,
-                    refine_factor=body.adaptive_refine_factor,
-                    job_id=job_id,
+            if assemblage:
+                pack_params, adapt_stats, base_results, trace_bundle = (
+                    run_adaptive_mineral_stability_sweep(
+                        params,
+                        max_workers=config.MAX_WORKERS,
+                        progress_cb=progress,
+                        refine_factor=body.adaptive_refine_factor,
+                        job_id=job_id,
+                        category_mode=category_mode,
+                    )
                 )
-            )
+            else:
+                pack_params, adapt_stats, base_results, trace_bundle = (
+                    run_adaptive_boundary_sweep(
+                        params,
+                        max_workers=config.MAX_WORKERS,
+                        progress_cb=progress,
+                        refine_factor=body.adaptive_refine_factor,
+                        job_id=job_id,
+                    )
+                )
             compute_mode = "adaptive"
         else:
             results, mask_stats = run_grid_sweep(
@@ -473,20 +494,39 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
 
         pack_done = 0
         progress(0, pack_total, "packing")
-        packed = pack_grid_results(
-            pack_params, rows, db_path=db, progress_cb=pack_tick
-        )
+        if assemblage:
+            packed = pack_mineral_grid_results(
+                pack_params,
+                rows,
+                category_mode=category_mode,
+                db_path=db,
+                progress_cb=pack_tick,
+            )
+        else:
+            packed = pack_grid_results(
+                pack_params, rows, db_path=db, progress_cb=pack_tick
+            )
         packed["compute_mode"] = compute_mode
         if adapt_stats:
             packed["adaptive_stats"] = adapt_stats
         if trace_bundle:
-            packed["display"] = pack_traced_display(
-                pack_params,
-                rows,
-                trace_bundle,
-                db_path=db,
-                progress_cb=pack_tick,
-            )
+            if assemblage:
+                packed["display"] = pack_traced_mineral_display(
+                    pack_params,
+                    rows,
+                    trace_bundle,
+                    category_mode=category_mode,
+                    db_path=db,
+                    progress_cb=pack_tick,
+                )
+            else:
+                packed["display"] = pack_traced_display(
+                    pack_params,
+                    rows,
+                    trace_bundle,
+                    db_path=db,
+                    progress_cb=pack_tick,
+                )
         progress(pack_total, pack_total, "packing")
 
         with _jobs_lock:
@@ -523,6 +563,9 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
                 n_phreeqc_runs=n_phreeqc_runs,
                 queue_position_at_start=queue_position_at_start,
                 queue_wait_ms=queue_wait_ms,
+                mode_id=(
+                    "mineral-stability" if assemblage else "phase-diagram"
+                ),
             )
     except JobAborted as exc:
         limit = int(config.JOB_WALL_TIMEOUT_SEC) if exc.error_code == "timed_out" else None

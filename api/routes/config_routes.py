@@ -68,7 +68,16 @@ def get_config():
         "default_solution_mode": config.SOLUTION_MODE_DEFAULT,
         "solution_modes": [
             {"id": mode_id, **config.SOLUTION_MODE_META[mode_id]}
-            for mode_id in config.SOLUTION_MODES
+            for mode_id in config.PREDOMINANCE_SOLUTION_MODES
+        ],
+        "assemblage_solution_modes": [
+            {"id": mode_id, **config.SOLUTION_MODE_META[mode_id]}
+            for mode_id in config.ASSEMBLAGE_SOLUTION_MODE_ORDER
+        ],
+        "default_mineral_category_mode": config.MINERAL_CATEGORY_MODE_DEFAULT,
+        "mineral_category_modes": [
+            {"id": mode_id, **config.MINERAL_CATEGORY_MODE_META[mode_id]}
+            for mode_id in config.MINERAL_CATEGORY_MODES
         ],
         "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
         "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,

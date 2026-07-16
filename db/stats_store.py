@@ -151,7 +151,7 @@ def _top_chemical_systems(conn: sqlite3.Connection, limit: int = 12) -> list[dic
         """
         SELECT system_elements, COUNT(*) AS count
         FROM compute_events
-        WHERE mode_id = 'phase-diagram'
+        WHERE mode_id IN ('phase-diagram', 'mineral-stability')
         GROUP BY system_elements
         ORDER BY count DESC, system_elements ASC
         LIMIT ?
@@ -214,7 +214,7 @@ def _activity_last_24h(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT finished_at, queue_wait_ms FROM compute_events
-        WHERE mode_id = 'phase-diagram' AND finished_at >= ?
+        WHERE mode_id IN ('phase-diagram', 'mineral-stability') AND finished_at >= ?
         """,
         (window_start.isoformat(),),
     ).fetchall()
@@ -267,7 +267,7 @@ def get_summary() -> dict[str, Any]:
                     SUM(CASE WHEN adaptive = 1 THEN 1 ELSE 0 END) AS adaptive_count,
                     SUM(CASE WHEN adaptive = 0 THEN 1 ELSE 0 END) AS uniform_count
                 FROM compute_events
-                WHERE mode_id = 'phase-diagram'
+                WHERE mode_id IN ('phase-diagram', 'mineral-stability')
                 """
             ).fetchone()
 
@@ -293,7 +293,7 @@ def get_summary() -> dict[str, Any]:
                 """
                 SELECT db_id, COUNT(*) AS count
                 FROM compute_events
-                WHERE mode_id = 'phase-diagram' AND db_id IS NOT NULL AND db_id != ''
+                WHERE mode_id IN ('phase-diagram', 'mineral-stability') AND db_id IS NOT NULL AND db_id != ''
                 GROUP BY db_id
                 ORDER BY count DESC, db_id ASC
                 LIMIT ?
@@ -304,7 +304,7 @@ def get_summary() -> dict[str, Any]:
                 """
                 SELECT grid_levels, COUNT(*) AS count
                 FROM compute_events
-                WHERE mode_id = 'phase-diagram'
+                WHERE mode_id IN ('phase-diagram', 'mineral-stability')
                 GROUP BY grid_levels
                 ORDER BY count DESC, grid_levels DESC
                 LIMIT ?
@@ -315,7 +315,7 @@ def get_summary() -> dict[str, Any]:
                 """
                 SELECT layer_solids, layer_aqueous, layer_elements, COUNT(*) AS count
                 FROM compute_events
-                WHERE mode_id = 'phase-diagram'
+                WHERE mode_id IN ('phase-diagram', 'mineral-stability')
                 GROUP BY layer_solids, layer_aqueous, layer_elements
                 ORDER BY count DESC
                 LIMIT ?

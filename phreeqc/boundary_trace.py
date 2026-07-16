@@ -341,8 +341,9 @@ def _resolve_pair_scalar(
     converged<->failed edge bounding ``none`` regions (the stability limit,
     reused so fills stay smooth).
 
-    Solid vs aqueous is decided structurally from the label (the ``(s)`` suffix
-    on names shared with an aqueous complex), so names like ``FeO`` never need a
+    Solid vs aqueous is decided structurally from the label via
+    ``label_is_solid`` (``(s)`` suffix, bare non-collision solid, or
+    co-stability ``"A + B"`` joins), so names like ``FeO`` never need a
     saturation-index guess.
     """
     if cat_a == "none" or cat_b == "none":
@@ -449,9 +450,9 @@ def _find_crossing_brentq(
     try:
         t_cross = float(brentq(f, 0.0, 1.0, xtol=tol, rtol=tol))
         if stats:
-            if kind in ("mol", "mol_zero", "mol_set"):
+            if kind in ("mol", "mol_set"):
                 stats.n_brentq_mol += 1
-            elif kind in ("si", "aq_solid", "si_set"):
+            elif kind in ("si", "aq_solid"):
                 stats.n_brentq_si += 1
             elif kind == "aq":
                 stats.n_brentq_aq += 1
@@ -1526,7 +1527,11 @@ _WORKER_TRACE_MODE: str = "predominance"
 
 
 def _normalize_trace_mode(trace_mode: str) -> str:
-    """Map legacy mineral aliases; leave predominance unchanged."""
+    """Map legacy mineral aliases; leave predominance unchanged.
+
+    ``mineral_si`` is a historical alias for ``mineral_costability`` (post-precip
+    moles joins under EQUI) — not free-SI co-stability.
+    """
     mode = str(trace_mode or "predominance")
     if mode in ("mineral", "mineral_moles"):
         return "mineral_moles"

@@ -4,7 +4,8 @@ Reuses the generic geometry / ProcessPool / brentq machinery in
 ``boundary_trace.py`` via:
 
   - ``trace_mode="mineral_moles"`` (alias ``"mineral"``)
-  - ``trace_mode="mineral_costability"`` (alias ``"mineral_si"``)
+  - ``trace_mode="mineral_costability"`` (alias ``"mineral_si"`` —
+    historical name; costability is post-precip moles, not free SI)
 
 Both modes require assemblage EQUILIBRIUM_PHASES grids. Legacy SI
 predominance tracing (``trace_mode="predominance"``) stays untouched.
@@ -46,21 +47,6 @@ _TRACE_MODE_BY_CATEGORY = {
     "moles": "mineral_moles",
     "costability": "mineral_costability",
 }
-
-
-def mineral_resolve_pair(
-    cat_a: str,
-    cat_b: str,
-    solid_phases: frozenset[str] = frozenset(),
-    collisions: frozenset[str] = frozenset(),
-) -> tuple[Callable[[dict], float | None] | None, str]:
-    """Default moles-mode pair-root adapter (legacy name)."""
-    return resolve_mineral_moles_pair_scalar(
-        cat_a,
-        cat_b,
-        solid_phases=solid_phases,
-        collisions=collisions,
-    )
 
 
 def mineral_resolve_pair_for_mode(

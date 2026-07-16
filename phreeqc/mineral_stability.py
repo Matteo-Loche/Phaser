@@ -304,16 +304,6 @@ def solid_phase_set(
     return frozenset()
 
 
-def _label_is_mineral_solid(
-    cat: str,
-    solid_phases: frozenset[str],
-    collisions: frozenset[str],
-) -> bool:
-    if " + " in cat:
-        return True
-    return label_is_solid(cat, solid_phases, collisions)
-
-
 def mol_pair_scalar(row: Mapping[str, Any], cat_a: str, cat_b: str) -> float | None:
     """``sum(moles in A) - sum(moles in B)`` for solid–solid moles roots."""
     moles = _phase_moles_map(row)
@@ -364,19 +354,24 @@ def mol_set_edge_scalar(
     row: Mapping[str, Any],
     set_a: frozenset[str],
     set_b: frozenset[str],
+    *,
+    mol_eps: float = DEFAULT_PRECIP_EPS,
 ) -> float | None:
     """Zero when the precipitated phase *set* switches (post-EQUI costability).
 
-    - One phase in the symmetric difference → moles of that phase
+    - One phase in the symmetric difference → ``moles(phase) - mol_eps``
+      (centered on presence threshold so brentq brackets nested solid↔join)
     - Disjoint exclusive singles → ``moles(A) - moles(B)``
-    - Otherwise → signed sum of moles over ``only_a`` minus ``only_b``
+    - Otherwise → signed sum of moles over ``only_a`` minus ``only_b``;
+      when exactly one symdiff side is non-empty, subtract ``mol_eps`` with
+      that side's sign
     """
     moles = _phase_moles_map(row)
     only_a = set_a - set_b
     only_b = set_b - set_a
     if len(only_a) + len(only_b) == 1:
         phase = next(iter(only_a or only_b))
-        return float(moles.get(phase, 0.0))
+        return float(moles.get(phase, 0.0)) - mol_eps
     if len(only_a) == 1 and len(only_b) == 1 and not (set_a & set_b):
         pa = next(iter(only_a))
         pb = next(iter(only_b))
@@ -388,6 +383,11 @@ def mol_set_edge_scalar(
         total += float(moles.get(p, 0.0))
     for p in only_b:
         total -= float(moles.get(p, 0.0))
+    # Center enter/leave of a multi-phase side on the presence threshold.
+    if only_a and not only_b:
+        total -= mol_eps
+    elif only_b and not only_a:
+        total += mol_eps
     return total
 
 
@@ -404,7 +404,7 @@ def solid_fluid_si_scalar(
     ``brentq`` never brackets. Gate with precipitated moles of the named solid(s):
 
     - moles > eps → treat as the solid side (return ``max(SI, +ε)``)
-    - moles ≤ eps → free SI (negative when undersaturated)
+    - moles ≤ eps → ungated SI (negative when undersaturated)
     """
     phases = phases_in_label(solid_cat)
     if not phases:
@@ -442,8 +442,8 @@ def resolve_mineral_moles_pair_scalar(
     if cat_a == "none" or cat_b == "none":
         return (lambda row: 1.0 if row.get("converged") else -1.0), "conv"
 
-    a_solid = _label_is_mineral_solid(cat_a, solid_phases, collisions)
-    b_solid = _label_is_mineral_solid(cat_b, solid_phases, collisions)
+    a_solid = label_is_solid(cat_a, solid_phases, collisions)
+    b_solid = label_is_solid(cat_b, solid_phases, collisions)
 
     if a_solid and b_solid:
         return (lambda row: mol_pair_scalar(row, cat_a, cat_b)), "mol"
@@ -518,38 +518,3 @@ def resolve_mineral_pair_scalar(
         solid_phases=solid_phases,
         collisions=collisions,
     )
-
-
-def filter_assemblage_phases(phreeqc, phases: Sequence[str]) -> tuple[str, ...]:
-    """Keep solids that PHREEQC accepts in ``EQUILIBRIUM_PHASES``.
-
-    Catalog display names sometimes differ from database PHASES keys; SI
-    predominance can tolerate missing ``-si`` columns, but assemblage input
-    fails hard if a phase is unknown. Probe each candidate once.
-    """
-    from .engine import _quote_phreeqc_name
-
-    ok: list[str] = []
-    for name in phases:
-        if is_gas(name):
-            continue
-        quoted = _quote_phreeqc_name(name)
-        inp = (
-            "SOLUTION 1\n    pH 7\n    pe 4\n    temp 25\nEND\n"
-            "USE solution 1\n"
-            "EQUILIBRIUM_PHASES 1\n"
-            f"    {quoted} 0 0\n"
-            "END\n"
-            "SELECTED_OUTPUT\n    -reset false\n    -pH true\nEND\n"
-        )
-        try:
-            phreeqc.run_string(inp)
-            selected = phreeqc.get_selected_output_array()
-            if selected and len(selected) >= 2:
-                ok.append(name)
-        except Exception:
-            try:
-                phreeqc.get_error_string()
-            except Exception:
-                pass
-    return tuple(ok)
