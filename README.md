@@ -102,16 +102,20 @@ PHASER/
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
 │   ├── knobs.py           # Numerical KNOBS retry ladder (convergence rescue)
 │   ├── input_titration.py # Real electrolyte (Cl⁻/NaOH) pH + O₂(g) titration input
-│   ├── input_dummy_titration.py # Dummy-electrolyte titration (predominance)
+│   ├── input_dummy_titration.py # Dummy-electrolyte titration (SI predominance)
+│   ├── input_assemblage_dummy.py # Dummy titration + EQUI solids (mineral stability)
+│   ├── input_assemblage_titration.py # Real electrolyte + EQUI solids (mineral stability)
+│   ├── mineral_stability.py # Precipitated-mole categories + root scalars (moles / costability)
+│   ├── mineral_stability_trace.py # Adaptive trace orchestration for mineral modes
 │   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
 │   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
 │   ├── sweep.py           # Multiprocessing grid sweep (killable ProcessPool)
-│   ├── adaptive.py        # Adaptive boundary orchestration
-│   └── boundary_trace.py  # Root-finding tracer (brentq, triple/band/saddle regions, fallback)
+│   ├── adaptive.py        # Adaptive boundary orchestration (SI predominance)
+│   └── boundary_trace.py  # Root-finding tracer (brentq; predominance + mineral plugins)
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
-│   ├── packer.py          # Pack grid results; solid/aqueous name collision labels
-│   └── vectors.py         # Vector fills + same-category MultiPolygon batching
+│   ├── packer.py          # Pack grid results; SI + mineral-stability category grids
+│   └── vectors.py         # Vector fills (predominance + mineral-stability traced display)
 ├── services/              # Orchestration logic
 │   ├── catalog.py         # Startup / background catalog scans (text parse + SI probe)
 │   ├── compute.py         # FIFO compute queue, reaper, wall-clock timeout
@@ -210,8 +214,8 @@ flowchart TB
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
 | **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py`), species helpers, and usage-statistics recording. No PHREEQC math here. |
 | **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`); persist per-server compute events (`stats_store.py`). |
-| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing; register live ProcessPools for hard-kill on timeout. |
-| **diagram** | Turn per-point SI / species data into 2D predominance grids and display layers (vector fills batched per category). |
+| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing (SI predominance and mineral-stability plugins); register live ProcessPools for hard-kill on timeout. |
+| **diagram** | Turn per-point SI / precipitated-mole / species data into 2D category grids and traced display layers (vector fills batched per category). |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
 
 ---
@@ -353,11 +357,20 @@ See [API rate limiting](#api-rate-limiting) for how buckets, cooldowns, and clie
 
 ### Single-point evaluation (`engine.py`)
 
-Each grid point `(pH, pe)` is evaluated through **`format_grid_input`**, which dispatches on **`solution_mode`** (`dummy_titration` default; `titration` alternative). The sweep coordinate is always **`pe`**; `Eh` and `log fO₂` are derived from `(pH, pe, T)` for plotting (see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
+Each grid point `(pH, pe)` is evaluated through **`format_grid_input`**, which dispatches on **`solution_mode`**:
+
+| `solution_mode` | Role |
+|-----------------|------|
+| `dummy_titration` (default) | SI predominance — dummy electrolyte, no solid assemblage |
+| `titration` | SI predominance — Cl⁻/NaOH electrolyte, no solid assemblage |
+| `assemblage_dummy_titration` | Mineral stability — dummy electrolyte + selected solids in `EQUILIBRIUM_PHASES` |
+| `assemblage_titration` | Mineral stability — Cl⁻/NaOH + selected solids in `EQUILIBRIUM_PHASES` |
+
+The sweep coordinate is always **`pe`**; `Eh` and `log fO₂` are derived from `(pH, pe, T)` for plotting (see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
 
 #### Titration-style modes (dummy + real electrolyte titration)
 
-**Dummy-electrolyte titration** and **real electrolyte titration** share the same two-step frame: an acidic seed (`pH 1.8`, `pe 4.0`) plus `EQUILIBRIUM_PHASES` that pins the grid point. They differ only in the supporting electrolyte and pH titrant (`Bgc/Bga` + `BgcOH` vs `Cl⁻` + `NaOH`).
+**Dummy-electrolyte titration** and **real electrolyte titration** share the same two-step frame: an acidic seed (`pH 1.8`, `pe 4.0`) plus `EQUILIBRIUM_PHASES` that pins the grid point. They differ only in the supporting electrolyte and pH titrant (`Bgc/Bga` + `BgcOH` vs `Cl⁻` + `NaOH`). Assemblage variants reuse that frame and add selected solids (see [Mineral stability](#mineral-stability-assemblage-modes)).
 
 **Redox control (both modes).** **`O2(g)`** is fixed at target `log10(fO₂)` (`-force_equality true`):
 
@@ -375,9 +388,9 @@ Charge-balanced predominance mode using a **fictitious inert medium** (`Bgc+` / 
 
 1. **`SOLUTION`** — acidic seed, user totals, and dummy-medium charge balance (`Bgc` or `Bga` with `charge`; minimal convention at `background_molality = 0`).
 2. **`EQUILIBRIUM_PHASES`** — `Fix_H+` titrated with **`BgcOH`** at `−pH`, and **`O2(g)`** at the target `log10(fO₂)` (see above).
-3. **No solids** in the assemblage — saturation indices come from selected phases only (predominance diagram, not mineral-stability).
+3. **No solids** in the assemblage — saturation indices come from selected phases only (SI predominance diagram).
 
-On convergence failure, a **flip-retry** swaps the charge-carrier side (required when hydrolysis inverts the formal charge guess, e.g. Fe(III) at high pH). Dummy elements (`Bgc`, `Bga`, `BgcOH`) are excluded from `system_elements` and dominance layers. O₂/H₂ overlays apply. Mineral-stability **assemblage** mode (solids allowed to precipitate) is deferred to a later phase.
+On convergence failure, a **flip-retry** swaps the charge-carrier side (required when hydrolysis inverts the formal charge guess, e.g. Fe(III) at high pH). Dummy elements (`Bgc`, `Bga`, `BgcOH`) are excluded from `system_elements` and dominance layers. O₂/H₂ overlays apply.
 
 #### Real electrolyte titration (`input_titration.py`)
 
@@ -395,20 +408,62 @@ Electroneutral equilibration with **`Cl … charge`** on the acidic seed and **`
 
 #### Shared
 
-- **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point, and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain, `knobs_level`, optional `synthetic_label`).
+- **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point, and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain, `knobs_level`, optional `synthetic_label`). Assemblage modes additionally fill **`phase_moles`** (precipitated moles per selected solid) and **`dominant_precip`** (argmax moles among solids).
 - **`validate_phreeqc_setup`** — loads library and database once before worker spawn (fail-fast with clear errors).
+
+#### Mineral stability (assemblage modes)
+
+Mineral-stability jobs use **`assemblage_dummy_titration`** / **`assemblage_titration`** (`phreeqc/input_assemblage_dummy.py`, `input_assemblage_titration.py`). They keep the same pH / O₂(g) pins as the SI-predominance titration frames, and add every selected solid to **`EQUILIBRIUM_PHASES`** with target SI = 0 and initial moles = 0 so PHREEQC may precipitate them.
+
+**Isolation from SI predominance.** Assemblage and predominance share `evaluate_point` / `sweep.py`, but:
+
+- Predominance inputs never list solids in the assemblage; `phase_moles` stays empty.
+- Assemblage `USER_PUNCH` filters `SYS` contributors to `ty$ = "aq"` so precipitated solids do not leak into aqueous rankings. Predominance keeps the original short SYS-by-rank punch (no `ty$` filter).
+- Category helpers in `phreeqc/mineral_stability.py` are used only on assemblage paths; SI predominance still uses max-SI packing (`category_solid_subset`).
+
+**Category modes** (`MineralCategoryMode` in `mineral_stability.py`):
+
+| Mode | Fill rule | Typical use |
+|------|-----------|-------------|
+| `moles` | Argmax precipitated moles in the element subset (near-equal moles → rare `"A + B"` join) | Mineral predominance after precipitation |
+| `costability` | Join **all** solids with moles > ε (sorted `"A + B + …"`) | Post-precip co-stability (phases held at SI ≈ 0 by EQUI) |
+
+When no solid has precipitated above ε, both modes fall back to the dominant aqueous species in the subset (same idea as SI predominance falling back when all SI < 0).
+
+**Adaptive tracing** (`mineral_stability_trace.py` + `boundary_trace.py` plugins):
+
+| Trace mode | Alias | Category mode |
+|------------|-------|---------------|
+| `mineral_moles` | `mineral` | `moles` |
+| `mineral_costability` | `mineral_si` | `costability` |
+
+Layer ids are `mineral:<subset>` and `aqueous:<subset>`. Root scalars differ from SI predominance:
+
+- solid↔solid (`moles`): precipitated-mole difference (`mol`)
+- solid-set edges (`costability`): moles of the phase entering/leaving the set (`mol` / `mol_set`)
+- solid↔fluid: moles-gated SI = 0 (`aq_solid`) — under EQUI, precipitated solids stay near SI = 0 across their field, so raw SI alone often fails to bracket
+- aqueous↔aqueous / convergence: unchanged (`aq` / `conv`)
+
+Entry point: `run_adaptive_mineral_stability_sweep(..., category_mode=...)`. O₂/H₂ water-band masking and gas overlays apply the same way as for SI predominance.
+
+**Packing / vector helpers** (not yet wired through `services/compute.py`):
+
+- `diagram.packer.pack_mineral_grid_results` — hover grids with `layers.mineral_subsets`, `diagram_kind="assemblage"`, `mineral_category_mode`
+- `diagram.vectors.pack_traced_mineral_display` — traced fills/boundaries from `mineral:*` trace layers
+
+SI predominance continues to use `pack_grid_results` / `pack_traced_display` (`layers.solid_subsets`, `diagram_kind="predominance"`).
 
 #### KNOBS retry ladder (`knobs.py`, server defaults)
 
 Hard grid points are retried with escalating **KNOBS** numerical settings before the point is marked failed. This is always on by default (`KNOBS_MODE_DEFAULT = ladder`); operators change it via `PHASER_KNOBS_MODE=off` or `config.py` — there is **no** compute API or UI toggle.
 
-For **`dummy_titration`**, attempts run in order: default KNOBS + primary charge guess → default + flip-retry → damped + primary → damped + flip → robust + primary only. Other modes skip flip-retry. Each attempt prefixes an explicit KNOBS block (settings persist on the worker IPhreeqc instance). **`convergence_tolerance` is never loosened** — only path controls (iterations, step sizes, diagonal scale, numerical derivatives) escalate. Successful rescues store **`knobs_level`** on `GridPointResult` (0 = first rung). Selected output is read only on the success path (never after a swallowed exception — stale-output hazard).
+For **`dummy_titration`** and **`assemblage_dummy_titration`**, attempts run in order: default KNOBS + primary charge guess → default + flip-retry → damped + primary → damped + flip → robust + primary only. Other modes skip flip-retry. Each attempt prefixes an explicit KNOBS block (settings persist on the worker IPhreeqc instance). **`convergence_tolerance` is never loosened** — only path controls (iterations, step sizes, diagonal scale, numerical derivatives) escalate. Successful rescues store **`knobs_level`** on `GridPointResult` (0 = first rung). Selected output is read only on the success path (never after a swallowed exception — stale-output hazard).
 
 Boundary tracing inherits the ladder automatically because `PointEvaluator` calls `evaluate_point`.
 
 #### Water-band sweep mask (`gas_limits.py` + `sweep.py`, server defaults)
 
-In titration-style modes (`dummy_titration`, `titration`), the base grid sweep can skip PHREEQC for points outside the analytic O₂/H₂ window (`SWEEP_SKIP_OUTSIDE_WATER = true` by default). Points with `pe + pH` above the O₂ line or below the H₂ line (plus **`SWEEP_WATER_MARGIN_CELLS`** margin in cell units) receive **synthetic** `GridPointResult` rows: `converged=True`, `synthetic_label` such as `O2(g) > 0.21 atm`, and matching `gas_domain` — no PHREEQC call.
+In titration-style modes (`dummy_titration`, `titration`, and their assemblage counterparts), the base grid sweep can skip PHREEQC for points outside the analytic O₂/H₂ window (`SWEEP_SKIP_OUTSIDE_WATER = true` by default). Points with `pe + pH` above the O₂ line or below the H₂ line (plus **`SWEEP_WATER_MARGIN_CELLS`** margin in cell units) receive **synthetic** `GridPointResult` rows: `converged=True`, `synthetic_label` such as `O2(g) > 0.21 atm`, and matching `gas_domain` — no PHREEQC call.
 
 Synthetic categories flow through packing and adaptive tracing; numeric boundary tracing **skips** cells that mix real chemistry with synthetic gas labels (O₂/H₂ lines remain **analytic** via `trace_gas_limit_segments`). Job metadata may include **`n_skipped_water`** (internal diagnostic only).
 
@@ -429,18 +484,22 @@ A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
 
 The optional **Adaptive boundaries** mode evaluates the full user-selected grid, then traces phase boundaries on mixed cells so the diagram renders as smooth vector geometry without evaluating every fine-grid node.
 
+**SI predominance** uses `run_adaptive_boundary_sweep` (`trace_mode="predominance"`). **Mineral stability** uses `run_adaptive_mineral_stability_sweep` with `trace_mode` `mineral_moles` or `mineral_costability` (see [Mineral stability](#mineral-stability-assemblage-modes)). Both share the same cell geometry, ProcessPool, crossing cache, and fallback machinery in `boundary_trace.py`.
+
 **Pipeline:**
 
 1. **Solid/aqueous name collisions** — names shared by a solid phase and an aqueous species come from the SQLite catalog (`solid_aqueous_collisions`, from `PHASES` ∩ `SOLUTION_SPECIES` text at scan time). `services/compute.py` loads them onto `GridJobParams` before the sweep; colliding solids are labelled `"<name>(s)"` during packing and tracing (not inferred from grid results).
 2. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
-3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners.
+3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid/mineral and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners.
 4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with **`_chunk_cells`** batching: ~`workers × TRACE_CHUNK_MULTIPLIER` jobs). Mixed cells are **Morton-sorted** into **contiguous** worker chunks so boundary chains and per-worker point/crossing caches stay local. For each layer and cell:
    - **2-category cells** — `scipy.optimize.brentq` along cell edges locates crossings of a continuous scalar whose zero is the boundary:
-     - solid↔solid: `SI_A − SI_B`
+     - SI predominance solid↔solid: `SI_A − SI_B`
+     - mineral moles solid↔solid: precipitated-mole difference
+     - mineral costability set edges: moles of the phase entering/leaving the co-stable set
      - aqueous↔aqueous: `log(m_A) − log(m_B)` (absent species floored so corners always bracket)
-     - solid↔aqueous solubility: `SI_solid = 0` (aqueous side uses the bare species name; solid side uses `"<name>(s)"` when the name collides)
+     - solid↔aqueous / solid↔fluid: SI predominance uses `SI_solid = 0`; mineral modes use **moles-gated** SI = 0 under EQUI pinning
      - converged↔failed (`none`): convergence scalar (+1 / −1) for the **stability limit**
-   - **Solid/aqueous scalar choice** — the tracer reads solid vs aqueous from the category label (`label_is_solid` in `packer.py`): `"<name>(s)"` ⇒ solid, bare colliding name ⇒ aqueous. No per-corner SI guess.
+   - **Solid/aqueous scalar choice** — the tracer reads solid vs aqueous from the category label (`label_is_solid` in `packer.py`): `"<name>(s)"` ⇒ solid, bare colliding name ⇒ aqueous; co-precip joins `"A + B"` count as solid sets. No per-corner SI guess.
    - **3-category cells** — the cell is split into **convex fill regions**, each bounded by oriented lines (a category fills where every line's signed distance is ≥ 0). Two cases arise:
      - *Triple point* (three crossings): a 2D root (`scipy.optimize.root` / `least_squares`), or the crossing centroid when one scalar is the convergence step (or the solver clamps to an edge), gives an interior junction `T`. Rays from `T` to the three crossings — plus a virtual ray toward the un-crossed same-category edge — cut the cell into angular sectors, one convex cone per corner; the category sharing two corners gets two sectors (joined by union).
      - *Band* (four crossings): the doubled category sits on the diagonal, so each single-corner category is the half-plane cut off by the line joining its two adjacent crossings, and the doubled category is the convex strip between both cuts.
@@ -448,12 +507,12 @@ The optional **Adaptive boundaries** mode evaluates the full user-selected grid,
    - **Fallback** — unresolved cells (4+ categories, lost brackets) share one local `(factor+1)²` sub-grid evaluation per cell across all layers, then marching squares on the sampled category field.
    - **Crossing cache** — edge `brentq` results are keyed by canonical grid-node pairs (shared by adjacent cells) and category pair, so each physical edge is root-found once per worker; converged↔failed edges use the same deduplication. Hits apply across layers that share geometry.
    - **Tolerances** — phase-boundary `brentq` uses `BOUNDARY_TRACE_TOLERANCE` (default `1e-3`); converged↔failed edges use the looser `BOUNDARY_TRACE_STABILITY_TOLERANCE` (default `1e-2`). Straight chord geometry dominates display error, so sub-node brentq precision is unnecessary; stability frontiers are numerical artifacts, not thermodynamic boundaries.
-5. **Vector display** (`diagram/vectors.py`) — fills are built to share edges with the black boundary polylines from the trace bundle. Per layer:
+5. **Vector display** — SI predominance uses `diagram/vectors.pack_traced_display` (`solid:*` layers → `solid_subsets`). Mineral stability uses `pack_traced_mineral_display` (`mineral:*` layers → `mineral_subsets`). Both share the same local geometry:
    - **Traced 2-category cells** — the base-cell rectangle is clipped by the same local dividing line used for the world-space boundary segment (Sutherland–Hodgman half-planes).
    - **Traced 3-category / band cells** — the cell rectangle is clipped by the same oriented region lines emitted for convex fill regions.
    - **Interior (untraced) cells** — merged mask contours of the coarse category field (one ring family per category) so large regions get a single fill suitable for region labels; avoids a per-cell rectangle mesh.
    - **Fallback cells** — mask contours on the fine categorical sample; their black edges are also marching-squares from that sample (no `brentq` line exists).
-   - **Boundaries** — polylines taken directly from the trace bundle. O₂/H₂ overlays and water-band clipping apply when `water_stability_limits_enabled` (both titration-style modes). Despeckle removes isolated fallback pixels on the categorical sample before mask fills.
+   - **Boundaries** — polylines taken directly from the trace bundle. O₂/H₂ overlays and water-band clipping apply when `water_stability_limits_enabled`. Despeckle removes isolated fallback pixels on the categorical sample before mask fills.
 
 Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SPECIES`, default 4) while keeping explicit `-mol` output for species seen on boundaries.
 
@@ -471,6 +530,9 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 | `n_stability_segments` | Stability-limit segments (converged↔failed) |
 | `refinement_method` | Always `"trace"` in adaptive mode |
 | `display_mode` | `"traced"` when vector display is produced, else `"grid"` |
+| `trace_mode` | `"predominance"`, `"mineral_moles"`, or `"mineral_costability"` when present |
+| `mineral_category_mode` | `"moles"` or `"costability"` on mineral-stability sweeps |
+| `n_brentq_mol` | Root finds using precipitated-mole scalars (mineral modes) |
 
 Limits (`config.py`):
 
@@ -528,18 +590,28 @@ Before compute:
 
 ### Result packing (`packer.py`)
 
-After the sweep, each grid point has SI values and aqueous dominance data. The packer:
+After the sweep, each grid point has SI values and aqueous dominance data (assemblage points also carry `phase_moles`). Two pack entry points keep SI predominance and mineral stability separate:
+
+| Entry | Diagram | Solid / mineral layers |
+|-------|---------|------------------------|
+| `pack_grid_results` | `diagram_kind="predominance"` | `layers.solid_subsets` — max SI ≥ 0 |
+| `pack_mineral_grid_results` | `diagram_kind="assemblage"` | `layers.mineral_subsets` — moles or costability |
+
+Shared behaviour:
 
 1. Builds axis arrays in `pe` (Eh and log fO₂ applied at plot time; see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
 2. For each **element subset** enabled by the layer toggles, assigns a category per point:
-   - **Solid predominance** (`layer_solids`) — highest SI ≥ 0 among eligible phases in that subset; otherwise dominant aqueous species in the subset.
+   - **Solid predominance** (`layer_solids` + SI pack) — highest SI ≥ 0 among eligible phases in that subset; otherwise dominant aqueous species in the subset.
+   - **Mineral stability** (`layer_solids` + mineral pack) — `moles` (argmax precipitated moles) or `costability` (all moles > ε joined); otherwise dominant aqueous species in the subset.
    - **Aqueous predominance** (`layer_aqueous`) — highest-ranked aqueous species containing an element from the subset (from `aq_species_by_element`; multi-element complexes such as `FeHCO3+` are valid candidates).
 3. **Solid/aqueous name collisions** — some databases define a solid phase and an aqueous complex with the same name (e.g. `FeO`, `CuCO3`, `Fe(OH)3`). Collisions are detected at **catalog scan time** from `.dat` text (`PHASES` ∩ `SOLUTION_SPECIES`) and stored in SQLite; compute receives them on `GridJobParams.solid_aqueous_collisions`. The precipitated solid is then labelled `"<name>(s)"` (e.g. `Fe(OH)3(s)`); the aqueous complex keeps the bare name.
 4. Produces integer category grids mapping each `(pH, y)` cell to a phase/species index.
 5. Builds **layers** (only the families requested on the compute job):
-   - `solid_subsets` — solid predominance maps (`aqueous_names` lists categories rendered grey in solid view)
+   - `solid_subsets` / `mineral_subsets` — category maps (`aqueous_names` lists categories rendered grey in solid/mineral view)
    - `aqueous_subsets` — aqueous species predominance maps
 6. Packs **`hover_species`** — per grid cell, top `HOVER_SPECIES_PER_ELEMENT` (default 4) species **per element**, stored as `[name, element_moles, element]` so the client can filter to any active element subset.
+
+Mineral packs also set **`mineral_category_mode`** (`moles` | `costability`). The Saturation Predominance compute path currently calls `pack_grid_results` only.
 
 **Per-element subsets** (`layer_elements`):
 
@@ -568,6 +640,11 @@ Species molalities in hover are PHREEQC's per-element moles (`stoichiometry × s
 ### Vector display (`vectors.py`)
 
 When boundary tracing is active, each plottable layer is converted into fill polygons and boundary polylines that are meant to **coincide on the same edges**:
+
+- **`pack_traced_display`** — SI predominance; reads `solid:<subset>` / `aqueous:<subset>` from the trace bundle; emits `layers.solid_subsets` / `aqueous_subsets` with `diagram_kind="predominance"`.
+- **`pack_traced_mineral_display`** — mineral stability; reads `mineral:<subset>` / `aqueous:<subset>`; emits `layers.mineral_subsets` / `aqueous_subsets` with `diagram_kind="assemblage"` and `mineral_category_mode`.
+
+Shared geometry:
 
 - **Boundary polylines** — taken directly from the trace bundle (`brentq` / triple rays for clean cells; marching-squares rings for fallback cells).
 - **Fill polygons (traced cells)** — each mixed base cell is clipped in world `(pH, pe)` space by the same dividing line or convex region lines stored with the trace (local `0…factor` coords map linearly onto the cell). Adjacent same-color rings stay geometrically separate (no topology union), then **`batch_polygons_by_category`** concatenates them into one null-separated MultiPolygon per phase so Plotly paints **one fill trace per category** (not one SVG path per cell). Hairline stroke in the fill color still seals antialias seams between rings.
@@ -642,8 +719,6 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 - **Compute dispatch** — the header **Compute diagram** button calls the active mode's handler. On **Statistics**, only the button is hidden; **progress and status stay visible** if a job is still running.
 - **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored per mode; switching back to Saturation Predominance restores the diagram from memory or IndexedDB.
 - **Cache keys** include `mode_id` plus the request body. Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
-
-Future compute modes (e.g. mineral stability) can register in the same `MODES` table with their own request builders and renderers without duplicating header, database, or progress logic.
 
 ### Layout (Saturation Predominance)
 
@@ -915,7 +990,7 @@ Key fields in the JSON body:
 | `system_elements` | from totals | Explicit element list for layers |
 | `db_id` | server default | Database from registry |
 | `adaptive_boundaries` | `true` | Enable adaptive boundary tracing |
-| `solution_mode` | `dummy_titration` | `dummy_titration` or `titration` — see [Single-point evaluation](#single-point-evaluation-enginepy) |
+| `solution_mode` | `dummy_titration` | `dummy_titration`, `titration`, `assemblage_dummy_titration`, or `assemblage_titration` — see [Single-point evaluation](#single-point-evaluation-enginepy) and [Mineral stability](#mineral-stability-assemblage-modes) |
 | `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
 | `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
 | `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); see [Gas management](#gas-management-water-stability--component-gases) |
@@ -926,7 +1001,7 @@ Key fields in the JSON body:
 
 Parallel worker count and the IPhreeqc library path are configured on the server (`PHASER_MAX_WORKERS`, `PHASER_IPHREEQC_LIB`); see [Configuration](#configuration-configpy).
 
-Grid bounds and results use **`pe`** as the redox coordinate. **`solution_mode`** selects dummy titration (Bgc/Bga) or real electrolyte titration (Cl⁻/NaOH; may alter speciation); see [Single-point evaluation](#single-point-evaluation-enginepy). Packed results echo `solution_mode` for the client.
+Grid bounds and results use **`pe`** as the redox coordinate. **`solution_mode`** selects the titration frame and whether solids may precipitate (assemblage modes); see [Single-point evaluation](#single-point-evaluation-enginepy). Packed SI-predominance results echo `solution_mode` and `diagram_kind="predominance"`. Assemblage packs (via `pack_mineral_grid_results`) also set `diagram_kind="assemblage"` and `mineral_category_mode`.
 
 ### Compute flow
 
@@ -978,7 +1053,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Catalog SQLite | `PHASER_CATALOG_DB` | `data/catalog.sqlite` | PHREEQC element/phase/species index |
 | Stats SQLite | `PHASER_STATS_DB` | `data/stats.sqlite` | Per-server compute event log |
 | Grid resolution | — | `GRID_LEVELS = 100` | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
-| Default solution mode | — | `SOLUTION_MODE_DEFAULT = dummy_titration` | `dummy_titration` or `titration`; exposed in `/api/config` as `default_solution_mode` and `solution_modes` (listed in that order) |
+| Default solution mode | — | `SOLUTION_MODE_DEFAULT = dummy_titration` | `dummy_titration`, `titration`, `assemblage_dummy_titration`, or `assemblage_titration`; exposed in `/api/config` as `default_solution_mode` and `solution_modes` |
 | Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
 | Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Fallback / local-geometry subdivision in adaptive mode |
 | Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft cap on total PHREEQC runs in adaptive mode |
@@ -1025,6 +1100,7 @@ PHASER can consume databases produced by external tools:
   ```bash
   python scripts/smoke_check.py
   ```
+- **Mineral-stability local tests** (gitignored `tests/`): unit coverage in `test_mineral_stability_engine.py`, `test_mineral_stability_trace.py`, `test_mineral_stability_pack.py`; optional full-grid stress in `test_mineral_stability_fe_c_s_grid.py`; paired moles/costability preplots via `diag_mineral_stability_preplot.py` (`PHASER_DIAG_LEVELS` clamped to ≥ 50).
 
 ---
 

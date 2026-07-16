@@ -50,6 +50,7 @@ class TraceStats:
     n_brentq_si: int = 0
     n_brentq_aq: int = 0
     n_brentq_conv: int = 0
+    n_brentq_mol: int = 0
     n_stability_segments: int = 0
     n_cells_complex_fallback: int = 0
     n_crossing_cache_hits: int = 0
@@ -120,6 +121,8 @@ class PointEvaluator:
         # Phase names shared with an aqueous species; their solid form is the
         # "(s)"-suffixed label, so a bare name always denotes the aqueous side.
         self.collisions: frozenset[str] = frozenset(params.solid_aqueous_collisions)
+        # Pair-root resolver (SI predominance by default; mineral stability swaps).
+        self.resolve_pair = _resolve_pair_scalar
 
     def crossing_t_lookup(
         self, i: int, j: int, edge: int, cat_a: str, cat_b: str
@@ -426,7 +429,7 @@ def _find_crossing_brentq(
 ) -> float | None:
     row0 = evaluator.eval(ph0, pe0)
     row1 = evaluator.eval(ph1, pe1)
-    scalar_fn, kind = _resolve_pair_scalar(
+    scalar_fn, kind = evaluator.resolve_pair(
         cat_a, cat_b, evaluator.solid_phases, evaluator.collisions
     )
     if scalar_fn is None:
@@ -446,7 +449,9 @@ def _find_crossing_brentq(
     try:
         t_cross = float(brentq(f, 0.0, 1.0, xtol=tol, rtol=tol))
         if stats:
-            if kind in ("si", "aq_solid"):
+            if kind in ("mol", "mol_zero", "mol_set"):
+                stats.n_brentq_mol += 1
+            elif kind in ("si", "aq_solid", "si_set"):
                 stats.n_brentq_si += 1
             elif kind == "aq":
                 stats.n_brentq_aq += 1
@@ -722,10 +727,10 @@ def _find_interior_point_2d(
     stats: TraceStats | None = None,
 ) -> tuple[float, float] | None:
     """Locate a point where two independent pair-scalars vanish (triple point)."""
-    fn_ab, _ = _resolve_pair_scalar(
+    fn_ab, _ = evaluator.resolve_pair(
         cat_a, cat_b, evaluator.solid_phases, evaluator.collisions
     )
-    fn_ac, _ = _resolve_pair_scalar(
+    fn_ac, _ = evaluator.resolve_pair(
         cat_a, cat_c, evaluator.solid_phases, evaluator.collisions
     )
     if fn_ab is None or fn_ac is None:
@@ -1400,6 +1405,8 @@ def _trace_cells_batch(
     tol: float,
     stability_tol: float,
     factor: int,
+    specs: list[LayerSpec] | None = None,
+    resolve_pair: Callable | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], TraceStats]:
     """Trace all layers + stability limits for a batch of cells (one worker)."""
     seed: dict[tuple[float, float], dict] = {}
@@ -1407,7 +1414,10 @@ def _trace_cells_batch(
         seed[point_key(float(row["ph"]), float(row["pe"]))] = row
 
     evaluator = PointEvaluator(trace_params, seed)
-    specs = layer_specs(trace_params, db_path)
+    if resolve_pair is not None:
+        evaluator.resolve_pair = resolve_pair
+    if specs is None:
+        specs = layer_specs(trace_params, db_path)
     stats = TraceStats()
     # Per layer: clean-cell dividing lines (smooth fills), sampled fallback nodes,
     # and exact boundary segments (lines).
@@ -1512,6 +1522,17 @@ _WORKER_BASE_PE: np.ndarray | None = None
 _WORKER_TOL: float = 0.0
 _WORKER_STABILITY_TOL: float = 0.0
 _WORKER_FACTOR: int = 1
+_WORKER_TRACE_MODE: str = "predominance"
+
+
+def _normalize_trace_mode(trace_mode: str) -> str:
+    """Map legacy mineral aliases; leave predominance unchanged."""
+    mode = str(trace_mode or "predominance")
+    if mode in ("mineral", "mineral_moles"):
+        return "mineral_moles"
+    if mode in ("mineral_si", "mineral_costability"):
+        return "mineral_costability"
+    return mode
 
 
 def _trace_worker_init(
@@ -1523,9 +1544,10 @@ def _trace_worker_init(
     tol: float,
     stability_tol: float,
     factor: int,
+    trace_mode: str = "predominance",
 ) -> None:
     global _WORKER_PQ, _WORKER_TRACE_PARAMS, _WORKER_BASE_PH, _WORKER_BASE_PE
-    global _WORKER_TOL, _WORKER_STABILITY_TOL, _WORKER_FACTOR
+    global _WORKER_TOL, _WORKER_STABILITY_TOL, _WORKER_FACTOR, _WORKER_TRACE_MODE
     _WORKER_PQ = init_phreeqc(dll_path, db_path)
     _WORKER_TRACE_PARAMS = grid_job_params_from_dict(trace_params_dict)
     _WORKER_BASE_PH = np.asarray(base_ph, dtype=float)
@@ -1533,6 +1555,26 @@ def _trace_worker_init(
     _WORKER_TOL = float(tol)
     _WORKER_STABILITY_TOL = float(stability_tol)
     _WORKER_FACTOR = int(factor)
+    _WORKER_TRACE_MODE = _normalize_trace_mode(trace_mode)
+
+
+def _trace_mode_plugins(trace_mode: str, params: GridJobParams, db_path: str):
+    """Return ``(specs, resolve_pair)`` for predominance or mineral-stability."""
+    mode = _normalize_trace_mode(trace_mode)
+    if mode in ("mineral_moles", "mineral_costability"):
+        from .mineral_stability_trace import (
+            mineral_layer_specs,
+            mineral_resolve_pair_for_mode,
+        )
+
+        category_mode = (
+            "costability" if mode == "mineral_costability" else "moles"
+        )
+        return (
+            mineral_layer_specs(params, db_path, category_mode=category_mode),
+            mineral_resolve_pair_for_mode(category_mode),
+        )
+    return layer_specs(params, db_path), _resolve_pair_scalar
 
 
 def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
@@ -1545,6 +1587,9 @@ def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
     assert _WORKER_BASE_PH is not None
     assert _WORKER_BASE_PE is not None
 
+    specs, resolve_pair = _trace_mode_plugins(
+        _WORKER_TRACE_MODE, _WORKER_TRACE_PARAMS, _WORKER_TRACE_PARAMS.db_path
+    )
     layers_out, stability, stats = _trace_cells_batch(
         cells,
         _WORKER_TRACE_PARAMS,
@@ -1555,6 +1600,8 @@ def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
         tol=_WORKER_TOL,
         stability_tol=_WORKER_STABILITY_TOL,
         factor=_WORKER_FACTOR,
+        specs=specs,
+        resolve_pair=resolve_pair,
     )
     return {
         "layers": layers_out,
@@ -1621,14 +1668,28 @@ def run_boundary_trace(
     progress_cb: Callable[[int, int], None] | None = None,
     max_workers: int | None = None,
     job_id: str | None = None,
+    trace_mode: str = "predominance",
 ) -> tuple[dict[str, Any], TraceStats]:
-    """Trace boundaries across all plottable layers for mixed base cells."""
+    """Trace boundaries across all plottable layers for mixed base cells.
+
+    ``trace_mode``:
+      - ``"predominance"`` (default): SI solid + aqueous layers (unchanged)
+      - ``"mineral_moles"`` (alias ``"mineral"``): assemblage argmax-moles fills
+      - ``"mineral_costability"`` (alias ``"mineral_si"``): assemblage
+        post-precip co-stability (all moles > 0 joined)
+    """
     check_abort(job_id)
     tol = tolerance or config.BOUNDARY_TRACE_TOLERANCE
     stability_tol = stability_tolerance or config.BOUNDARY_TRACE_STABILITY_TOLERANCE
     factor = refine_factor or config.ADAPTIVE_REFINE_FACTOR
-    specs = layer_specs(params, db_path)
-    species = collect_trace_species(params, base_ij, cells, specs)
+    mode = _normalize_trace_mode(trace_mode)
+    specs, resolve_pair = _trace_mode_plugins(mode, params, db_path)
+    if mode in ("mineral_moles", "mineral_costability"):
+        from .mineral_stability_trace import collect_mineral_trace_species
+
+        species = collect_mineral_trace_species(params, base_ij, cells, specs)
+    else:
+        species = collect_trace_species(params, base_ij, cells, specs)
     trace_params = replace(
         params,
         aq_species_molality=species,
@@ -1650,6 +1711,8 @@ def run_boundary_trace(
             tol=tol,
             stability_tol=stability_tol,
             factor=factor,
+            specs=specs,
+            resolve_pair=resolve_pair,
         )
         check_abort(job_id)
         if progress_cb:
@@ -1678,6 +1741,7 @@ def run_boundary_trace(
                 tol,
                 stability_tol,
                 factor,
+                mode,
             ),
         ) as pool:
             try:
@@ -1716,9 +1780,6 @@ def run_boundary_trace(
 
                 if isinstance(exc, JobAborted):
                     raise
-                # A dead worker leaves ProcessPool map hung/zombie from the UI's
-                # view (progress stuck near end of "boundaries"); surface clearly.
-                # After a hard abort the pool may raise BrokenProcessPool — recheck.
                 check_abort(job_id)
                 raise RuntimeError(
                     f"Boundary-trace worker pool failed ({type(exc).__name__}): {exc}"
@@ -1730,20 +1791,27 @@ def run_boundary_trace(
 
     from .gas_limits import trace_gas_limit_segments
 
+    gas_eval = PointEvaluator(
+        trace_params,
+        {
+            point_key(float(r.ph), float(r.pe)): asdict(r)
+            for r in base_ij.values()
+        },
+    )
+    gas_eval.resolve_pair = resolve_pair
     gas_segments = trace_gas_limit_segments(
         trace_params,
         base_ph=base_ph,
         base_pe=base_pe,
         base_ij=base_ij,
-        evaluator=PointEvaluator(trace_params, {
-            point_key(float(r.ph), float(r.pe)): asdict(r) for r in base_ij.values()
-        }),
+        evaluator=gas_eval,
         tolerance=tol,
     )
     stats.n_gas_segments = len(gas_segments)
 
     trace_bundle: dict[str, Any] = {
         "method": "traced",
+        "trace_mode": mode,
         "tolerance": tol,
         "stability_tolerance": stability_tol,
         "refine_factor": factor,
@@ -1768,6 +1836,7 @@ def run_boundary_trace(
             "n_brentq_si": stats.n_brentq_si,
             "n_brentq_aq": stats.n_brentq_aq,
             "n_brentq_conv": stats.n_brentq_conv,
+            "n_brentq_mol": stats.n_brentq_mol,
             "n_stability_segments": stats.n_stability_segments,
             "n_gas_segments": stats.n_gas_segments,
             "n_cells_complex_fallback": stats.n_cells_complex_fallback,

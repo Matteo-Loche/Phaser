@@ -91,6 +91,10 @@ class GridPointResult:
     si: dict[str, float] = field(default_factory=dict)
     gas_si: dict[str, float] = field(default_factory=dict)
     gas_domain: dict[str, str] = field(default_factory=dict)
+    # Assemblage modes only: precipitated moles per solid (empty for SI predominance).
+    phase_moles: dict[str, float] = field(default_factory=dict)
+    # Assemblage convenience label from moles (SI modes leave default).
+    dominant_precip: str = "aqueous"
     knobs_level: int = 0
     synthetic_label: str | None = None
 
@@ -183,15 +187,17 @@ def _top_aq_species_per_element(params: GridJobParams) -> int:
     return config.TOP_AQ_SPECIES_PER_ELEMENT
 
 
-def _format_user_punch(elements: tuple[str, ...], *, top_n: int) -> str:
-    if not elements:
-        return ""
-    headings = []
-    for elem in elements:
-        headings.extend([f"dom_{elem}", f"m_dom_{elem}"])
-        for k in range(1, top_n + 1):
-            headings.extend([f"sp_{elem}_{k}", f"m_{elem}_{k}"])
-    lines = ["USER_PUNCH", f"    -headings {' '.join(headings)}", "    -start"]
+def _format_user_punch_aq_sys(
+    elements: tuple[str, ...],
+    *,
+    top_n: int,
+) -> list[str]:
+    """Original predominance USER_PUNCH body: punch SYS slots by rank index.
+
+    No ``ty$`` filter — without EQUILIBRIUM_PHASES, SYS element lists are
+    aqueous-dominated and this path stays short / cheap.
+    """
+    lines: list[str] = []
     base = 1000
     for idx, elem in enumerate(elements):
         b = base + idx * 200
@@ -203,21 +209,131 @@ def _format_user_punch(elements: tuple[str, ...], *, top_n: int) -> str:
         # is the element's stoichiometric moles per species (sorted descending).
         lines.extend(
             [
-                f"{b} et = SYS(\"{elem}\", n, nm$, ty$, mo)",
-                f"{b + 10} IF n > 0 THEN PUNCH nm$(1) ELSE PUNCH \"none\"",
+                f'{b} et = SYS("{elem}", n, nm$, ty$, mo)',
+                f'{b + 10} IF n > 0 THEN PUNCH nm$(1) ELSE PUNCH "none"',
                 f"{b + 20} IF n > 0 THEN PUNCH mo(1) ELSE PUNCH -999",
                 f"{b + 30} FOR ii = 1 TO {top_n}",
                 f"{b + 40} IF ii > n THEN GOTO {pad}",
                 f"{b + 50} PUNCH nm$(ii)",
                 f"{b + 60} PUNCH mo(ii)",
                 f"{b + 70} GOTO {cont}",
-                f"{pad} PUNCH \"none\"",
+                f'{pad} PUNCH "none"',
                 f"{pad + 10} PUNCH -999",
                 f"{cont} NEXT ii",
             ]
         )
+    return lines
+
+
+def _format_user_punch_aq_only_sys(
+    elements: tuple[str, ...],
+    *,
+    top_n: int,
+) -> list[str]:
+    """Assemblage USER_PUNCH body: only ``ty$ = \"aq\"`` SYS contributors.
+
+    Under EQUILIBRIUM_PHASES, precipitated solids rank first in SYS element
+    lists (``ty$ = \"equi\"``) and would pollute aqueous maps if punched raw.
+    """
+    lines: list[str] = []
+    base = 1000
+    for idx, elem in enumerate(elements):
+        b = base + idx * 200
+        find_next = b + 35
+        after_dom = b + 40
+        scan_next = b + 85
+        after_scan = b + 90
+        pad_loop = b + 100
+        pad_done = b + 150
+        lines.extend(
+            [
+                f'{b} et = SYS("{elem}", n, nm$, ty$, mo)',
+                f'{b + 10} dom$ = "none"',
+                f"{b + 15} dm = -999",
+                f"{b + 20} FOR ii = 1 TO n",
+                f'{b + 25} IF ty$(ii) <> "aq" THEN GOTO {find_next}',
+                f"{b + 30} dom$ = nm$(ii)",
+                f"{b + 32} dm = mo(ii)",
+                f"{b + 34} GOTO {after_dom}",
+                f"{find_next} NEXT ii",
+                f"{after_dom} PUNCH dom$",
+                f"{after_dom + 5} PUNCH dm",
+                f"{b + 50} j = 0",
+                f"{b + 55} FOR ii = 1 TO n",
+                f'{b + 60} IF ty$(ii) <> "aq" THEN GOTO {scan_next}',
+                f"{b + 65} j = j + 1",
+                f"{b + 70} IF j > {top_n} THEN GOTO {after_scan}",
+                f"{b + 75} PUNCH nm$(ii)",
+                f"{b + 80} PUNCH mo(ii)",
+                f"{scan_next} NEXT ii",
+                f"{after_scan} REM pad unused top-N slots",
+                f"{pad_loop} IF j >= {top_n} THEN GOTO {pad_done}",
+                f"{pad_loop + 10} j = j + 1",
+                f'{pad_loop + 20} PUNCH "none"',
+                f"{pad_loop + 30} PUNCH -999",
+                f"{pad_loop + 40} GOTO {pad_loop}",
+                f"{pad_done} REM element {elem} done",
+            ]
+        )
+    return lines
+
+
+def _format_user_punch(
+    elements: tuple[str, ...],
+    *,
+    top_n: int,
+    equi_phases: tuple[str, ...] = (),
+) -> str:
+    """USER_PUNCH for aqueous SYS rankings and optional EQUI precipitated moles.
+
+    Predominance (``equi_phases`` empty): original short SYS-by-index punch.
+    Assemblage (``equi_phases`` set): aq-only SYS filter + EQUI mole columns.
+    """
+    headings: list[str] = []
+    for elem in elements:
+        headings.extend([f"dom_{elem}", f"m_dom_{elem}"])
+        for k in range(1, top_n + 1):
+            headings.extend([f"sp_{elem}_{k}", f"m_{elem}_{k}"])
+    for phase in equi_phases:
+        if " " in phase or "(" in phase or ")" in phase:
+            headings.append(f'"eq_{phase}"')
+        else:
+            headings.append(f"eq_{phase}")
+    if not headings:
+        return ""
+    lines = ["USER_PUNCH", f"    -headings {' '.join(headings)}", "    -start"]
+    if equi_phases:
+        lines.extend(_format_user_punch_aq_only_sys(elements, top_n=top_n))
+    else:
+        lines.extend(_format_user_punch_aq_sys(elements, top_n=top_n))
+    equi_base = 8000
+    for i, phase in enumerate(equi_phases):
+        lines.append(
+            f"{equi_base + 10 * i} PUNCH EQUI({_quote_equi_arg(phase)})"
+        )
     lines.append("    -end")
     return "\n".join(lines) + "\n"
+
+
+def _is_solid_leak_in_aq_map(
+    name: str,
+    *,
+    solid_phases: set[str] | frozenset[str],
+    collisions: set[str] | frozenset[str],
+) -> bool:
+    """True when ``name`` is a selected solid that is not an aq name collision.
+
+    Collision names (e.g. ``FeO``) can be legitimate aqueous complexes; those are
+    kept. Bare phase-only names (``Hematite``) that leaked from ``equi`` SYS
+    rows are dropped as a parse-time safety net.
+    """
+    if not name or name == "none":
+        return False
+    if name not in solid_phases:
+        return False
+    if name in collisions:
+        return False
+    return True
 
 
 def _mol_headers(species: str) -> list[str]:
@@ -226,7 +342,11 @@ def _mol_headers(species: str) -> list[str]:
 
 
 def _parse_species_molalities(
-    row: dict, params: GridJobParams,
+    row: dict,
+    params: GridJobParams,
+    *,
+    solid_phases: set[str] | frozenset[str] = frozenset(),
+    collisions: set[str] | frozenset[str] = frozenset(),
 ) -> tuple[dict[str, float], dict[str, str], dict[str, list[list]]]:
     """Merge USER_PUNCH top-species slots and explicit -mol species.
 
@@ -237,6 +357,9 @@ def _parse_species_molalities(
     several elements (e.g. ``FeHCO3+``) legitimately appears under each of them,
     each with that element's stoichiometric moles, so per-element hover/ranking is
     exact.
+
+    Names that are selected solids but not aqueous name-collisions are skipped
+    when ``solid_phases`` is non-empty (assemblage parse safety net only).
     """
     out: dict[str, float] = {}
     species_elem: dict[str, str] = {}
@@ -248,6 +371,10 @@ def _parse_species_molalities(
             sp = _row_str(row, f"sp_{elem}_{k}", default="")
             if not sp or sp == "none":
                 continue
+            if _is_solid_leak_in_aq_map(
+                sp, solid_phases=solid_phases, collisions=collisions
+            ):
+                continue
             m = _row_value(row, f"m_{elem}_{k}")
             if m == m and m > 0:
                 out[sp] = max(out.get(sp, 0.0), m)
@@ -256,6 +383,10 @@ def _parse_species_molalities(
         if ranked:
             by_element[elem] = ranked
     for sp in params.aq_species_molality:
+        if _is_solid_leak_in_aq_map(
+            sp, solid_phases=solid_phases, collisions=collisions
+        ):
+            continue
         for key in _mol_headers(sp):
             m = _row_value(row, key)
             if m == m and m > 0:
@@ -270,8 +401,54 @@ def _si_output_phases(params: GridJobParams) -> tuple[str, ...]:
     return tuple(dict.fromkeys((*params.phases, *gases)))
 
 
+def _assemblage_solid_phases(params: GridJobParams) -> tuple[str, ...]:
+    """Non-gas selected solids eligible to precipitate in EQUILIBRIUM_PHASES."""
+    return tuple(p for p in params.phases if not is_gas(p))
+
+
+def _quote_phreeqc_name(name: str) -> str:
+    """Token for EQUILIBRIUM_PHASES / SELECTED_OUTPUT ``-si`` phase lists.
+
+    Quote only when the name contains whitespace. Parentheses are part of many
+    Thermoddem phase keys (``Fe(OH)2``, ``Ferrihydrite(2L)``, …); wrapping those
+    in double quotes makes IPhreeqc report ``Phase not found`` and silently
+    yields SI = -999 / NaN for predominance.
+    """
+    if " " in name:
+        return f'"{name}"'
+    return name
+
+
+def _quote_equi_arg(name: str) -> str:
+    """EQUI() BASIC expects a quoted string (never a bare identifier)."""
+    return f'"{name}"'
+
+
+def _si_output_token(name: str) -> str:
+    """Phase token for ``SELECTED_OUTPUT -si`` (same quoting rules as EQUI body)."""
+    return _quote_phreeqc_name(name)
+
+
+def assemblage_solid_lines(params: GridJobParams) -> str:
+    """EQUILIBRIUM_PHASES body lines: each solid at target SI 0, initial moles 0."""
+    lines = []
+    for phase in _assemblage_solid_phases(params):
+        lines.append(f"    {_quote_phreeqc_name(phase)} 0 0")
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
 def _si_from_row(row: dict, phase: str) -> float:
     return _row_value(row, f"si_{phase}", f'si_"{phase}"')
+
+
+def _eq_from_row(row: dict, phase: str) -> float:
+    """Precipitated moles for ``phase`` from USER_PUNCH EQUI columns."""
+    return _row_value(
+        row,
+        f"eq_{phase}",
+        f'eq_"{phase}"',
+        f'eq_{_quote_phreeqc_name(phase)}',
+    )
 
 
 def _run_phreeqc_string(phreeqc, inp: str) -> list | None:
@@ -293,6 +470,12 @@ def _parse_grid_row(
     params: GridJobParams,
 ) -> GridPointResult:
     solid_phases = {p for p in params.phases if not is_gas(p)}
+    # Solid-leak filtering is assemblage-only (EQUI pollutes SYS). Predominance
+    # keeps the original parse path — no extra set checks per species slot.
+    filter_equi_leak = config.is_assemblage_mode(params.solution_mode)
+    collisions = (
+        frozenset(params.solid_aqueous_collisions) if filter_equi_leak else frozenset()
+    )
     si = {phase: _si_from_row(row, phase) for phase in _si_output_phases(params)}
     gas_si = {
         g: si[g] for g in params.trace_gas_phases
@@ -318,21 +501,51 @@ def _parse_grid_row(
 
     dominant_aq: dict[str, str] = {}
     mol_aq: dict[str, float] = {}
-    sp_mol, sp_elem, sp_by_elem = _parse_species_molalities(row, params)
+    sp_mol, sp_elem, sp_by_elem = _parse_species_molalities(
+        row,
+        params,
+        solid_phases=solid_phases if filter_equi_leak else frozenset(),
+        collisions=collisions,
+    )
     for elem in params.system_elements:
         species = _row_str(row, f"dom_{elem}", default="none")
+        if filter_equi_leak and _is_solid_leak_in_aq_map(
+            species, solid_phases=solid_phases, collisions=collisions
+        ):
+            species = "none"
+        m = _row_value(row, f"m_dom_{elem}")
+        if filter_equi_leak and species == "none" and elem in sp_by_elem and sp_by_elem[elem]:
+            species = str(sp_by_elem[elem][0][0])
+            m = float(sp_by_elem[elem][0][1])
         if species != "none":
             dominant_aq[elem] = species
-        m = _row_value(row, f"m_dom_{elem}")
-        if m == m:
-            mol_aq[elem] = m
-            if species != "none" and species not in sp_mol:
-                sp_mol[species] = m
-                sp_elem.setdefault(species, elem)
-            # Seed the per-element ranking from the dominant when the SYS loop
-            # returned nothing for this element (keeps hover non-empty).
-            if species != "none" and elem not in sp_by_elem:
-                sp_by_elem[elem] = [[species, m]]
+        if filter_equi_leak:
+            if m == m and species != "none":
+                mol_aq[elem] = m
+                if species not in sp_mol:
+                    sp_mol[species] = m
+                    sp_elem.setdefault(species, elem)
+                if elem not in sp_by_elem:
+                    sp_by_elem[elem] = [[species, m]]
+        else:
+            # Predominance: original seeding (unchanged).
+            if m == m:
+                mol_aq[elem] = m
+                if species != "none" and species not in sp_mol:
+                    sp_mol[species] = m
+                    sp_elem.setdefault(species, elem)
+                if species != "none" and elem not in sp_by_elem:
+                    sp_by_elem[elem] = [[species, m]]
+
+    phase_moles: dict[str, float] = {}
+    dominant_precip = "aqueous"
+    if filter_equi_leak:
+        from .mineral_stability import dominant_precip_label
+
+        for phase in _assemblage_solid_phases(params):
+            m = _eq_from_row(row, phase)
+            phase_moles[phase] = float(m) if m == m and m > 0.0 else 0.0
+        dominant_precip = dominant_precip_label(phase_moles, solid_phases)
 
     return GridPointResult(
         ph=ph,
@@ -348,6 +561,8 @@ def _parse_grid_row(
         aq_molality_by_species=sp_mol,
         aq_species_element=sp_elem,
         aq_species_by_element=sp_by_elem,
+        phase_moles=phase_moles,
+        dominant_precip=dominant_precip,
     )
 
 
@@ -358,7 +573,7 @@ def _format_selected_output_block(
     mol_line: str = "",
 ) -> str:
     si_phases = _si_output_phases(params)
-    si_list = " ".join(f'"{p}"' if " " in p or "(" in p else p for p in si_phases)
+    si_list = " ".join(_si_output_token(p) for p in si_phases)
     return f"""SELECTED_OUTPUT
     -reset false
     -pH true
@@ -391,6 +606,23 @@ def format_selected_output_suffix(params: GridJobParams) -> str:
     return f"{_format_selected_output_block(params, user_punch=user_punch, mol_line=mol_line)}END\n"
 
 
+def format_assemblage_selected_output_suffix(params: GridJobParams) -> str:
+    """SELECTED_OUTPUT with SI + aqueous SYS punch + EQUI precipitated moles."""
+    user_punch = _format_user_punch(
+        params.system_elements,
+        top_n=_top_aq_species_per_element(params),
+        equi_phases=_assemblage_solid_phases(params),
+    )
+    mol_line = ""
+    if params.aq_species_molality:
+        mol_tokens = " ".join(
+            f'"{s}"' if " " in s or "(" in s or "-" in s else s
+            for s in params.aq_species_molality
+        )
+        mol_line = f"    -mol {mol_tokens}\n"
+    return f"{_format_selected_output_block(params, user_punch=user_punch, mol_line=mol_line)}END\n"
+
+
 def format_grid_input(
     *,
     ph: float,
@@ -405,6 +637,16 @@ def format_grid_input(
         return format_dummy_titration_input(
             ph=ph, pe=pe, params=params, flip_charge=flip_charge
         )
+    if params.solution_mode == "assemblage_dummy_titration":
+        from .input_assemblage_dummy import format_assemblage_dummy_titration_input
+
+        return format_assemblage_dummy_titration_input(
+            ph=ph, pe=pe, params=params, flip_charge=flip_charge
+        )
+    if params.solution_mode == "assemblage_titration":
+        from .input_assemblage_titration import format_assemblage_titration_input
+
+        return format_assemblage_titration_input(ph=ph, pe=pe, params=params)
     from .input_titration import format_titration_input
 
     return format_titration_input(ph=ph, pe=pe, params=params)
@@ -417,7 +659,7 @@ def _selected_output_row_index(params: GridJobParams) -> int:
 
 def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> GridPointResult:
     base = GridPointResult(ph=ph, pe=pe, converged=False)
-    flip_modes = frozenset({"dummy_titration"})
+    flip_modes = frozenset({"dummy_titration", "assemblage_dummy_titration"})
     flips = (False, True) if params.solution_mode in flip_modes else (False,)
 
     if params.knobs_mode == "ladder":

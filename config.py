@@ -190,7 +190,7 @@ PE_MAX = 14.0
 GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
 
 # Grid-point PHREEQC input modes (see phreeqc/input_titration.py,
-# input_dummy_titration.py).
+# input_dummy_titration.py, input_assemblage_*.py).
 SOLUTION_MODE_DEFAULT = "dummy_titration"
 SOLUTION_MODE_META: dict[str, dict[str, str]] = {
     "dummy_titration": {
@@ -208,8 +208,34 @@ SOLUTION_MODE_META: dict[str, dict[str, str]] = {
             "and redox via O₂(g) fugacity. Inclusion of Cl and Na may alter the speciation."
         ),
     },
+    "assemblage_dummy_titration": {
+        "label": "Mineral stability (dummy titration)",
+        "description": (
+            "Same dummy-electrolyte pH/O₂ pins as dummy_titration, plus selected solids "
+            "in EQUILIBRIUM_PHASES (target SI = 0, initial moles = 0) so precipitation "
+            "and aqueous speciation are retrieved together."
+        ),
+    },
+    "assemblage_titration": {
+        "label": "Mineral stability (real electrolyte titration)",
+        "description": (
+            "Same Cl⁻/NaOH titration frame as titration, plus selected solids "
+            "in EQUILIBRIUM_PHASES (target SI = 0, initial moles = 0)."
+        ),
+    },
 }
 SOLUTION_MODES: tuple[str, ...] = tuple(SOLUTION_MODE_META.keys())
+ASSEMBLAGE_SOLUTION_MODES: frozenset[str] = frozenset(
+    {
+        "assemblage_dummy_titration",
+        "assemblage_titration",
+    }
+)
+
+
+def is_assemblage_mode(mode: str) -> bool:
+    """True for mineral-stability EQUILIBRIUM_PHASES precipitation modes."""
+    return mode in ASSEMBLAGE_SOLUTION_MODES
 
 MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200

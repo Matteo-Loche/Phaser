@@ -37,6 +37,7 @@ from .packer import (
     count_layer_pack_steps,
     dominant_aq_species_subset,
     label_is_solid,
+    mineral_subset_category_fn,
     subset_key,
     subsets_for_job,
 )
@@ -914,9 +915,133 @@ def pack_traced_display(
         "factor": factor,
         "interpolated": True,
         "solution_mode": params.solution_mode,
+        "diagram_kind": "predominance",
         "stability_limits": _segments_to_boundary_lines(stability_segments),
         "layers": {
             "solid_subsets": solid_subsets,
+            "aqueous_subsets": aqueous_subsets,
+        },
+    }
+
+
+def pack_traced_mineral_display(
+    params: GridJobParams,
+    base_rows: list[dict],
+    trace_bundle: dict[str, Any],
+    *,
+    category_mode: str = "moles",
+    db_path: str,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
+    """Vector display for mineral-stability traces (``mineral:*`` layer ids).
+
+    Same geometry pipeline as ``pack_traced_display``, but category fills use
+    precipitated-mole modes and read ``trace_bundle.layers["mineral:<subset>"]``.
+    Output layers use ``mineral_subsets`` (not ``solid_subsets``). Does not
+    change SI-predominance ``pack_traced_display``.
+    """
+    del db_path
+    mode = "costability" if category_mode == "costability" else "moles"
+    trace_layers = trace_bundle.get("layers") or {}
+    factor = int(trace_bundle.get("refine_factor") or 1)
+    n_ph_fine = fine_axis_levels(params.ph_levels, factor)
+    n_pe_fine = fine_axis_levels(params.pe_levels, factor)
+    fine_ph = np.linspace(params.ph_min, params.ph_max, n_ph_fine)
+    fine_pe = np.linspace(params.pe_min, params.pe_max, n_pe_fine)
+
+    base_ph = np.linspace(params.ph_min, params.ph_max, params.ph_levels)
+    base_pe = np.linspace(params.pe_min, params.pe_max, params.pe_levels)
+    ph_lookup = {round(float(v), 12): i for i, v in enumerate(base_ph)}
+    pe_lookup = {round(float(v), 12): i for i, v in enumerate(base_pe)}
+
+    collisions = frozenset(params.solid_aqueous_collisions)
+    subset_map = params.phase_names_by_subset
+    job_phases = params.phases
+    solid_set = set(job_phases)
+    subset_list = subsets_for_job(params)
+    pack_steps = count_layer_pack_steps(params)
+    step = 0
+
+    def tick() -> None:
+        nonlocal step
+        step += 1
+        if progress_cb:
+            progress_cb(step, pack_steps)
+
+    common = dict(
+        base_rows=base_rows,
+        params=params,
+        factor=factor,
+        n_ph_fine=n_ph_fine,
+        n_pe_fine=n_pe_fine,
+        fine_ph=fine_ph,
+        fine_pe=fine_pe,
+        base_ph=base_ph,
+        base_pe=base_pe,
+        ph_lookup=ph_lookup,
+        pe_lookup=pe_lookup,
+    )
+
+    mineral_subsets: dict[str, Any] = {}
+    aqueous_subsets: dict[str, Any] = {}
+    if params.layer_solids:
+        for subset in subset_list:
+            key = subset_key(subset)
+            eligible = frozenset(subset_map.get(key, ()))
+            cat_fn = mineral_subset_category_fn(
+                subset=subset,
+                eligible_phases=eligible,
+                job_phases=job_phases,
+                collision_names=collisions,
+                category_mode=mode,  # type: ignore[arg-type]
+            )
+            _layer = trace_layers.get(f"mineral:{key}", {})
+            names_preview = sorted(
+                {cat_fn(r) for r in base_rows}
+                | set(_layer.get("node_cat") or [])
+                | {c for r in (_layer.get("cell_lines") or []) for c in (r["pos"], r["neg"])}
+            )
+            mineral_subsets[key] = _pack_one_layer(
+                layer_nodes=trace_layers.get(f"mineral:{key}", {}),
+                cat_fn=cat_fn,
+                extra={
+                    "elements": list(subset),
+                    "aqueous_names": [
+                        n for n in names_preview
+                        if not label_is_solid(n, solid_set, collisions)
+                    ],
+                },
+                **common,
+            )
+            tick()
+
+    if params.layer_aqueous:
+        for subset in subset_list:
+            key = subset_key(subset)
+
+            def aq_cat_fn(row: dict, s: set[str] = set(subset)) -> str:
+                return dominant_aq_species_subset(row, s)
+
+            aqueous_subsets[key] = _pack_one_layer(
+                layer_nodes=trace_layers.get(f"aqueous:{key}", {}),
+                cat_fn=aq_cat_fn,
+                extra={"elements": list(subset)},
+                **common,
+            )
+            tick()
+
+    stability_segments = (trace_bundle.get("stability_limits") or {}).get("segments") or []
+
+    return {
+        "mode": "traced",
+        "factor": factor,
+        "interpolated": True,
+        "solution_mode": params.solution_mode,
+        "diagram_kind": "assemblage",
+        "mineral_category_mode": mode,
+        "stability_limits": _segments_to_boundary_lines(stability_segments),
+        "layers": {
+            "mineral_subsets": mineral_subsets,
             "aqueous_subsets": aqueous_subsets,
         },
     }
