@@ -555,7 +555,7 @@ Limits (`config.py`):
 | `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed stability edges (looser; env `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE`) |
 | `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N species per element during tracing (env `PHASER_TRACE_TOP_AQ_SPECIES`) |
 | `TOP_AQ_SPECIES_PER_ELEMENT` | 64 | Top-N species per element in the base grid sweep (env `PHASER_TOP_AQ_SPECIES`) |
-| `HOVER_SPECIES_PER_ELEMENT` | 4 | Species kept per element in packed hover data (env `PHASER_HOVER_SPECIES_PER_ELEMENT`) |
+| `HOVER_SPECIES_PER_ELEMENT` | 8 | Species kept per element in packed hover data (env `PHASER_HOVER_SPECIES_PER_ELEMENT`) |
 | `TRACE_CHUNK_MULTIPLIER` | 16 | Worker pool chunking multiplier (env `PHASER_TRACE_CHUNK_MULTIPLIER`) |
 | `TRACE_MIN_CELLS_PER_CHUNK` | 4 | Minimum mixed cells per trace chunk (env `PHASER_TRACE_MIN_CELLS_PER_CHUNK`) |
 | `SWEEP_MAP_CHUNKSIZE` | 200 | `ProcessPoolExecutor.map` chunksize for base grid sweep (env `PHASER_SWEEP_MAP_CHUNKSIZE`) |
@@ -618,7 +618,7 @@ Shared behaviour:
 5. Builds **layers** (only the families requested on the compute job):
    - `solid_subsets` / `mineral_subsets` — category maps (`aqueous_names` lists categories rendered grey in solid/mineral view). Co-stability / moles-tie joins (`"A + B"`) count as solids via `label_is_solid`, so they are **not** in `aqueous_names`.
    - `aqueous_subsets` — aqueous species predominance maps
-6. Packs **`hover_species`** — per grid cell, top `HOVER_SPECIES_PER_ELEMENT` (default 4) species **per element**, stored as `[name, element_moles, element]` so the client can filter to any active element subset.
+6. Packs **`hover_species`** — per grid cell, top `HOVER_SPECIES_PER_ELEMENT` (default 8) species **per element**, stored as `[name, element_moles, element]` so the client can filter to any active element subset and truncate for display.
 
 Mineral packs also set **`mineral_category_mode`** (`moles` | `costability`). The Predominance compute path calls `pack_grid_results`; the Mineral Stability path calls `pack_mineral_grid_results` / `pack_traced_mineral_display` via `services/compute.py` when `solution_mode` is an assemblage mode.
 
@@ -643,6 +643,7 @@ Hover uses an invisible heatmap over the base grid. At each point the tooltip sh
 - In **solid / mineral** view, species are filtered the same way when per-element subsets were computed.
 - With per-element subsets off, all system elements contribute to the hover pool.
 - Multi-element species appear once in the tooltip (deduplicated by name after filtering).
+- The **Hover species** control (Overlays) sets how many aqueous entries are shown (2–8, default 4). The packed grid keeps up to `HOVER_SPECIES_PER_ELEMENT` (default 8) per element so higher UI settings work after a fresh compute; older cached results may only have 4 packed.
 
 Species molalities in hover are PHREEQC's per-element moles (`stoichiometry × species molality`), matching the `SYS` ranking used for predominance.
 
@@ -847,9 +848,11 @@ Display controls describe the **plotted result**, not pending Configuration togg
 | **Fill opacity** | Region fill transparency (default **100%**, range 10–100%). Vector fills and uniform heatmaps; boundary polylines stay opaque |
 | **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%). Slider uses a square curve for finer control near 0%. Threshold is `max(4, floor(n_cells × pct/100))` |
 | **Arrow callout for conflict or small regions** | When on (default), labels that overlap, would cover another tip, or hide their own small patch (≥ ~92% of the visible bbox) shift aside with an arrow when the leader is clear; otherwise they shift without an arrow. When off, all names stay at the region tip (overlap allowed) |
+| **Hover species** | How many aqueous species to list in the plot hover tooltip (default **4**; choices 2 / 4 / 6 / 8). Display-only truncate of packed `hover_species`; new jobs pack up to **8** per element |
+| **System label** | Top-right chemical-system badge (e.g. `Fe-C`): show/hide toggle plus − / value / + font size (default **20** px, range 15–35). Full input system, or the active element subset when per-element filters are on |
+| **Boundary width** | Phase-boundary stroke thickness in px (default **1**, range 0.25–2.5, step 0.25). Stability/gas-limit dashes scale with it; show/hide via **Boundaries** |
 | **Labels only** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
-| **System label** | Top-right badge of the displayed chemical system (e.g. `Fe-C`); full input system, or the active element subset when per-element filters are on |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
 
 **Configuration vs display.** The sidebar **Compute layers** checkboxes set what the next job will pack and trace. The plot panel dropdown and element filter read from the cached result (`layer_solids`, `layer_aqueous`, `layer_elements` in the packed JSON). Toggling layers before recomputing shows the **stale** pill but does not change the plot or its display options until **Compute diagram** finishes.
@@ -1089,7 +1092,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Stability trace tolerance | `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed edge root finding |
 | Trace top-N species | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH species slots during tracing |
 | Grid top-N species | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH species slots in base grid sweep |
-| Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `4` | Species kept per element in packed hover JSON |
+| Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `8` | Species kept per element in packed hover JSON |
 | Sweep map chunksize | `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Points per IPC batch in base grid `pool.map` |
 | Max workers per sweep | `PHASER_MAX_WORKERS` | `8` | ProcessPool size for grid/trace work (server-side; exposed read-only in `/api/config`) |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
