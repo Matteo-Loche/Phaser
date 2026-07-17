@@ -135,17 +135,21 @@ def run_adaptive_boundary_sweep(
         job_id=job_id,
     )
     check_abort(job_id)
+    # Category map / cell prep sits between the grid pool and the trace pool;
+    # keep abort responsive during this gap (and before workers respawn).
     base_by_key = {_point_key(r.ph, r.pe): r for r in base_rows}
 
     signature = layer_signature_fn(params)
     categories = np.empty((n_pe, n_ph), dtype=object)
     base_result_ij: dict[tuple[int, int], GridPointResult] = {}
     for j in range(n_pe):
+        check_abort(job_id)
         for i in range(n_ph):
             row = base_by_key[_point_key(float(base_ph[i]), float(base_pe[j]))]
             categories[j, i] = signature(asdict(row))
             base_result_ij[(i, j)] = row
 
+    check_abort(job_id)
     cells = boundary_base_cells(categories)
 
     from .gas_limits import trace_gas_limit_segments

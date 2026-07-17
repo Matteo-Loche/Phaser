@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -115,7 +116,11 @@ def running_jobs_past_deadline(
     *,
     limit_sec: int | None = None,
 ) -> list[str]:
-    """Return job_ids of ``running`` jobs whose ``started_at`` exceeds the wall limit."""
+    """Return job_ids of ``running`` jobs whose ``started_at`` exceeds the wall limit.
+
+    Only jobs with ``wall_timeout_armed`` (PHREEQC compute in progress) are
+    considered. Setup, packing, and stats are outside the wall clock.
+    """
     now = now or _utcnow()
     limit = int(limit_sec if limit_sec is not None else config.JOB_WALL_TIMEOUT_SEC)
     overdue: list[str] = []
@@ -123,7 +128,9 @@ def running_jobs_past_deadline(
         for job_id, job in _jobs.items():
             if job.get("status") != "running":
                 continue
-            started = _parse_dt(job.get("started_at"))
+            if not job.get("wall_timeout_armed"):
+                continue
+            started = _parse_dt(job.get("compute_started_at") or job.get("started_at"))
             age = _age_seconds(started, now)
             if age is not None and age > limit:
                 overdue.append(job_id)
@@ -336,6 +343,30 @@ def run_compute_job(job_id: str, body: ComputeRequest) -> None:
 def _run_job_wrapper(job_id: str, body: ComputeRequest) -> None:
     global _running_count
     t0 = time.perf_counter()
+    try:
+        with _jobs_lock:
+            alive = job_id in _jobs
+        if alive:
+            _run_job(job_id, body, started_at_perf=t0)
+    finally:
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["wall_timeout_armed"] = False
+        clear_job_control(job_id)
+        with _jobs_lock:
+            _running_count = max(0, _running_count - 1)
+        _try_dispatch()
+
+
+@contextmanager
+def _wall_timeout_guard(job_id: str):
+    """Arm the wall clock only around PHREEQC grid + tracing.
+
+    Setup (DB/catalog), packing, and stats recording stay outside the limit so a
+    finished compute cannot time out while the diagram is being packed. Client
+    DELETE abort still works via ``check_abort`` in packing progress ticks.
+    """
     limit = max(1, int(config.JOB_WALL_TIMEOUT_SEC))
     timer = threading.Timer(
         limit,
@@ -347,18 +378,20 @@ def _run_job_wrapper(job_id: str, body: ComputeRequest) -> None:
         ),
     )
     timer.daemon = True
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job["wall_timeout_armed"] = True
+            job["compute_started_at"] = _utcnow().isoformat()
     timer.start()
     try:
-        with _jobs_lock:
-            alive = job_id in _jobs
-        if alive:
-            _run_job(job_id, body, started_at_perf=t0)
+        yield
     finally:
         timer.cancel()
-        clear_job_control(job_id)
         with _jobs_lock:
-            _running_count = max(0, _running_count - 1)
-        _try_dispatch()
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["wall_timeout_armed"] = False
 
 
 def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> None:
@@ -443,43 +476,45 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
         assemblage = config.is_assemblage_mode(body.solution_mode)
         category_mode = body.mineral_category_mode
 
-        if body.adaptive_boundaries:
-            if assemblage:
-                pack_params, adapt_stats, base_results, trace_bundle = (
-                    run_adaptive_mineral_stability_sweep(
-                        params,
-                        max_workers=config.MAX_WORKERS,
-                        progress_cb=progress,
-                        refine_factor=body.adaptive_refine_factor,
-                        job_id=job_id,
-                        category_mode=category_mode,
+        # Wall clock covers PHREEQC work only (grid → end of boundary tracing).
+        with _wall_timeout_guard(job_id):
+            if body.adaptive_boundaries:
+                if assemblage:
+                    pack_params, adapt_stats, base_results, trace_bundle = (
+                        run_adaptive_mineral_stability_sweep(
+                            params,
+                            max_workers=config.MAX_WORKERS,
+                            progress_cb=progress,
+                            refine_factor=body.adaptive_refine_factor,
+                            job_id=job_id,
+                            category_mode=category_mode,
+                        )
                     )
-                )
+                else:
+                    pack_params, adapt_stats, base_results, trace_bundle = (
+                        run_adaptive_boundary_sweep(
+                            params,
+                            max_workers=config.MAX_WORKERS,
+                            progress_cb=progress,
+                            refine_factor=body.adaptive_refine_factor,
+                            job_id=job_id,
+                        )
+                    )
+                compute_mode = "adaptive"
             else:
-                pack_params, adapt_stats, base_results, trace_bundle = (
-                    run_adaptive_boundary_sweep(
-                        params,
-                        max_workers=config.MAX_WORKERS,
-                        progress_cb=progress,
-                        refine_factor=body.adaptive_refine_factor,
-                        job_id=job_id,
-                    )
+                results, mask_stats = run_grid_sweep(
+                    params,
+                    max_workers=config.MAX_WORKERS,
+                    progress_cb=progress,
+                    job_id=job_id,
                 )
-            compute_mode = "adaptive"
-        else:
-            results, mask_stats = run_grid_sweep(
-                params,
-                max_workers=config.MAX_WORKERS,
-                progress_cb=progress,
-                job_id=job_id,
-            )
-            pack_params = params
-            adapt_stats = dict(mask_stats)
-            base_results = results
-            trace_bundle = None
-            compute_mode = "uniform"
+                pack_params = params
+                adapt_stats = dict(mask_stats)
+                base_results = results
+                trace_bundle = None
+                compute_mode = "uniform"
+            check_abort(job_id)
 
-        check_abort(job_id)
         rows = [asdict(r) for r in base_results]
         pack_layers = count_layer_pack_steps(pack_params)
         # Adaptive jobs pack the base hover grids and then the traced vector
@@ -617,3 +652,19 @@ def _reset_runtime_state_for_tests() -> None:
         _jobs.clear()
         _pending = deque()
         _running_count = 0
+
+
+def runtime_snapshot_for_tests() -> dict[str, Any]:
+    """Queue / running-slot snapshot for assertions (unit tests only)."""
+    with _jobs_lock:
+        return {
+            "running_count": _running_count,
+            "pending": [job_id for job_id, _ in _pending],
+            "jobs": {
+                job_id: {
+                    "status": job.get("status"),
+                    "error_code": job.get("error_code"),
+                }
+                for job_id, job in _jobs.items()
+            },
+        }

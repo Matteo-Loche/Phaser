@@ -7,6 +7,7 @@ concurrent job slot forever.
 """
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import signal
 import threading
@@ -48,10 +49,13 @@ def register_cancel_event(job_id: str) -> threading.Event:
 
 
 def clear_job_control(job_id: str) -> None:
+    """Drop cancel/pool registry entries for ``job_id``, terminating any leftover pool."""
     with _lock:
         _cancel_events.pop(job_id, None)
         _abort_meta.pop(job_id, None)
-        _pools.pop(job_id, None)
+        pool = _pools.pop(job_id, None)
+    if pool is not None:
+        terminate_pool(pool)
 
 
 def bind_pool(job_id: str, pool: ProcessPoolExecutor) -> None:
@@ -64,6 +68,27 @@ def unbind_pool(job_id: str, pool: ProcessPoolExecutor | None = None) -> None:
         current = _pools.get(job_id)
         if pool is None or current is pool:
             _pools.pop(job_id, None)
+
+
+def job_control_snapshot_for_tests() -> dict[str, Any]:
+    """Registry contents for assertions (unit tests only)."""
+    with _lock:
+        return {
+            "cancel_events": sorted(_cancel_events),
+            "pools": sorted(_pools),
+            "abort_meta": {k: v for k, v in _abort_meta.items()},
+        }
+
+
+def reset_job_control_for_tests() -> None:
+    """Terminate any bound pools and clear abort registry (unit tests only)."""
+    with _lock:
+        pools = list(_pools.values())
+        _cancel_events.clear()
+        _abort_meta.clear()
+        _pools.clear()
+    for pool in pools:
+        terminate_pool(pool)
 
 
 def is_abort_requested(job_id: str | None) -> bool:
@@ -256,6 +281,18 @@ def iter_futures_abortable(
             yield fut, futures_map[fut]
 
 
+def _shutdown_pool(pool: ProcessPoolExecutor, *, wait: bool) -> None:
+    try:
+        pool.shutdown(wait=wait, cancel_futures=not wait)
+    except TypeError:
+        try:
+            pool.shutdown(wait=wait)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 @contextmanager
 def managed_process_pool(
     job_id: str | None,
@@ -263,37 +300,32 @@ def managed_process_pool(
 ) -> Iterator[ProcessPoolExecutor]:
     """``ProcessPoolExecutor`` that binds/unbinds for hard-kill by ``job_id``.
 
-    Shutdown is managed manually so an aborted pool is not blocked on
-    ``shutdown(wait=True)`` waiting for hanged workers.
+    The pool stays bound until shutdown finishes so a wall-timeout abort can still
+    ``terminate_pool`` while we are inside ``shutdown(wait=True)``. Unbinding first
+    left the job thread stuck forever with ``_running_count`` held, so queued jobs
+    never started after a timeout.
     """
-    pool = ProcessPoolExecutor(**executor_kwargs)
+    kwargs = dict(executor_kwargs)
+    # Prefer spawn so workers do not inherit the server listen socket (a killed
+    # parent can otherwise leave an orphan worker holding :8765 on Linux fork).
+    if "mp_context" not in kwargs:
+        kwargs["mp_context"] = mp.get_context("spawn")
+    pool = ProcessPoolExecutor(**kwargs)
     if job_id:
         bind_pool(job_id, pool)
-    aborted = False
     try:
         yield pool
     finally:
-        if job_id:
-            aborted = is_abort_requested(job_id)
-            unbind_pool(job_id, pool)
-        if aborted:
-            terminate_pool(pool)
-            try:
-                pool.shutdown(wait=False, cancel_futures=True)
-            except TypeError:
-                try:
-                    pool.shutdown(wait=False)
-                except Exception:
-                    pass
-            except Exception:
-                pass
-        else:
-            try:
-                pool.shutdown(wait=True, cancel_futures=False)
-            except TypeError:
-                try:
-                    pool.shutdown(wait=True)
-                except Exception:
-                    pass
-            except Exception:
-                pass
+        try:
+            if job_id and is_abort_requested(job_id):
+                terminate_pool(pool)
+                _shutdown_pool(pool, wait=False)
+            else:
+                # Keep pool bound: abort timer may kill workers mid-join.
+                _shutdown_pool(pool, wait=True)
+                if job_id and is_abort_requested(job_id):
+                    terminate_pool(pool)
+                    _shutdown_pool(pool, wait=False)
+        finally:
+            if job_id:
+                unbind_pool(job_id, pool)

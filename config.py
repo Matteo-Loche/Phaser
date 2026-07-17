@@ -307,7 +307,8 @@ JOB_RESULT_TTL_SEC = int(os.environ.get("PHASER_JOB_RESULT_TTL_SEC", "3600"))
 # Queued jobs that were never polled are removed (abandoned tab / never returned).
 JOB_QUEUE_TTL_SEC = int(os.environ.get("PHASER_JOB_QUEUE_TTL_SEC", "7200"))
 JOB_REAPER_INTERVAL_SEC = int(os.environ.get("PHASER_JOB_REAPER_INTERVAL_SEC", "60"))
-# Hard wall-clock limit once a job is running (not including queue wait).
+# Hard wall-clock limit for PHREEQC compute only (base grid + boundary tracing).
+# Does not include queue wait, DB/catalog setup, packing, or stats persistence.
 # Exceeding this terminates ProcessPool workers and frees the concurrent slot.
 JOB_WALL_TIMEOUT_SEC = int(os.environ.get("PHASER_JOB_WALL_TIMEOUT_SEC", "300"))
 

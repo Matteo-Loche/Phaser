@@ -15,6 +15,8 @@
       --bg: #0f1419;
       --panel: #1a2332;
       --panel-2: #131c29;
+      /* Side columns only — darker than header (--panel), slightly lifted from plot (--bg). */
+      --panel-side: #141d28;
       --border: #2d3a4d;
       --text: #e8eef5;
       --muted: #8b9cb3;
@@ -25,6 +27,7 @@
       --err: #ff6b6b;
 
       --space: clamp(0.6rem, 0.4rem + 0.6vw, 1rem);
+      --panel-pad: clamp(0.45rem, 0.32rem + 0.45vw, 0.72rem);
       --radius: 10px;
       --sidebar-w: clamp(320px, 30vw, 420px);
       --header-h: 64px;
@@ -35,7 +38,7 @@
     }
     @media (prefers-color-scheme: light) {
       :root {
-        --bg: #eef2f7; --panel: #ffffff; --panel-2: #f4f7fb; --border: #d3dceb;
+        --bg: #eef2f7; --panel: #ffffff; --panel-2: #f4f7fb; --panel-side: #e4eaf2; --border: #d3dceb;
         --text: #16202e; --muted: #5a6b82; --accent: #1f6fd6; --accent-dim: #cfe2fb;
       }
     }
@@ -76,6 +79,9 @@
       padding: 0.2rem 0.45rem;
       border-radius: 8px;
       border: 1px solid var(--border);
+      overflow: hidden; /* glow / skew must stay inside the dark box */
+      flex: none;
+      max-width: 100%;
     }
     header .brand.is-computing {
       border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
@@ -84,12 +90,15 @@
     header .brand-logo-wrap {
       height: clamp(34px, 6vw, 52px);
       width: auto;
+      max-width: 100%;
       display: block;
       line-height: 0;
+      overflow: hidden;
     }
     header .brand-logo-wrap svg {
       height: 100%;
       width: auto;
+      max-width: 100%;
       display: block;
     }
     @keyframes phaserBarOn {
@@ -125,6 +134,36 @@
     .header-compute { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
     .header-compute .btn { white-space: nowrap; }
     .btn-short { display: none; }
+    /* Compute | progress | status (status stays to the right of the bar). */
+    .header-job-slot {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55rem;
+      min-width: 0;
+      max-width: min(42vw, 420px);
+    }
+    .header-queue {
+      display: none;
+      align-items: center;
+      max-width: 100%;
+      padding: 0.2rem 0.55rem;
+      border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--warn) 12%, var(--panel-2));
+      color: var(--warn);
+      font-size: 0.78rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .header-job-slot[data-mode="queued"] .header-queue { display: inline-flex; }
+    .header-job-slot[data-mode="queued"] .progress { display: none !important; }
+    /* Wide/mid: classic status line; compact queue pill is mobile-only. */
+    @media (min-width: 901px) {
+      .header-queue { display: none !important; }
+      .header-job-slot[data-mode="queued"] .header-status { display: inline; }
+    }
 
     /* Spectrum progress bar — skewed parallelogram echoing the PHASER logo bars,
        running blue → red (logo palette with the violet end trimmed). */
@@ -264,8 +303,10 @@
     .mode-panel { min-width: 0; min-height: 0; flex: 1; }
     #phaseDiagramMain {
       flex-direction: row;
-      padding: var(--space);
-      gap: var(--space);
+      /* No outer padding/gap: the right options column must sit flush against
+         the plot resizer (mirrors aside | sidebar-resizer on the left). */
+      padding: 0;
+      gap: 0;
     }
     /* Only the active mode's panel is shown. The app always carries a mode-*
        class, so these explicit rules win over any flex display on .mode-panel. */
@@ -398,23 +439,20 @@
     .stats-about-badges a { display: inline-flex; line-height: 0; }
     .stats-about-badges img { height: 22px; }
 
-    /* Narrow screens: hide the wordy status, but keep the progress bar visible
-       by compacting the button (short label) and shrinking the bar. */
+    /* Narrow screens: hide the wordy phase label beside the bar, but keep final
+       reports / queue text via the job-slot modes below. */
     @media (max-width: 760px) {
-      .header-status { display: none; }
+      .header-job-slot[data-mode="running"] .header-status { display: none; }
     }
     @media (max-width: 560px) {
       .btn-full { display: none; }
       .btn-short { display: inline; }
-      .progress { width: clamp(72px, 30vw, 150px); }
+      .progress { width: clamp(88px, 36vw, 160px); flex: 1 1 auto; min-width: 0; }
       .db-label-full { display: none; }
       .db-label-short { display: inline; }
     }
-    /* Mid + narrow: a single flex row crops/overlaps once the logo, mode
-       switcher, compute group and database all compete for width. Adopt a
-       two-row grid relatively early so the mode switcher drops neatly under the
-       logo, while the compute button stays on the top row next to the logo and
-       database (which is pinned top-right). */
+    /* Mid + narrow: two-row header so mode drops under the logo while compute
+       stays on row 1. Job slot joins the mode row only at ≤900px. */
     @media (max-width: 1280px) {
       header {
         display: grid;
@@ -425,15 +463,16 @@
         row-gap: 0.4rem;
         padding-top: 0.4rem;
         padding-bottom: 0.4rem;
-        grid-template-columns: auto auto auto 1fr auto;
+        grid-template-columns: auto auto auto minmax(0, 1fr) auto;
         grid-template-areas:
-          "menu brand compute .    db"
+          "menu brand compute job db"
           "mode mode  mode    mode mode";
       }
       header #menuBtn { grid-area: menu; }
       header .brand { grid-area: brand; }
       header .mode-switcher { grid-area: mode; justify-self: start; }
       header .header-compute { grid-area: compute; justify-self: start; }
+      header .header-job-slot { grid-area: job; justify-self: start; max-width: 100%; }
       header .header-db { grid-area: db; justify-self: end; }
       header .spacer { display: none; }
       .app { grid-template-rows: auto 1fr; }
@@ -441,12 +480,55 @@
       .brand-logo-wrap { height: 40px; }
       .mode-btn { max-width: clamp(150px, 45vw, 360px); }
     }
-    /* Narrow screens: the DB selector lives in the left drawer to save header
-       space; only the status dot stays in the header (tap it to open controls). */
+    /* Mobile / drawer: mode left, job slot (queue → bar → report) on the right. */
     @media (max-width: 900px) {
+      header {
+        grid-template-columns: auto auto 1fr auto;
+        grid-template-areas:
+          "menu brand compute db";
+      }
+      header .mode-switcher {
+        grid-row: 2;
+        grid-column: 1 / -1;
+        justify-self: start;
+        max-width: 100%;
+      }
+      header .mode-btn {
+        max-width: clamp(150px, 44vw, 360px);
+        width: auto;
+      }
+      header .header-job-slot {
+        grid-row: 2;
+        grid-column: 1 / -1;
+        justify-self: end;
+        width: auto;
+        max-width: min(58vw, 220px);
+      }
+      /* One shared slot: queue indicator, then progress, then Done/error report. */
+      .header-job-slot[data-mode="running"] .header-status { display: none; }
+      .header-job-slot[data-mode="queued"] .header-status { display: none; }
+      .header-job-slot[data-mode="idle"] .header-status {
+        display: inline;
+        max-width: 100%;
+      }
+      .header-job-slot[data-mode="idle"] .progress { display: none !important; }
+      .header-queue {
+        max-width: 100%;
+        font-size: 0.72rem;
+        padding: 0.18rem 0.45rem;
+      }
+      header .progress {
+        width: clamp(88px, 36vw, 160px);
+        max-width: 100%;
+        min-width: 0;
+      }
+      header .progress[hidden] {
+        display: none;
+      }
       .header-db select { display: none; }
       .db-dot { cursor: pointer; width: 13px; height: 13px; }
-      .brand-logo-wrap { height: 34px; }
+      .brand-logo-wrap { height: 32px; }
+      header .brand { padding: 0.15rem 0.35rem; }
     }
     /* Wide screens: the selector sits in the header, so the sidebar's own
        Database card is redundant and hidden. */
@@ -463,14 +545,14 @@
 
     aside {
       grid-area: sidebar;
-      background: var(--panel);
+      background: var(--panel-side);
       border-right: 1px solid var(--border);
       overflow-y: auto;
       overscroll-behavior: contain;
-      padding: var(--space);
+      padding: var(--panel-pad);
       display: flex;
       flex-direction: column;
-      gap: var(--space);
+      gap: var(--panel-pad);
     }
     main { min-width: 0; min-height: 0; }
 
@@ -680,8 +762,14 @@
     .status.ok { color: var(--ok); } .status.err { color: var(--err); }
     progress { width: 100%; height: 8px; }
 
-    .toggle { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; }
-    .toggle input { width: 18px; height: 18px; }
+    .toggle {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+      column-gap: 0.5rem;
+      cursor: pointer;
+    }
+    .toggle input { width: 18px; height: 18px; margin-top: 0.1rem; }
 
     /* Soft scrollbars: thin, muted, visible on hover or while scrolling. */
     .soft-scroll {
@@ -712,17 +800,33 @@
     }
 
     /* ---------- Plot ---------- */
-    /* Plotting options live in a resizable column on the right of the diagram. */
+    /* Plotting options live in a resizable column on the right of the diagram.
+       Match the left sidebar: same panel fill, same padding/gap, soft-scroll
+       thumb, scrollbar on the inner edge flush with the resizer. */
     .plot-toolbar {
       flex: none;
       width: var(--plot-panel-w);
       display: flex;
       flex-direction: column;
       align-items: stretch;
-      gap: 0.55rem;
+      align-self: stretch;
+      gap: var(--panel-pad);
+      padding: var(--panel-pad);
+      box-sizing: border-box;
+      background: var(--panel-side);
+      overflow-x: hidden;
       overflow-y: auto;
       overscroll-behavior: contain;
       min-width: 0;
+      min-height: 0;
+      /* Scrollbar on the inner (left) edge, against the plot resizer. */
+      direction: rtl;
+    }
+    /* Do not let cards shrink to fit: that crops open submenus (overflow:hidden
+       on .disp-card) instead of scrolling the panel. Content stays LTR. */
+    .plot-toolbar > * {
+      flex-shrink: 0;
+      direction: ltr;
     }
     .plot-toolbar > label { margin-bottom: 0; }
     .plot-toolbar .disp-select {
@@ -737,6 +841,9 @@
     }
     .disp-card {
       min-width: 0;
+      max-width: 100%;
+      overflow: hidden; /* keep controls inside the card border */
+      box-sizing: border-box;
     }
     .plot-toolbar .disp-card > summary {
       padding: 0.55rem 0.65rem;
@@ -745,24 +852,35 @@
     .plot-toolbar .disp-card .body {
       padding: 0 0.65rem 0.65rem;
       gap: 0.45rem;
+      min-width: 0;
+      max-width: 100%;
     }
     .disp-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
       gap: 0.45rem;
       font-size: 0.78rem;
       color: var(--muted);
       min-width: 0;
+      max-width: 100%;
     }
-    .disp-row > label { margin-bottom: 0; flex: none; }
-    .disp-row .disp-select { width: auto; flex: 1; min-width: 0; }
+    .disp-row > label {
+      margin-bottom: 0;
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .disp-row .disp-select { width: auto; flex: 1 1 5rem; min-width: 0; }
     .disp-subset {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       gap: 0.3rem 0.5rem;
       font-size: 0.78rem;
+      min-width: 0;
+      max-width: 100%;
     }
     .disp-slider {
       display: flex;
@@ -771,29 +889,41 @@
       font-size: 0.78rem;
       color: var(--muted);
       min-width: 0;
+      max-width: 100%;
       width: 100%;
+      box-sizing: border-box;
     }
     .disp-slider-head {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
       gap: 0.4rem;
+      min-width: 0;
+      max-width: 100%;
     }
-    .disp-slider-head label { margin-bottom: 0; }
+    .disp-slider-head label {
+      margin-bottom: 0;
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow-wrap: anywhere;
+    }
     .disp-slider input[type="range"],
     input.disp-slider-range {
       width: 100%;
       min-width: 0;
+      max-width: 100%;
       height: var(--tap);
       margin: 0;
       accent-color: var(--accent);
       cursor: pointer;
+      box-sizing: border-box;
     }
     .disp-slider .disp-val {
-      flex: none;
+      flex: 0 0 auto;
       font-variant-numeric: tabular-nums;
       color: var(--text);
       font-size: 0.78rem;
+      white-space: nowrap;
     }
     .disp-stepper {
       display: inline-flex;
@@ -839,6 +969,10 @@
       font-size: 0.78rem;
       margin: 0;
     }
+    .plot-toolbar .toggle {
+      max-width: 100%;
+      min-width: 0;
+    }
     .plot-toolbar .spacer { min-height: 0.25rem; }
     .plot-toolbar > .meta {
       margin-top: auto;
@@ -850,9 +984,12 @@
       flex: 1; min-width: 0; min-height: 0;
       display: flex; align-items: center; justify-content: center;
       overflow: hidden;
+      padding: var(--space);
+      box-sizing: border-box;
     }
 
     /* ---------- Plot panel resizer ---------- */
+    /* Same strip as .sidebar-resizer: flush between plot and options column. */
     .plot-resizer {
       flex: none;
       width: 8px;
@@ -860,8 +997,8 @@
       position: relative;
       cursor: col-resize;
       background: var(--border);
-      border-radius: 999px;
       touch-action: none;
+      z-index: 25;
     }
     .plot-resizer::after {
       content: "";
@@ -874,8 +1011,9 @@
     }
     .plot-resizer:hover { background: var(--accent-dim); }
     .plot-resizer:hover::after { background: var(--accent); opacity: 1; }
-    /* Prefer square; JS (fitPlotBox) relaxes up to a 1:1.2 ratio so the plot
-       resizes instead of shrinking too much in narrow/short containers. */
+    /* Prefer square; JS (fitPlotBox) relaxes past square so the plot resizes
+       instead of shrinking in narrow/short containers: up to 1:1.2 when the
+       container is taller than wide, but only 1.1:1 when it is wider than tall. */
     .plot-square {
       position: relative;
       aspect-ratio: 1 / 1;
@@ -898,23 +1036,37 @@
         max-width: 100%;
         flex-direction: row;
         flex-wrap: wrap;
-        align-items: stretch;
+        /* Top-align so a collapsed card doesn't stretch to match an open
+           neighbour on the same wrap line (avoids big empty boxes). */
+        align-items: flex-start;
+        align-self: auto;
         gap: 0.45rem;
-        overflow: visible;
-        padding-bottom: 0.15rem;
+    /* Cap height and scroll so open submenus never crop off-screen. */
+        max-height: min(50vh, 22rem);
+        overflow-x: hidden;
+        overflow-y: auto;
+        /* LTR so wrapped cards read left→right (desktop column uses RTL only
+           to park the scrollbar against the resizer). */
+        direction: ltr;
+        border-bottom: 1px solid var(--border);
       }
+      /* Prefer wrapping to a new row over crushing content past the border.
+         ~14rem is enough for steppers + long toggle labels. */
       .plot-toolbar .disp-card {
-        flex: 1 1 11.5rem;
+        align-self: flex-start;
+        flex: 1 1 14rem;
+        min-width: min(100%, 13rem);
         max-width: 100%;
       }
       .plot-toolbar .disp-card-display {
-        flex: 1 1 14rem;
+        flex: 1 1 15rem;
       }
+      /* Keep overlays stacked in the card; row layout only helps when the
+         card is full-width and was causing overflow in the multi-column bar. */
       .plot-toolbar .disp-toggles[open] .body {
-        flex-direction: row;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 0.35rem 0.75rem;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0.4rem;
       }
       .plot-toolbar .spacer { display: none; }
       .plot-toolbar > .meta {
@@ -926,13 +1078,26 @@
       .plot-toolbar > .pill {
         flex: 1 1 100%;
       }
-      .disp-slider input[type="range"] {
-        min-width: 6rem;
+      /* Slightly smaller steppers so Size / System label / Boundary fit. */
+      .plot-toolbar .disp-stepper button {
+        min-width: 2.2rem;
+        min-height: 2.2rem;
+      }
+      .plot-toolbar .disp-stepper input[type="number"] {
+        width: 2.4rem;
+        min-height: 2.2rem;
+      }
+    }
+    /* Tablets get a bit more vertical room for the stacked options bar. */
+    @media (min-width: 901px) and (max-width: 1280px) {
+      .plot-toolbar {
+        max-height: min(55vh, 28rem);
       }
     }
     @media (max-width: 560px) {
       .plot-toolbar {
         gap: 0.4rem;
+        max-height: min(45vh, 20rem);
       }
       .plot-toolbar .disp-card {
         flex: 1 1 100%;
@@ -1032,6 +1197,9 @@
       </div>
       <div class="header-compute" id="headerCompute">
         <button class="btn" id="computeBtn"><span class="btn-full">Compute diagram</span><span class="btn-short">Run</span></button>
+      </div>
+      <div class="header-job-slot" id="headerJobSlot" data-mode="idle">
+        <span class="header-queue" id="queueMsg" hidden></span>
         <div class="progress" id="progressBar" hidden>
           <div class="progress-fill" id="progressFill"></div>
           <span class="progress-text" id="progressText"></span>
@@ -2626,6 +2794,29 @@
       el.className = "header-status" + (kind ? " " + kind : "");
     }
 
+    function setJobSlotMode(mode) {
+      const slot = $("headerJobSlot");
+      if (slot) slot.dataset.mode = mode || "idle";
+      const queue = $("queueMsg");
+      if (!queue) return;
+      if (mode === "queued") {
+        queue.hidden = false;
+      } else {
+        queue.hidden = true;
+        queue.textContent = "";
+        queue.title = "";
+      }
+    }
+
+    function setQueueMessage(msg) {
+      const queue = $("queueMsg");
+      if (!queue) return;
+      const text = msg || "";
+      queue.textContent = text;
+      queue.title = text;
+      queue.hidden = !text;
+    }
+
     // Spectrum progress bar with the percent shown inside the fill.
     const Progress = {
       show() { const el = $("progressBar"); if (el) el.hidden = false; },
@@ -2655,7 +2846,8 @@
     };
 
     // One continuous 0–100% bar across server phases → download/cache/render.
-    // Queued jobs show status text only (no progress bar).
+    // Queued: compact queue indicator. Running: progress (+ phase text on wide).
+    // Idle/done: status report sits where the bar was on mobile.
     const JobProgress = (() => {
       const ADAPTIVE = [
         { id: "grid", start: 0, end: 20 },
@@ -2699,10 +2891,15 @@
         const f = Math.max(0, Math.min(1, fraction ?? 0));
         return s.start + f * (s.end - s.start);
       }
-      function setQueued(statusOverride) {
+      function setQueued(statusOverride, shortOverride) {
         Progress.hide();
         const raw = statusOverride || "Queued";
         const msg = raw.endsWith("…") ? raw : raw + "…";
+        const shortRaw = shortOverride || "Queued…";
+        const shortMsg = shortRaw.endsWith("…") ? shortRaw : shortRaw + "…";
+        setJobSlotMode("queued");
+        // Compact pill for the mobile job slot; full text for wide/mid status.
+        setQueueMessage(shortMsg);
         setStatus(msg, "warn");
       }
       function setPhase(id, fraction, statusOverride) {
@@ -2711,6 +2908,7 @@
           return;
         }
         const label = statusOverride || LABELS[id] || LABELS[phaseId(id)] || id;
+        setJobSlotMode("running");
         Progress.show();
         if (fraction == null) Progress.set(null);
         else Progress.set(toGlobal(id, fraction));
@@ -2719,9 +2917,11 @@
       function finish() {
         Progress.set(100);
         Progress.hide();
+        setJobSlotMode("idle");
       }
       function fail() {
         Progress.hide();
+        setJobSlotMode("idle");
       }
       return { begin, setQueued, setPhase, finish, fail };
     })();
@@ -3383,9 +3583,12 @@
       try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(next)); } catch (e) {}
     }
 
-    // Size the plot box toward square, but allow up to a 1:1.2 ratio so it grows
-    // to fill the container instead of shrinking to a small strict square.
-    const SQUARE_TOLERANCE = 1.2;
+    // Size the plot box toward square, but allow it to grow past square so it
+    // fills the container instead of shrinking to a small strict square.
+    // Horizontal (wide) is capped tighter than vertical (tall): a very wide
+    // container should not produce a stretched-looking diagram.
+    const SQUARE_TOLERANCE_V = 1.2; // container taller than wide (h/w max)
+    const SQUARE_TOLERANCE_H = 1.1; // container wider than tall (w/h max)
     function fitPlotBox() {
       const wrap = document.querySelector(".plot-wrap");
       const box = document.querySelector(".plot-square");
@@ -3395,10 +3598,10 @@
       let w, h;
       if (W <= H) {
         w = W;
-        h = Math.min(H, W * SQUARE_TOLERANCE);
+        h = Math.min(H, W * SQUARE_TOLERANCE_V);
       } else {
         h = H;
-        w = Math.min(W, H * SQUARE_TOLERANCE);
+        w = Math.min(W, H * SQUARE_TOLERANCE_H);
       }
       box.style.width = Math.floor(w) + "px";
       box.style.height = Math.floor(h) + "px";
@@ -4074,7 +4277,11 @@
         : null;
       runtime.computeStartedAt = null;
       const modeLabel = MODES[jobModeId]?.label || jobModeId;
-      setStatus(`Done · ${modeLabel} · ${formatCount(runs)} runs${dur ? ` · ${dur}` : ""}`, "ok");
+      // Mobile job slot is narrow: drop the mode label and duration.
+      const report = isMobileHeader()
+        ? `Done · ${formatCount(runs)} runs`
+        : `Done · ${modeLabel} · ${formatCount(runs)} runs${dur ? ` · ${dur}` : ""}`;
+      setStatus(report, "ok");
     }
 
     /* ---------------- compute ---------------- */
@@ -4170,7 +4377,7 @@
         saveActiveJob(start.job_id, cacheKey, modeId);
         if (start.status === "queued") {
           const q = queueStatusText(start) || "Queued…";
-          JobProgress.setQueued(q.replace(/…$/, ""));
+          JobProgress.setQueued(q.replace(/…$/, ""), (queueShortText(start) || "Queued").replace(/…$/, ""));
           setLogoComputing(true, q);
         }
         pollJob(start.job_id, cacheKey, modeId);
@@ -4187,12 +4394,25 @@
       return computeDiagram("phase-diagram");
     }
 
+    function isMobileHeader() {
+      try { return window.matchMedia("(max-width: 900px)").matches; }
+      catch (_) { return false; }
+    }
+
     function queueStatusText(st) {
       const pos = st.queue_position;
       if (pos == null) return null;
       const size = st.queue_size ?? pos;
       if (size <= 1) return "Queued — waiting for a compute slot…";
       return `Queued — position ${pos} of ${size}`;
+    }
+
+    // Compact variant for the mobile job-slot pill: "Queued 2/3" or "Queued…".
+    function queueShortText(st) {
+      const pos = st.queue_position;
+      if (pos == null) return null;
+      const size = st.queue_size ?? pos;
+      return size <= 1 ? "Queued…" : `Queued ${pos}/${size}`;
     }
 
     function formatDurationLabel(sec) {
@@ -4238,7 +4458,7 @@
           if (epoch !== runtime.pollEpoch) return;
           if (st.status === "queued") {
             const q = queueStatusText(st) || "Queued…";
-            JobProgress.setQueued(q.replace(/…$/, ""));
+            JobProgress.setQueued(q.replace(/…$/, ""), (queueShortText(st) || "Queued").replace(/…$/, ""));
             setLogoComputing(true, q);
             return;
           }
@@ -4297,7 +4517,14 @@
           const msg = st.status === "queued"
             ? (queueStatusText(st) || "Resuming queued job…")
             : "Resuming compute after page reload…";
-          setStatus(msg, "warn");
+          if (st.status === "queued") {
+            JobProgress.setQueued(
+              msg.replace(/…$/, ""),
+              (queueShortText(st) || "Queued").replace(/…$/, "")
+            );
+          } else {
+            setStatus(msg, "warn");
+          }
           $("computeBtn").disabled = true;
           pollJob(rec.jobId, rec.cacheKey, jobModeId);
           return true;
@@ -5234,7 +5461,7 @@
       Plotly.react("plotDiv", traces, layout, {
         responsive: true, displaylogo: false,
         toImageButtonOptions: { format: "png", filename: "phase_diagram", scale: 2 },
-      });
+      }).then(() => clearPlotHover(), () => {});
       const mode = adaptiveStatusSuffix(result);
       $("plotMeta").textContent =
         `${result.n_converged}/${result.n_total} converged · ${(vectorLayer || layer).label} · T=${result.temp_c} °C${mode}`;
@@ -5321,9 +5548,49 @@
     function initDispCards() {
       const toolbar = document.querySelector(".plot-toolbar");
       if (!toolbar) return;
-      toolbar.querySelectorAll("details.disp-card").forEach(el => {
-        el.addEventListener("toggle", () => triggerPlotResize(), { passive: true });
+      const cards = [...toolbar.querySelectorAll("details.disp-card")];
+      // Phones only: one open display submenu at a time (saves vertical space).
+      // Tablets keep multi-open and rely on the panel's own scrollbar instead.
+      const accordion = () => {
+        try { return window.matchMedia("(max-width: 900px)").matches; }
+        catch (_) { return false; }
+      };
+      cards.forEach(el => {
+        el.addEventListener("toggle", () => {
+          if (el.open && accordion()) {
+            for (const other of cards) {
+              if (other !== el && other.open) other.open = false;
+            }
+          }
+          triggerPlotResize();
+        });
       });
+    }
+
+    /** Clear sticky Plotly hover labels (touch leaves them until another plot tap). */
+    function clearPlotHover() {
+      const gd = document.getElementById("plotDiv");
+      if (!gd || !window.Plotly || !gd.data) return;
+      try {
+        if (Plotly.Fx && typeof Plotly.Fx.unhover === "function") Plotly.Fx.unhover(gd);
+        else if (Plotly.Fx && typeof Plotly.Fx.hover === "function") Plotly.Fx.hover(gd, []);
+      } catch (_) { /* plot not ready */ }
+    }
+
+    function initPlotHoverDismiss() {
+      // Outside the data area: dismiss sticky touch-hover. Taps on the plot
+      // itself still update hover via Plotly's normal handlers.
+      const outsidePlotData = (target) => {
+        const gd = document.getElementById("plotDiv");
+        if (!gd || !target || !gd.data) return false;
+        if (!gd.contains(target)) return true;
+        const dataArea = gd.querySelector(".nsewdrag") || gd.querySelector(".xy");
+        return !(dataArea && dataArea.contains(target));
+      };
+      document.addEventListener("pointerdown", (e) => {
+        if (e.pointerType === "mouse" && e.button !== 0) return;
+        if (outsidePlotData(e.target)) clearPlotHover();
+      }, true);
     }
 
     function initSoftScroll() {
@@ -5344,6 +5611,7 @@
       initSidebarResizer();
       initPlotResizer();
       initDispCards();
+      initPlotHoverDismiss();
       initSoftScroll();
       fitPlotBox();
       if (window.ResizeObserver) {

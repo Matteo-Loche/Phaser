@@ -26,7 +26,7 @@ Key behaviours:
 - **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB (keyed per mode).
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
-- **Job wall-clock timeout** — running jobs are hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min) so a stuck PHREEQC pool cannot pin the server forever.
+- **Job wall-clock timeout** — PHREEQC compute (grid + tracing) is hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min); setup/packing/stats are outside that limit so a stuck pool cannot pin the server forever.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
 - **Server usage statistics** — successful Predominance and Mineral Stability computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats?window=…` and the **Statistics** UI mode (mode rankings, top-15 lists, selectable windows from 24 h to all-time).
 - **Per-IP API rate limiting** — sliding-window caps on all `/api/*` routes, burst limits on compute and database registration, and **post-burst cooldowns** with escalating block duration for repeat abuse (see [API rate limiting](#api-rate-limiting)).
@@ -125,7 +125,7 @@ PHASER/
 ├── services/              # Orchestration logic
 │   ├── catalog.py         # Startup / background catalog scans (text parse + SI probe)
 │   ├── compute.py         # FIFO compute queue, reaper, wall-clock timeout
-│   ├── job_control.py     # Per-job cancel tokens + ProcessPool hard-kill
+│   ├── job_control.py     # Cancel tokens, spawn ProcessPool, hard-kill on abort
 │   ├── stats.py           # Per-server usage statistics recording
 │   └── species.py         # Species picker suggestions
 ├── Icon/                  # Branding assets (served at /icons/)
@@ -218,9 +218,9 @@ flowchart TB
 | Layer | Role |
 |-------|------|
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
-| **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py`), species helpers, and usage-statistics recording. No PHREEQC math here. |
+| **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py` with **spawn** ProcessPools), species helpers, and usage-statistics recording. No PHREEQC math here. |
 | **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`); persist per-server compute events (`stats_store.py`). |
-| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing (SI predominance and mineral-stability plugins); register live ProcessPools for hard-kill on timeout. |
+| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing (SI predominance and mineral-stability plugins); register live ProcessPools for hard-kill on timeout. Lazy imports avoid circular deps under multiprocessing **spawn**. |
 | **diagram** | Turn per-point SI / precipitated-mole / species data into 2D category grids and traced display layers (vector fills batched per category). |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
 
@@ -337,7 +337,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
 | `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
 | `PHASER_JOB_REAPER_INTERVAL_SEC` | Background reaper wake interval in seconds (default `60`) |
-| `PHASER_JOB_WALL_TIMEOUT_SEC` | Hard-kill running jobs after this many seconds from `started_at` (default `300`) |
+| `PHASER_JOB_WALL_TIMEOUT_SEC` | Hard-kill PHREEQC compute (grid + tracing) after this many seconds from compute start (default `300`). Setup, packing, and stats are excluded. |
 | `PHASER_CPU_LIMIT` | Docker Compose only — max CPUs for the container cgroup (default `8` in `.env.example`) |
 | `PHASER_MEMORY_LIMIT` | Docker Compose only — max RAM for the container (default `8G`) |
 | `PHASER_DATA_DIR` | Docker Compose only — host path mounted to `data/databases/generated` |
@@ -569,7 +569,7 @@ Limits (`config.py`):
 | `JOB_RESULT_TTL_SEC` | 3600 | Drop finished jobs from memory after this (env `PHASER_JOB_RESULT_TTL_SEC`) |
 | `JOB_QUEUE_TTL_SEC` | 7200 | Drop abandoned queued jobs after this (env `PHASER_JOB_QUEUE_TTL_SEC`) |
 | `JOB_REAPER_INTERVAL_SEC` | 60 | Reaper thread interval (env `PHASER_JOB_REAPER_INTERVAL_SEC`) |
-| `JOB_WALL_TIMEOUT_SEC` | 300 | Hard-kill running jobs after this (env `PHASER_JOB_WALL_TIMEOUT_SEC`); measured from `started_at` |
+| `JOB_WALL_TIMEOUT_SEC` | 300 | Hard-kill PHREEQC compute after this (env `PHASER_JOB_WALL_TIMEOUT_SEC`); measured from `compute_started_at` while `wall_timeout_armed` |
 
 ### Compute queue (`services/compute.py`)
 
@@ -584,7 +584,7 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
 7. **Page reload during compute:** the UI stores the active `job_id` in `sessionStorage` and resumes polling on load. If the job finished while the tab was away, the result is fetched automatically.
 8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h) and queued jobs that were never started after `JOB_QUEUE_TTL_SEC` (default 2 h). Polls update `last_seen_at` on each job.
-9. **Wall-clock timeout:** once a job is `running`, a timer (and the reaper as a safety net) hard-aborts it after `JOB_WALL_TIMEOUT_SEC` (default 5 min): ProcessPool children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
+9. **Wall-clock timeout:** once PHREEQC compute starts (base grid and, when enabled, boundary tracing), a timer (and the reaper as a safety net) hard-aborts after `JOB_WALL_TIMEOUT_SEC` (default 5 min). DB/catalog setup, packing, and stats persistence are **outside** that wall clock. Process pools use the **`spawn`** start method (not `fork`) so workers do not inherit the server listen socket. The pool stays **bound** for the whole shutdown so a mid-join abort can still `terminate_pool`; unbinding first used to leave `_running_count` held and block the FIFO queue after a timeout. Children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. Abort checks run through the grid→category-map→trace gap and on packing ticks (client `DELETE` still cancels packing). The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
 10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
 
 Job statuses: `queued` → `running` → `done` | `error` (including `error_code` `timed_out` / `cancelled`).
@@ -592,6 +592,8 @@ Job statuses: `queued` → `running` → `done` | `error` (including `error_code
 ---
 
 ## Phase diagram building (`diagram/`)
+
+The `diagram` package exports packers via lazy `__getattr__` so spawned ProcessPool workers can import `diagram.packer` without pulling `vectors` → `gas_limits` → `boundary_trace` into a circular import.
 
 ### Phase selection (`phases.py`)
 
@@ -743,7 +745,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  [☰]  PHASER  [Mode ▼]  [Compute] [▓▓▓▓░░ 42%]  status…   Database [▼] ●│
+│  [☰]  PHASER  [Mode ▼]  [Compute] [job slot]   Database [▼] ●            │
 ├──────────────┬──────────────────────────────┬───┬───────────────────────┤
 │  Sidebar     │                              │ ║ │  Plot panel           │
 │  (controls)  │   Predominance / Mineral     │ ║ │  (display)            │
@@ -753,19 +755,21 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 
 | Region | Role |
 |--------|------|
-| **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **Compute diagram** button, unified spectrum progress bar, short status line, **Database** label + selector + status dot |
-| **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below) |
-| **Diagram** | Square-ish Plotly canvas (`fitPlotBox` allows up to **1:1.2** aspect so the plot grows on narrow windows instead of shrinking to a tiny square) |
-| **Right plot panel** | Display mode, element subset filter, label style (name/formula, size, min area), fill opacity, labels/boundaries toggles, diagram metadata |
+| **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **Compute diagram** button, **job slot** (queue pill / progress / report), **Database** label + selector + status dot |
+| **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below). Soft-scroll; darker `--panel-side` fill |
+| **Diagram** | Plotly canvas sized by `fitPlotBox`: up to **1.1:1** when the container is wider than tall, and **1:1.2** when taller than wide (avoids a stretched wide plot while still filling tall space) |
+| **Right plot panel** | Foldable display controls (Display / Labels / Fill / Overlays) + diagram metadata. Same `--panel-side` fill, padding, and soft-scroll as the sidebar; scrollbar sits on the **inner** edge flush with the plot resizer |
 | **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets width. Widths persist in `phaserLayout.v1` |
+
+Side columns use `--panel-side` (darker than the header `--panel`, slightly lifted from the plot workspace `--bg`) and tighter `--panel-pad` so cards sit close to the soft scrollbar without large empty gutters. Soft-scroll thumbs stay invisible until hover or while scrolling (same behaviour on both panels).
 
 **Responsive behaviour**
 
-- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · compute · database; row 2 = mode switcher under the logo. Plot panel moves **above** the diagram as a horizontal toolbar; the panel resizer is hidden.
-- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card).
+- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar (capped height + soft-scroll so open submenus never crop off-screen); the panel resizer is hidden.
+- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 27k runs`). Only **one** display submenu open at a time (accordion); tablets and desktop keep multi-open.
 - **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
-- **≤760px** — header status text hides (progress bar stays).
-- **≤560px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
+- **≤760px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
+- **≤560px** — display cards stack full-width in the top toolbar.
 
 **Statistics mode** hides the sidebar and diagram workspace; only the statistics dashboard is shown. The mode switcher and database control remain in the header. Data refreshes automatically every **3 minutes** while the page is open (no manual refresh control).
 
@@ -816,15 +820,20 @@ Changing units auto-converts species concentrations. Editing chemistry, axes, ph
 
 ### Header: compute and progress
 
-**Compute diagram** enqueues a server job (or loads an identical request from the browser cache). While a job runs:
+**Compute diagram** enqueues a server job (or loads an identical request from the browser cache). Progress and status live in a shared **job slot** beside the button:
+
+| Slot mode | What shows |
+|-----------|------------|
+| **queued** | Wide/mid: status line (`Queued — position 2 of 3`). Mobile (≤900px): compact pill (`Queued 2/3` or `Queued…`); progress bar hidden |
+| **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, …) |
+| **idle** | Done / error / cache report in the status line (mobile shortens to e.g. `Done · 27k runs`) |
+
+While a job runs:
 
 - The logo animates (`.is-computing` on the brand link).
 - A **single unified progress bar** advances through the whole pipeline — one 0–100% fill, not per-phase resets.
-- A short **status line** names the current step (`Computing grid…`, `Tracing phase edges…`, etc.).
 
-**Queued** jobs show status text only — the bar stays hidden until the job starts running.
-
-**Done** messages are compact, e.g. `Done · Predominance · 40k runs · 8.2s`. Cache hits show **`Cached`**.
+**Done** messages on wide screens stay detailed, e.g. `Done · Predominance · 40k runs · 8.2s`. Cache hits show **`Cached`**.
 
 The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
 
@@ -843,9 +852,11 @@ Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement 
 
 Display controls describe the **plotted result**, not pending Configuration toggles. Recompute after changing layer options to update them.
 
+Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overlays**) share soft-scroll with the left sidebar. On phones (≤900px) opening one card closes the others; wider layouts allow several open at once and scroll the panel when content exceeds the available height.
+
 | Control | Effect |
 |---------|--------|
-| **Display** | *Solid predominance* / *Mineral map* (label depends on diagram mode) and/or *Aqueous predominance* — only families that were actually computed appear in the dropdown. Foldable sections: **Display** (open by default), **Labels**, **Fill**, **Overlays** |
+| **Display** | *Solid predominance* / *Mineral map* (label depends on diagram mode) and/or *Aqueous predominance* — only families that were actually computed appear in the dropdown |
 | **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
 | **Phase labels** | Solid / mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability and moles-tie joins (`"A + B"`) format each part with the same mode. Tip uses max clearance inside the **visible** vector fill when tracing is on (base-grid clearance otherwise) |
 | **Label size** | Phase annotation font size in px (default **14**, range 10–20; − / value / +) |
@@ -858,6 +869,8 @@ Display controls describe the **plotted result**, not pending Configuration togg
 | **Labels only** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
+
+**Touch / hover.** Plotly hover labels stick on touch devices until another plot tap; tapping anywhere outside the plot data area (or redrawing the figure) dismisses them via `Plotly.Fx.unhover`.
 
 **Configuration vs display.** The sidebar **Compute layers** checkboxes set what the next job will pack and trace. The plot panel dropdown and element filter read from the cached result (`layer_solids`, `layer_aqueous`, `layer_elements` in the packed JSON). Toggling layers before recomputing shows the **stale** pill but does not change the plot or its display options until **Compute diagram** finishes.
 
@@ -1103,7 +1116,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
 | Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
 | Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
-| Job wall timeout | `PHASER_JOB_WALL_TIMEOUT_SEC` | `300` | Hard-kill running jobs (from `started_at`) |
+| Job wall timeout | `PHASER_JOB_WALL_TIMEOUT_SEC` | `300` | Hard-kill PHREEQC compute only (from `compute_started_at`) |
 | Job reaper interval | `PHASER_JOB_REAPER_INTERVAL_SEC` | `60` | Background cleanup wake interval |
 | API rate limits | `PHASER_RATE_LIMIT_*` | see [API rate limiting](#api-rate-limiting) | Per-IP caps; enabled by default |
 | O₂ stability limit | `PHASER_O2_LIMIT_ATM` | `0.21` | `O2_FUGACITY_LIMIT_ATM` — titration water window (atm); per-job `o2_limit_atm` |
