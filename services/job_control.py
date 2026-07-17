@@ -11,9 +11,13 @@ import os
 import signal
 import threading
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from concurrent.futures import TimeoutError as FuturesTimeout
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, TypeVar
+
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 class JobAborted(Exception):
@@ -29,6 +33,9 @@ _lock = threading.Lock()
 _cancel_events: dict[str, threading.Event] = {}
 _abort_meta: dict[str, tuple[str, str]] = {}  # job_id -> (reason, error_code)
 _pools: dict[str, ProcessPoolExecutor] = {}
+
+# How often abortable pool waits wake to re-check the cancel event.
+_POOL_WAIT_TIMEOUT_SEC = 0.5
 
 
 def register_cancel_event(job_id: str) -> threading.Event:
@@ -106,17 +113,13 @@ def _signal_pids(pids: list[int], sig: int) -> None:
 
 
 def terminate_pool(pool: ProcessPoolExecutor) -> None:
-    """Force-stop a process pool (cancel futures + SIGTERM/SIGKILL children)."""
-    # Snapshot PIDs before shutdown clears internal maps.
+    """Force-stop a process pool (SIGTERM/SIGKILL children, then non-blocking shutdown).
+
+    Workers are killed *before* ``shutdown`` so a blocked PHREEQC call cannot
+    keep the executor's queue-management thread draining forever.
+    """
     pids = _collect_worker_pids(pool)
     procs = list((getattr(pool, "_processes", None) or {}).values())
-
-    try:
-        pool.shutdown(wait=False, cancel_futures=True)
-    except TypeError:
-        pool.shutdown(wait=False)
-    except Exception:
-        pass
 
     for proc in procs:
         try:
@@ -133,12 +136,20 @@ def terminate_pool(pool: ProcessPoolExecutor) -> None:
         except Exception:
             pass
 
-    # Last resort: signal by PID (covers executor Process wrappers that mis-report).
     if pids:
         _signal_pids(pids, signal.SIGTERM)
         time.sleep(0.15)
-        # SIGKILL is POSIX-only; on Windows fall back to SIGTERM again.
         _signal_pids(pids, getattr(signal, "SIGKILL", signal.SIGTERM))
+
+    try:
+        pool.shutdown(wait=False, cancel_futures=True)
+    except TypeError:
+        try:
+            pool.shutdown(wait=False)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def request_abort(
@@ -161,6 +172,88 @@ def request_abort(
     if pool is not None:
         terminate_pool(pool)
     return registered
+
+
+def pool_map_abortable(
+    pool: ProcessPoolExecutor,
+    fn: Callable[[T], R],
+    items: list[T],
+    *,
+    job_id: str | None,
+    max_in_flight: int,
+    on_result: Callable[[R, int], None] | None = None,
+) -> list[R]:
+    """Like ``pool.map`` but wakes every ``_POOL_WAIT_TIMEOUT_SEC`` to honour abort.
+
+    ``pool.map`` blocks inside the result queue with no timeout, so after a wall
+    timeout kills workers the job thread can hang forever and leave multiprocessing
+    atexit hooks stuck on Ctrl+C minutes later. This helper uses ``wait(..., timeout=)``
+    plus ``check_abort`` so the cancel event unblocks promptly.
+    """
+    if not items:
+        return []
+    in_flight = max(1, int(max_in_flight))
+    pending: set = set()
+    it = iter(items)
+    out: list[R] = []
+    done_n = 0
+
+    def _submit_more() -> None:
+        while len(pending) < in_flight:
+            try:
+                item = next(it)
+            except StopIteration:
+                return
+            pending.add(pool.submit(fn, item))
+
+    check_abort(job_id)
+    _submit_more()
+    while pending:
+        check_abort(job_id)
+        finished, not_done = wait(
+            pending,
+            timeout=_POOL_WAIT_TIMEOUT_SEC,
+            return_when=FIRST_COMPLETED,
+        )
+        pending = set(not_done)
+        if not finished:
+            continue
+        for fut in finished:
+            check_abort(job_id)
+            try:
+                row = fut.result(timeout=0.1)
+            except FuturesTimeout as exc:
+                # Should be ready; treat as pool failure / abort race.
+                check_abort(job_id)
+                raise RuntimeError("Process pool future ready but result timed out") from exc
+            done_n += 1
+            out.append(row)
+            if on_result is not None:
+                on_result(row, done_n)
+        _submit_more()
+    return out
+
+
+def iter_futures_abortable(
+    futures_map: dict[Any, Any],
+    *,
+    job_id: str | None,
+) -> Iterator[tuple[Any, Any]]:
+    """Yield ``(future, key)`` as futures complete, abortable with a wait timeout."""
+    pending = set(futures_map.keys())
+    while pending:
+        check_abort(job_id)
+        finished, not_done = wait(
+            pending,
+            timeout=_POOL_WAIT_TIMEOUT_SEC,
+            return_when=FIRST_COMPLETED,
+        )
+        pending = set(not_done)
+        if not finished:
+            continue
+        for fut in finished:
+            check_abort(job_id)
+            yield fut, futures_map[fut]
 
 
 @contextmanager
@@ -188,13 +281,19 @@ def managed_process_pool(
             try:
                 pool.shutdown(wait=False, cancel_futures=True)
             except TypeError:
-                pool.shutdown(wait=False)
+                try:
+                    pool.shutdown(wait=False)
+                except Exception:
+                    pass
             except Exception:
                 pass
         else:
             try:
                 pool.shutdown(wait=True, cancel_futures=False)
             except TypeError:
-                pool.shutdown(wait=True)
+                try:
+                    pool.shutdown(wait=True)
+                except Exception:
+                    pass
             except Exception:
                 pass

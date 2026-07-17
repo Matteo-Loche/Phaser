@@ -331,7 +331,7 @@ curl -X POST http://localhost:8765/api/databases/register \
 | `PHASER_O2_LIMIT_ATM` | O₂ water-stability limit in atm (default `0.21`); per-job override `o2_limit_atm` |
 | `PHASER_H2_LIMIT_ATM` | H₂ water-stability limit in atm (default `1.0`); per-job override `h2_limit_atm` |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | Reference pressure for component-gas over-pressure boundaries (default `1.0`) |
-| `PHASER_KNOBS_MODE` | PHREEQC numerical retry ladder: `ladder` (default) or `off` — server-side only, not exposed on the compute API |
+| `PHASER_KNOBS_MODE` | Default **Convergence rescue** depth for jobs: `standard` (recommended), `default` (UI: *Off* — no extra retries), or `maximum`. Legacy aliases: `off`→`default`, `ladder`→`maximum`. Overridable per job via compute `knobs_mode` |
 | `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | Skip base-sweep PHREEQC outside the O₂/H₂ water band (`true` default) |
 | `PHASER_SWEEP_WATER_MARGIN_CELLS` | Extra base-cell margin beyond the analytic water clip before masking (`1.0` default) |
 | `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
@@ -459,13 +459,17 @@ Entry point: `run_adaptive_mineral_stability_sweep(..., category_mode=...)`. O�
 
 SI predominance continues to use `pack_grid_results` / `pack_traced_display` (`layers.solid_subsets`, `diagram_kind="predominance"`).
 
-#### KNOBS retry ladder (`knobs.py`, server defaults)
+#### Convergence rescue / KNOBS ladder (`knobs.py`)
 
-Hard grid points are retried with escalating **KNOBS** numerical settings before the point is marked failed. This is always on by default (`KNOBS_MODE_DEFAULT = ladder`); operators change it via `PHASER_KNOBS_MODE=off` or `config.py` — there is **no** compute API or UI toggle.
+Some pH–redox points are hard for the chemical solver to converge. **Convergence rescue** (Configuration; API `knobs_mode`) sets how much effort is spent **retrying** those points before they are left blank (white) on the diagram. The UI options are plain-language; API/env ids stay stable:
 
-For **`dummy_titration`** and **`assemblage_dummy_titration`**, attempts run in order: default KNOBS + primary charge guess → default + flip-retry → damped + primary → damped + flip → robust + primary only. Other modes skip flip-retry. Each attempt prefixes an explicit KNOBS block (settings persist on the worker IPhreeqc instance). **`convergence_tolerance` is never loosened** — only path controls (iterations, step sizes, diagonal scale, numerical derivatives) escalate. Successful rescues store **`knobs_level`** on `GridPointResult` (0 = first rung). Selected output is read only on the success path (never after a swallowed exception — stale-output hazard).
+| UI label | API / env id | What happens | Typical use |
+|----------|--------------|--------------|-------------|
+| **Off (fastest)** | `default` | One attempt per point | Fastest; more blank cells |
+| **Standard (recommended)** | `standard` | If a point fails, retry once with more careful solver settings | Default; good speed vs reliability |
+| **Maximum** | `maximum` | Keep retrying with progressively more careful settings | Slowest; fewest blanks |
 
-Boundary tracing inherits the ladder automatically because `PointEvaluator` calls `evaluate_point`.
+Internally those retries escalate PHREEQC **KNOBS** path controls only (`default` → `damped` → `robust` profiles: iterations, step sizes, diagonal scale, numerical derivatives). **`convergence_tolerance` is never loosened.** Server default is `KNOBS_MODE_DEFAULT` / env `PHASER_KNOBS_MODE` (`standard`). Legacy env aliases: `off`→`default`, `ladder`→`maximum`. Successful rescues store **`knobs_level`** on `GridPointResult` (0 / 1 / 2 for the three profiles). Boundary tracing inherits the same depth because `PointEvaluator` calls `evaluate_point`. Selected output is read only on the success path (never after a swallowed exception — stale-output hazard).
 
 #### Water-band sweep mask (`gas_limits.py` + `sweep.py`, server defaults)
 
@@ -580,7 +584,7 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
 7. **Page reload during compute:** the UI stores the active `job_id` in `sessionStorage` and resumes polling on load. If the job finished while the tab was away, the result is fetched automatically.
 8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h) and queued jobs that were never started after `JOB_QUEUE_TTL_SEC` (default 2 h). Polls update `last_seen_at` on each job.
-9. **Wall-clock timeout:** once a job is `running`, a timer (and the reaper as a safety net) hard-aborts it after `JOB_WALL_TIMEOUT_SEC` (default 5 min): ProcessPool children are terminated, the concurrent slot is freed, and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
+9. **Wall-clock timeout:** once a job is `running`, a timer (and the reaper as a safety net) hard-aborts it after `JOB_WALL_TIMEOUT_SEC` (default 5 min): ProcessPool children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
 10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
 
 Job statuses: `queued` → `running` → `done` | `error` (including `error_code` `timed_out` / `cancelled`).
@@ -806,7 +810,7 @@ Elements no longer need a manual reload button — everything refreshes when the
 | **Axes** | pH min/max; redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
 | **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips |
-| **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **O₂/H₂ stability limits** (atm) |
+| **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
 
 Changing units auto-converts species concentrations. Editing chemistry, axes, phases, or layer toggles marks the diagram **stale** until recomputed. Layer toggles in Configuration apply to the **next** compute; display controls in the plot panel always reflect the **currently plotted** result (see below).
 
@@ -1093,6 +1097,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Trace top-N species | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH species slots during tracing |
 | Grid top-N species | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH species slots in base grid sweep |
 | Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `8` | Species kept per element in packed hover JSON |
+| KNOBS rescue depth | `PHASER_KNOBS_MODE` | `standard` | Convergence rescue depth: `default` (UI Off), `standard`, `maximum`; per-job override `knobs_mode` |
 | Sweep map chunksize | `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Points per IPC batch in base grid `pool.map` |
 | Max workers per sweep | `PHASER_MAX_WORKERS` | `8` | ProcessPool size for grid/trace work (server-side; exposed read-only in `/api/config`) |
 | Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |

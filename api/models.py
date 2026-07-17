@@ -44,6 +44,7 @@ class ComputeRequest(BaseModel):
     layer_elements: bool = False
     solution_mode: str = config.SOLUTION_MODE_DEFAULT
     mineral_category_mode: str = config.MINERAL_CATEGORY_MODE_DEFAULT
+    knobs_mode: str = config.KNOBS_MODE_DEFAULT
 
     @field_validator("solution_mode")
     @classmethod
@@ -64,6 +65,11 @@ class ComputeRequest(BaseModel):
                 f"Unsupported mineral_category_mode: {value!r}. Use one of: {allowed}."
             )
         return mode
+
+    @field_validator("knobs_mode")
+    @classmethod
+    def _validate_knobs_mode(cls, value: str) -> str:
+        return config.normalize_knobs_mode(value)
 
     @field_validator("units")
     @classmethod

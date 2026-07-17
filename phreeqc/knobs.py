@@ -1,8 +1,7 @@
 """KNOBS retry ladder: escalating numerical settings for hard grid points."""
 from __future__ import annotations
 
-from collections import Counter
-from typing import Sequence
+from .. import config
 
 KNOBS_PROFILES: dict[str, str] = {
     "default": (
@@ -40,7 +39,15 @@ KNOBS_PROFILES: dict[str, str] = {
 KNOBS_LADDER_DEFAULT: tuple[str, ...] = ("default", "damped", "robust")
 KNOBS_PROFILE_INDEX: dict[str, int] = {name: i for i, name in enumerate(KNOBS_LADDER_DEFAULT)}
 
-knobs_stats: Counter = Counter()
+
+def ladder_for_mode(mode: str | None) -> tuple[str, ...]:
+    """Profiles to try for a knobs_mode (flip-retry is handled in evaluate_point)."""
+    m = config.normalize_knobs_mode(mode)
+    if m == "default":
+        return ("default",)
+    if m == "standard":
+        return ("default", "damped")
+    return KNOBS_LADDER_DEFAULT
 
 
 def run_single_profile(phreeqc, profile: str, body: str, run_once=None):
@@ -50,28 +57,3 @@ def run_single_profile(phreeqc, profile: str, body: str, run_once=None):
 
         run_once = _run_phreeqc_string
     return run_once(phreeqc, KNOBS_PROFILES[profile] + body)
-
-
-def run_with_knobs(
-    phreeqc,
-    body: str,
-    ladder: Sequence[str] = KNOBS_LADDER_DEFAULT,
-    run_once=None,
-):
-    """Run ``body`` under escalating KNOBS profiles; returns (selected, rung_index)."""
-    if run_once is None:
-        from .engine import _run_phreeqc_string
-
-        run_once = _run_phreeqc_string
-    last_exc: Exception | None = None
-    for rung, name in enumerate(ladder):
-        try:
-            selected = run_single_profile(phreeqc, name, body, run_once=run_once)
-        except Exception as exc:
-            last_exc = exc
-            continue
-        knobs_stats[name] += 1
-        return selected, rung
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("empty KNOBS ladder")

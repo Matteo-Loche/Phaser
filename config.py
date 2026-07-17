@@ -317,9 +317,49 @@ O2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_O2_LIMIT_ATM", "0.21"))
 H2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_H2_LIMIT_ATM", "1.0"))
 COMPONENT_GAS_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_COMPONENT_GAS_LIMIT_ATM", "1.0"))
 
-# PHREEQC numerical retry ladder (server-side only; not exposed on API).
-KNOBS_MODE_DEFAULT = os.environ.get("PHASER_KNOBS_MODE", "ladder")
-KNOBS_LADDER = ("default", "damped", "robust")
+# PHREEQC numerical retry ladder depth (per-job; flip-retry is separate and always on
+# for dummy titration modes). Env PHASER_KNOBS_MODE accepts legacy off/ladder aliases.
+# Profile sequence lives in phreeqc.knobs.KNOBS_LADDER_DEFAULT (default→damped→robust).
+KNOBS_MODES: tuple[str, ...] = ("default", "standard", "maximum")
+KNOBS_MODE_META: dict[str, dict[str, str]] = {
+    "default": {
+        "label": "Off (fastest)",
+        "description": (
+            "No extra rescue: try each point once. Fastest, but hard spots may "
+            "fail to converge and show as blank (white) cells."
+        ),
+    },
+    "standard": {
+        "label": "Standard (recommended)",
+        "description": (
+            "If a point fails, retry it once with more careful solver settings "
+            "(more iterations, smaller steps). Good balance of speed and reliability."
+        ),
+    },
+    "maximum": {
+        "label": "Maximum",
+        "description": (
+            "If a point still fails, keep retrying with progressively more careful "
+            "settings. Slowest, but recovers the most stubborn points."
+        ),
+    },
+}
+
+
+def normalize_knobs_mode(mode: str | None) -> str:
+    """Map UI/API/env values onto default | standard | maximum."""
+    raw = (mode or "").strip().lower()
+    # Legacy server env / older clients.
+    if raw in ("off", "none", "fast"):
+        return "default"
+    if raw in ("ladder", "full", "max"):
+        return "maximum"
+    if raw in KNOBS_MODES:
+        return raw
+    return "standard"
+
+
+KNOBS_MODE_DEFAULT = normalize_knobs_mode(os.environ.get("PHASER_KNOBS_MODE", "standard"))
 
 # Skip base-sweep PHREEQC outside the O₂/H₂ water band (titration-style modes).
 SWEEP_SKIP_OUTSIDE_WATER = os.environ.get(

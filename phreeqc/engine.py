@@ -71,6 +71,8 @@ def grid_job_params_from_dict(data: dict) -> GridJobParams:
         kwargs["phase_names_by_subset"] = {
             str(k): tuple(v) for k, v in pnbs.items()
         }
+    if "knobs_mode" in kwargs:
+        kwargs["knobs_mode"] = config.normalize_knobs_mode(kwargs.get("knobs_mode"))
     return GridJobParams(**kwargs)
 
 
@@ -662,36 +664,30 @@ def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> G
     flip_modes = frozenset({"dummy_titration", "assemblage_dummy_titration"})
     flips = (False, True) if params.solution_mode in flip_modes else (False,)
 
-    if params.knobs_mode == "ladder":
-        from .knobs import KNOBS_LADDER_DEFAULT, KNOBS_PROFILE_INDEX, run_single_profile
+    from .knobs import KNOBS_PROFILE_INDEX, ladder_for_mode, run_single_profile
 
-        profile_flips: list[tuple[str, bool]] = []
-        for prof in KNOBS_LADDER_DEFAULT:
-            if prof == "robust":
-                profile_flips.append((prof, False))
-            else:
-                profile_flips.extend((prof, flip) for flip in flips)
-    else:
-        profile_flips = [("default", flip) for flip in flips]
+    # Flip-retry is independent of ladder depth: charge-guess correction, not KNOBS.
+    profile_flips: list[tuple[str, bool]] = []
+    for prof in ladder_for_mode(params.knobs_mode):
+        if prof == "robust":
+            # Robust is expensive; keep the historical single-pass (no flip) behavior.
+            profile_flips.append((prof, False))
+        else:
+            profile_flips.extend((prof, flip) for flip in flips)
 
     for prof, flip in profile_flips:
         if flip and params.solution_mode not in flip_modes:
             continue
         try:
             inp = format_grid_input(ph=ph, pe=pe, params=params, flip_charge=flip)
-            if params.knobs_mode == "ladder":
-                selected = run_single_profile(phreeqc, prof, inp)
-                knobs_level = KNOBS_PROFILE_INDEX[prof]
-            else:
-                selected = _run_phreeqc_string(phreeqc, inp)
-                knobs_level = 0
+            selected = run_single_profile(phreeqc, prof, inp)
             if not selected or len(selected) < 2:
                 continue
             headers = selected[0]
             data_row = selected[_selected_output_row_index(params)]
             row = dict(zip(headers, data_row))
             result = _parse_grid_row(row, ph=ph, pe=pe, params=params)
-            result.knobs_level = knobs_level
+            result.knobs_level = KNOBS_PROFILE_INDEX.get(prof, 0)
             return result
         except Exception:
             continue

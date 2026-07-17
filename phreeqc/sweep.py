@@ -8,7 +8,7 @@ from typing import Any
 import numpy as np
 
 from .. import config
-from ..services.job_control import check_abort, managed_process_pool
+from ..services.job_control import check_abort, managed_process_pool, pool_map_abortable
 from .engine import (
     GridJobParams,
     GridPointResult,
@@ -32,6 +32,11 @@ def _worker_eval(args: tuple[float, float]) -> dict:
     ph, pe = args
     result = evaluate_point(_WORKER_PQ, ph=ph, pe=pe, params=_WORKER_PARAMS)
     return asdict(result)
+
+
+def _worker_eval_chunk(chunk: list[tuple[float, float]]) -> list[dict]:
+    """Evaluate a batch of points in one IPC round-trip (abortable map unit)."""
+    return [_worker_eval(args) for args in chunk]
 
 
 def build_grid(params: GridJobParams) -> tuple[np.ndarray, np.ndarray]:
@@ -122,12 +127,30 @@ def run_point_sweep(
         initializer=_worker_init,
         initargs=(params.dll_path, params.db_path, params_dict),
     ) as pool:
-        for row in pool.map(_worker_eval, tasks_list, chunksize=chunksize):
-            check_abort(job_id)
-            results.append(GridPointResult(**row))
-            done += 1
-            if progress_cb:
-                progress_cb(done, total)
+        # Batch points per future (same idea as SWEEP_MAP_CHUNKSIZE) but wait with
+        # a timeout so wall-timeout abort cannot hang forever inside pool.map.
+        chunks = [
+            tasks_list[i : i + chunksize]
+            for i in range(0, len(tasks_list), chunksize)
+        ]
+        max_in_flight = max(workers * 2, 4)
+
+        def _on_chunk(rows, _n):
+            nonlocal done
+            for row in rows:
+                results.append(GridPointResult(**row))
+                done += 1
+                if progress_cb:
+                    progress_cb(done, total)
+
+        pool_map_abortable(
+            pool,
+            _worker_eval_chunk,
+            chunks,
+            job_id=job_id,
+            max_in_flight=max_in_flight,
+            on_result=_on_chunk,
+        )
 
     return results
 

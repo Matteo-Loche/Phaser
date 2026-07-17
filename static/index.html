@@ -1183,6 +1183,28 @@
             <label>Calculation mode</label>
             <div class="mode-options" id="solutionModeOptions" role="radiogroup" aria-label="Calculation mode"></div>
           </div>
+          <div style="margin-top:0.65rem">
+            <div class="label-row">
+              <label for="knobsMode">Convergence rescue</label>
+              <button type="button" class="help-tip" id="knobsModeHelp"
+                      aria-label="Help: Convergence rescue" aria-expanded="false">?</button>
+            </div>
+            <select id="knobsMode" class="disp-select" style="width:100%;margin-top:0.25rem">
+              <option value="default">Off (fastest)</option>
+              <option value="standard" selected>Standard (recommended)</option>
+              <option value="maximum">Maximum</option>
+            </select>
+            <div class="help-popover" id="knobsModeHelpPop" hidden>
+              Some pH/redox points are hard for the solver to converge. This sets
+              how much effort is spent retrying them before a point is left blank
+              (white) on the diagram.
+              <b>Off</b>: one attempt per point — fastest, more blanks.
+              <b>Standard</b>: retry hard points once with more careful settings
+              (recommended).
+              <b>Maximum</b>: keep retrying with the most careful settings —
+              slowest, fewest blanks.
+            </div>
+          </div>
           <div class="grid2" style="margin-top:0.55rem">
             <div>
               <label for="o2LimitAtm">O₂ stability limit (atm)</label>
@@ -1459,6 +1481,7 @@
       y: { axis: "eh", peMin: -10, peMax: 14 },
       gridLevels: 100,
       adaptiveBoundaries: true,
+      knobsMode: "standard",
       solutionMode: "dummy_titration",
       mineralCategoryMode: "moles",
       displayMode: "solid",
@@ -2859,6 +2882,14 @@
       state.solutionMode = normalizeUiSolutionMode(state.solutionMode);
       if (!modes.includes(state.solutionMode)) state.solutionMode = defaultMode;
       state.solutionMode ??= defaultMode;
+      {
+        const knobsModes = (runtime.cfg?.knobs_modes || []).map(m => m.id);
+        const defaultKnobs = runtime.cfg?.default_knobs_mode || "standard";
+        state.knobsMode = normalizeKnobsMode(state.knobsMode || defaultKnobs);
+        if (knobsModes.length && !knobsModes.includes(state.knobsMode)) {
+          state.knobsMode = knobsModes.includes(defaultKnobs) ? defaultKnobs : "standard";
+        }
+      }
       const catModes = (runtime.cfg?.mineral_category_modes || []).map(m => m.id);
       const defaultCat = runtime.cfg?.default_mineral_category_mode || "moles";
       if (!catModes.includes(state.mineralCategoryMode)) {
@@ -2962,6 +2993,38 @@
       });
       $("elemCount").textContent = state.totals.length;
       $("unitHead").textContent = `concentration (${unitDisplay(state.units)})`;
+    }
+
+    function normalizeKnobsMode(mode) {
+      const raw = String(mode || "").trim().toLowerCase();
+      if (raw === "off" || raw === "none" || raw === "fast") return "default";
+      if (raw === "ladder" || raw === "full" || raw === "max") return "maximum";
+      if (raw === "default" || raw === "standard" || raw === "maximum") return raw;
+      return "standard";
+    }
+
+    function fillKnobsModeOptions() {
+      const sel = $("knobsMode");
+      if (!sel) return;
+      const labelById = {
+        default: "Off (fastest)",
+        standard: "Standard (recommended)",
+        maximum: "Maximum",
+      };
+      const modes = runtime.cfg?.knobs_modes || [
+        { id: "default", label: labelById.default },
+        { id: "standard", label: labelById.standard },
+        { id: "maximum", label: labelById.maximum },
+      ];
+      const cur = normalizeKnobsMode(state.knobsMode);
+      sel.innerHTML = modes.map(m => {
+        const id = String(m.id || "").replace(/"/g, "");
+        const label = String(labelById[id] || m.label || m.id || "")
+          .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        return `<option value="${id}">${label}</option>`;
+      }).join("");
+      sel.value = modes.some(m => m.id === cur) ? cur : (runtime.cfg?.default_knobs_mode || "standard");
+      state.knobsMode = sel.value;
     }
 
     function closeSolutionModeHelp(exceptMode = null) {
@@ -3545,9 +3608,31 @@
         renderGridMeta();
         commit();
       });
+      $("knobsMode").addEventListener("change", e => {
+        state.knobsMode = normalizeKnobsMode(e.target.value);
+        commit();
+      });
       {
         const helpBtn = $("adaptiveBoundariesHelp");
         const helpPop = $("adaptiveBoundariesHelpPop");
+        if (helpBtn && helpPop) {
+          helpBtn.addEventListener("click", e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const opening = helpPop.hidden;
+            helpPop.hidden = !opening;
+            helpBtn.setAttribute("aria-expanded", opening ? "true" : "false");
+          });
+          document.addEventListener("click", e => {
+            if (helpBtn.contains(e.target) || helpPop.contains(e.target)) return;
+            helpPop.hidden = true;
+            helpBtn.setAttribute("aria-expanded", "false");
+          });
+        }
+      }
+      {
+        const helpBtn = $("knobsModeHelp");
+        const helpPop = $("knobsModeHelpPop");
         if (helpBtn && helpPop) {
           helpBtn.addEventListener("click", e => {
             e.preventDefault();
@@ -3754,6 +3839,10 @@
       $("phMax").value = roundPh(state.ph.max);
       syncGridLevelsControls();
       $("adaptiveBoundaries").checked = !!state.adaptiveBoundaries;
+      {
+        const knobsEl = $("knobsMode");
+        if (knobsEl) knobsEl.value = normalizeKnobsMode(state.knobsMode);
+      }
       $("layerSolids").checked = !!state.layerSolids;
       $("layerAqueous").checked = !!state.layerAqueous;
       $("layerElements").checked = !!state.layerElements;
@@ -4029,6 +4118,7 @@
         system_elements: systemElements(),
         exclude_gases: true,
         adaptive_boundaries: !!state.adaptiveBoundaries,
+        knobs_mode: normalizeKnobsMode(state.knobsMode),
         layer_solids: !!state.layerSolids,
         layer_aqueous: !!state.layerAqueous,
         layer_elements: effectiveLayerElements(),
@@ -5208,6 +5298,9 @@
       if (runtime.cfg.default_solution_mode) {
         state.solutionMode = state.solutionMode || runtime.cfg.default_solution_mode;
       }
+      if (runtime.cfg.default_knobs_mode) {
+        state.knobsMode = normalizeKnobsMode(state.knobsMode || runtime.cfg.default_knobs_mode);
+      }
     }
 
     function afterStateLoad() {
@@ -5215,6 +5308,7 @@
       fillSpeciesOptions();
       fillUnitOptions();
       fillSolutionModeOptions();
+      fillKnobsModeOptions();
       fillMineralCategoryOptions();
       syncMineralPlotOptionLabels();
       renderSpecies();

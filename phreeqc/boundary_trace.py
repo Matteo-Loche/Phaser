@@ -12,9 +12,8 @@ from __future__ import annotations
 
 import math
 import os
-from concurrent.futures import as_completed
 from collections import Counter, defaultdict
-from ..services.job_control import check_abort, managed_process_pool
+from ..services.job_control import check_abort, managed_process_pool, iter_futures_abortable
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any, Callable
 
@@ -1756,9 +1755,8 @@ def run_boundary_trace(
                     for idx, job in enumerate(jobs)
                 }
                 completed: list[dict[str, Any] | None] = [None] * len(jobs)
-                for future in as_completed(futures):
-                    check_abort(job_id)
-                    completed[futures[future]] = future.result()
+                for future, idx in iter_futures_abortable(futures, job_id=job_id):
+                    completed[idx] = future.result(timeout=0.1)
                     done += 1
                     if progress_cb:
                         progress_cb(done, len(chunks))

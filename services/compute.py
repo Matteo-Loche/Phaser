@@ -430,6 +430,7 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             layer_aqueous=body.layer_aqueous,
             layer_elements=layer_elements,
             solution_mode=body.solution_mode,
+            knobs_mode=config.normalize_knobs_mode(body.knobs_mode),
         )
 
         def progress(done: int, total: int, phase: str = "compute"):

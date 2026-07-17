@@ -84,6 +84,11 @@ def get_config():
         "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
         "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,
         "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
+        "default_knobs_mode": config.KNOBS_MODE_DEFAULT,
+        "knobs_modes": [
+            {"id": mode_id, **config.KNOBS_MODE_META[mode_id]}
+            for mode_id in config.KNOBS_MODES
+        ],
         "job_result_ttl_sec": config.JOB_RESULT_TTL_SEC,
         "job_queue_ttl_sec": config.JOB_QUEUE_TTL_SEC,
         "job_wall_timeout_sec": config.JOB_WALL_TIMEOUT_SEC,
