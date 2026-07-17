@@ -1598,6 +1598,14 @@
                   <button type="button" id="systemLabelSizeInc" aria-label="Increase system label size">+</button>
                 </span>
               </div>
+              <div class="disp-inline-control" title="Show/hide a bottom-left box with the full initial system species and concentrations">
+                <label class="toggle"><input type="checkbox" id="showCompositionBox" checked /> <span>Initial system [C]</span></label>
+                <span class="disp-stepper">
+                  <button type="button" id="compositionLabelSizeDec" aria-label="Decrease composition box size">−</button>
+                  <input type="number" id="compositionLabelSize" min="15" max="35" step="1" value="16" />
+                  <button type="button" id="compositionLabelSizeInc" aria-label="Increase composition box size">+</button>
+                </span>
+              </div>
               <div class="disp-inline-control" title="Show/hide phase and gas-limit boundaries and set line thickness (px)">
                 <label class="toggle"><input type="checkbox" id="showBoundaries" checked /> <span>Boundaries</span></label>
                 <span class="disp-stepper">
@@ -1767,6 +1775,8 @@
       showBoundaries: true,
       showSystemLabel: true,
       systemLabelSize: 20,    // px — system badge font (15–35)
+      showCompositionBox: true,
+      compositionLabelSize: 16, // px — bottom-left composition box (15–35)
       boundaryWidth: 1,       // px — phase boundary stroke (0.25–2.5)
       phaseLabelMode: "name", // "name" | "formula" | "both" — solids + joins; aqueous always chem-formatted
       labelFontSize: 14,      // px — Plotly annotation font (10–20)
@@ -2738,6 +2748,10 @@
       return Math.min(35, Math.max(15, Math.round(Number(v) || 20)));
     }
 
+    function clampCompositionLabelSize(v) {
+      return Math.min(35, Math.max(15, Math.round(Number(v) || 16)));
+    }
+
     function clampBoundaryWidth(v) {
       const n = Number(v);
       if (!Number.isFinite(n)) return 1;
@@ -2759,11 +2773,15 @@
     function syncDisplayStyleReadouts() {
       const fsEl = $("labelFontSize");
       const sysEl = $("systemLabelSize");
+      const compEl = $("compositionLabelSize");
       const bwEl = $("boundaryWidth");
       const op = $("fillOpacityVal");
       const ar = $("labelMinAreaPctVal");
       if (fsEl && document.activeElement !== fsEl) fsEl.value = String(state.labelFontSize);
       if (sysEl && document.activeElement !== sysEl) sysEl.value = String(state.systemLabelSize);
+      if (compEl && document.activeElement !== compEl) {
+        compEl.value = String(state.compositionLabelSize);
+      }
       if (bwEl && document.activeElement !== bwEl) bwEl.value = String(state.boundaryWidth);
       if (op) op.textContent = `${Math.round(state.fillOpacity * 100)}%`;
       if (ar) ar.textContent = formatAreaPct(state.labelMinAreaPct);
@@ -2776,6 +2794,7 @@
       const coEl = $("calloutArrows");
       const hsEl = $("hoverSpeciesCount");
       const sysEl = $("systemLabelSize");
+      const compEl = $("compositionLabelSize");
       const bwEl = $("boundaryWidth");
       if (fsEl) fsEl.value = String(state.labelFontSize);
       if (opEl) opEl.value = String(Math.round(state.fillOpacity * 100));
@@ -2787,6 +2806,7 @@
       if (coEl) coEl.checked = state.calloutArrows !== false;
       if (hsEl) hsEl.value = String(clampHoverSpeciesCount(state.hoverSpeciesCount));
       if (sysEl) sysEl.value = String(state.systemLabelSize);
+      if (compEl) compEl.value = String(state.compositionLabelSize);
       if (bwEl) bwEl.value = String(state.boundaryWidth);
       syncDisplayStyleReadouts();
     }
@@ -2908,6 +2928,51 @@
         bordercolor: "#cbd5e1",
         borderwidth: 1,
         borderpad: Math.max(4, Math.round(clampSystemLabelSize(state.systemLabelSize) * 0.35)),
+      };
+    }
+
+    function compositionEntries(result = runtime.lastResult) {
+      const packed = result?.input_totals;
+      if (packed && typeof packed === "object" && Object.keys(packed).length) {
+        return Object.entries(packed)
+          .filter(([, v]) => Number(v) > 0)
+          .map(([sp, v]) => [sp, Number(v)])
+          .sort((a, b) => a[0].localeCompare(b[0]));
+      }
+      return (state.totals || [])
+        .filter(t => t.species && Number(t.value) > 0)
+        .map(t => [t.species, Number(t.value)])
+        .sort((a, b) => a[0].localeCompare(b[0]));
+    }
+
+    function compositionBoxAnnotation(result) {
+      if (!state.showCompositionBox) return null;
+      const entries = compositionEntries(result);
+      if (!entries.length) return null;
+      const units = unitDisplay(result?.input_units || state.units);
+      const size = clampCompositionLabelSize(state.compositionLabelSize);
+      const lines = entries.map(([sp, v]) => {
+        const conc = roundForUnit(v, result?.input_units || state.units);
+        return `${formatChemHtml(sp)} = ${escapeHtml(String(conc))} ${escapeHtml(units)}`;
+      });
+      return {
+        x: 0, y: 0,
+        xref: "paper", yref: "paper",
+        xanchor: "left", yanchor: "bottom",
+        xshift: 10, yshift: 10,
+        text: lines.join("<br>"),
+        align: "left",
+        showarrow: false,
+        font: {
+          size,
+          color: "#0f172a",
+          family: "system-ui,Segoe UI,sans-serif",
+          weight: 600,
+        },
+        bgcolor: "rgba(255,255,255,0.92)",
+        bordercolor: "#cbd5e1",
+        borderwidth: 1,
+        borderpad: Math.max(4, Math.round(size * 0.35)),
       };
     }
 
@@ -3344,6 +3409,7 @@
       state.calloutArrows = state.calloutArrows !== false;
       state.hoverSpeciesCount = clampHoverSpeciesCount(state.hoverSpeciesCount);
       state.systemLabelSize = clampSystemLabelSize(state.systemLabelSize);
+      state.compositionLabelSize = clampCompositionLabelSize(state.compositionLabelSize);
       state.boundaryWidth = clampBoundaryWidth(state.boundaryWidth);
       delete state.calloutMinAreaPct;
       delete state.targetElement;
@@ -3351,6 +3417,7 @@
       state.layerAqueous ??= true;
       state.layerElements ??= false;
       state.showSystemLabel ??= true;
+      state.showCompositionBox ??= true;
       const modes = (runtime.cfg?.solution_modes || []).map(m => m.id);
       const defaultMode = runtime.cfg?.default_solution_mode || "dummy_titration";
       // Removed "direct" (fixed pH/pe) calculation mode — remap saved sessions.
@@ -4246,6 +4313,26 @@
           e.target.blur();
         }
       });
+      const setCompositionLabelSize = (v) => {
+        state.compositionLabelSize = clampCompositionLabelSize(v);
+        syncDisplayStyleReadouts();
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      $("compositionLabelSizeDec").addEventListener("click", () => {
+        setCompositionLabelSize(state.compositionLabelSize - 1);
+      });
+      $("compositionLabelSizeInc").addEventListener("click", () => {
+        setCompositionLabelSize(state.compositionLabelSize + 1);
+      });
+      $("compositionLabelSize").addEventListener("change", e => setCompositionLabelSize(e.target.value));
+      $("compositionLabelSize").addEventListener("keydown", e => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          setCompositionLabelSize(e.target.value);
+          e.target.blur();
+        }
+      });
       const setBoundaryWidth = (v) => {
         state.boundaryWidth = clampBoundaryWidth(v);
         syncDisplayStyleReadouts();
@@ -4272,6 +4359,10 @@
       });
       $("showSystemLabel").addEventListener("change", e => {
         state.showSystemLabel = e.target.checked; persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      $("showCompositionBox").addEventListener("change", e => {
+        state.showCompositionBox = e.target.checked; persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       });
 
@@ -4360,6 +4451,7 @@
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
       $("showSystemLabel").checked = state.showSystemLabel !== false;
+      $("showCompositionBox").checked = !!state.showCompositionBox;
       const mode = normalizeUiSolutionMode(
         state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration"
       );
@@ -5742,6 +5834,8 @@
       };
       const sysAnn = systemLabelAnnotation(result);
       if (sysAnn) layout.annotations.push(sysAnn);
+      const compAnn = compositionBoxAnnotation(result);
+      if (compAnn) layout.annotations.push(compAnn);
       if (!traces.length) {
         traces.push({ type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",
           marker: { opacity: 0 }, hoverinfo: "skip", showlegend: false });

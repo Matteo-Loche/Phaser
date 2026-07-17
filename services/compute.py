@@ -543,6 +543,11 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
                 pack_params, rows, db_path=db, progress_cb=pack_tick
             )
         packed["compute_mode"] = compute_mode
+        # User-facing input snapshot for the composition overlay (display units).
+        packed["input_totals"] = {
+            str(k): float(v) for k, v in (body.totals or {}).items() if float(v) > 0
+        }
+        packed["input_units"] = input_units
         if adapt_stats:
             packed["adaptive_stats"] = adapt_stats
         if trace_bundle:
