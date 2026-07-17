@@ -771,7 +771,7 @@ Side columns use `--panel-side` (darker than the header `--panel`, slightly lift
 - **≤760px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
 - **≤560px** — display cards stack full-width in the top toolbar.
 
-**Statistics mode** hides the sidebar and diagram workspace; only the statistics dashboard is shown. The mode switcher and database control remain in the header. Data refreshes automatically every **3 minutes** while the page is open (no manual refresh control).
+**Statistics mode** hides the sidebar and diagram workspace; only the statistics dashboard is shown. The mode switcher and database control remain in the header. Stats load when you open the page (or change the period); there is no background auto-refresh.
 
 ### Statistics dashboard (`#/stats`)
 
@@ -861,12 +861,13 @@ Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overla
 | **Phase labels** | Solid / mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability and moles-tie joins (`"A + B"`) format each part with the same mode. Tip uses max clearance inside the **visible** vector fill when tracing is on (base-grid clearance otherwise) |
 | **Label size** | Phase annotation font size in px (default **14**, range 10–20; − / value / +) |
 | **Fill opacity** | Region fill transparency (default **100%**, range 10–100%). Vector fills and uniform heatmaps; boundary polylines stay opaque |
+| **Fill colour** | Select a currently plotted mineral, phase, ion, aqueous species, or co-stability join (listed as **name (formula)**) and choose its colour with the browser-native colour picker. Changes redraw immediately without recompute; **Reset** restores the built-in/hash default |
 | **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%). Slider uses a square curve for finer control near 0%. Threshold is `max(4, floor(n_cells × pct/100))` |
 | **Arrow callout for conflict or small regions** | When on (default), labels that overlap, would cover another tip, or hide their own small patch (≥ ~92% of the visible bbox) shift aside with an arrow when the leader is clear; otherwise they shift without an arrow. When off, all names stay at the region tip (overlap allowed) |
 | **Hover species** | How many aqueous species to list in the plot hover tooltip (default **4**; choices 2 / 4 / 6 / 8). Display-only truncate of packed `hover_species`; new jobs pack up to **8** per element |
 | **System label** | Top-right chemical-system badge (e.g. `Fe-C`): show/hide toggle plus − / value / + font size (default **20** px, range 15–35). Full input system, or the active element subset when per-element filters are on |
 | **Boundary width** | Phase-boundary stroke thickness in px (default **1**, range 0.25–2.5, step 0.25). Stability/gas-limit dashes scale with it; show/hide via **Boundaries** |
-| **Labels only** | Region labels without fill colours |
+| **No fill** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
 
@@ -876,7 +877,7 @@ Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overla
 
 At least one of **Solid** or **Aqueous** predominance must stay enabled; the UI prevents unchecking both.
 
-Phase/species **colours** persist in `colorByName` (localStorage). New phases get a stable hash-based palette colour on first encounter.
+Phase/species **colours** persist browser-side in `colorByName` (`phaseDiagramState.v8` in localStorage), so overrides survive refreshes, cached-result restores, and recomputes that contain the same category name. New names start from a built-in mineral colour or stable hash-based palette colour. In solid/mineral view, aqueous fallback categories remain forced light grey for readability; switch to Aqueous predominance to recolour aqueous categories directly.
 
 Non-convergent / `none` cells render **white**; aqueous species use light grey in solid/mineral view (co-stability joins are solids and use phase colours). O₂/H₂ over-pressure regions render as white gas-domain fills with labelled boundaries (see [Gas management](#gas-management-water-stability--component-gases)).
 
