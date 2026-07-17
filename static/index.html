@@ -603,7 +603,6 @@
       .app.drawer-open aside { transform: translateX(0); }
       .app.drawer-open .backdrop { display: block; }
     }
-
     /* ---------- Cards ---------- */
     .card {
       border: 1px solid var(--border);
@@ -706,7 +705,29 @@
       font-size: 1.1rem; line-height: 1;
     }
     .species-row .rm:hover { background: rgba(255,107,107,0.12); }
-    .add-species { display: grid; grid-template-columns: 1fr auto; gap: 0.4rem; }
+    .add-species {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
+      gap: 0.4rem;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .add-species input { min-width: 0; }
+    .add-species .btn {
+      min-width: var(--tap);
+      padding-left: 0.7rem;
+      padding-right: 0.7rem;
+      white-space: nowrap;
+    }
+    @media (max-width: 380px) {
+      .add-species {
+        grid-template-columns: 1fr;
+      }
+      .add-species .btn {
+        justify-self: end;
+      }
+    }
 
     /* ---------- Phases ---------- */
     .phase-toolbar { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
@@ -956,6 +977,7 @@
       color: var(--text);
       font-variant-numeric: tabular-nums;
       font-size: 0.82rem;
+      appearance: textfield;
       -moz-appearance: textfield;
     }
     .disp-stepper input[type="number"]::-webkit-outer-spin-button,
@@ -1843,6 +1865,8 @@
             const hint = mode.emptyHint || "Set your system and press <b>Compute diagram</b>.";
             empty.innerHTML = `<div style="font-size:2rem">⬡</div><div>${hint}</div>`;
           }
+          // Drop stale subset boxes from the previous mode's result.
+          syncDisplayFromPlot();
         }
         stopStatsPolling();
       } else if (activeModeId === "stats") {
@@ -2045,6 +2069,17 @@
       return y;
     }
 
+    function statsBucketBarWidth(x) {
+      const diffs = [];
+      for (let i = 1; i < x.length; i++) {
+        const d = x[i] - x[i - 1];
+        if (Number.isFinite(d) && d > 0) diffs.push(d);
+      }
+      if (!diffs.length) return undefined;
+      diffs.sort((a, b) => a - b);
+      return diffs[Math.floor(diffs.length / 2)] * 0.86;
+    }
+
     function drawStatsCharts(buckets, windowId, hours) {
       const actEl = $("statsActivityPlot");
       const waitEl = $("statsWaitPlot");
@@ -2053,6 +2088,7 @@
       const x = list.map(b => new Date(b.bucket_start));
       const counts = list.map(b => b.count || 0);
       const waitS = list.map(b => (b.avg_wait_ms != null ? b.avg_wait_ms / 1000 : null));
+      const barWidth = statsBucketBarWidth(x);
 
       const muted = statsCssVar("--muted", "#888");
       const border = statsCssVar("--border", "#444");
@@ -2085,19 +2121,22 @@
       const config = { displayModeBar: false, responsive: true };
 
       Plotly.react(actEl, [{
-        x, y: counts, type: "scatter", mode: "lines",
-        line: { color: "#00DDFF", width: 1.5, shape: "linear" },
-        fill: "tozeroy", fillcolor: "rgba(0,221,255,0.16)",
+        x, y: counts, type: "bar", width: barWidth,
+        marker: {
+          color: "rgba(0,221,255,0.62)",
+          line: { color: "#00DDFF", width: 1 },
+        },
         hovertemplate: "%{y} diagram(s)<extra></extra>",
-      }], { ...base, yaxis: statsCountYAxis(base.yaxis, counts) }, config);
+      }], { ...base, bargap: 0.08, yaxis: statsCountYAxis(base.yaxis, counts) }, config);
 
       Plotly.react(waitEl, [{
-        x, y: waitS, type: "scatter", mode: "lines",
-        connectgaps: false,
-        line: { color: "#FF9900", width: 1.5, shape: "linear" },
-        fill: "tozeroy", fillcolor: "rgba(255,153,0,0.14)",
+        x, y: waitS, type: "bar", width: barWidth,
+        marker: {
+          color: "rgba(255,153,0,0.58)",
+          line: { color: "#FF9900", width: 1 },
+        },
         hovertemplate: "%{y:.1f} s wait<extra></extra>",
-      }], base, config);
+      }], { ...base, bargap: 0.08 }, config);
     }
 
     function statsBarList(items, labelKey, countKey) {
@@ -2184,11 +2223,11 @@
         </div>
         <div class="stats-charts">
           <section class="stats-card" style="--card-accent:#00DDFF">
-            <h3>Activity — ${htmlEscape(windowLabel)} (${activityTotal} ${activityTotal === 1 ? "diagram" : "diagrams"})</h3>
+            <h3>Activity histogram — ${htmlEscape(windowLabel)} (${activityTotal} ${activityTotal === 1 ? "diagram" : "diagrams"})</h3>
             <div id="statsActivityPlot" class="stats-plot"></div>
           </section>
           <section class="stats-card" style="--card-accent:#FF9900">
-            <h3>Avg wait time — ${htmlEscape(windowLabel)} (seconds)</h3>
+            <h3>Queue wait histogram — ${htmlEscape(windowLabel)} (seconds)</h3>
             <div id="statsWaitPlot" class="stats-plot"></div>
           </section>
         </div>
@@ -2452,32 +2491,54 @@
       return [...elems].sort().join("-");
     }
 
+    /** Selection restricted to ``elems`` (drops ghosts from another mode/system). */
+    function selectedSubsetElements(elems) {
+      const allowed = new Set(elems || []);
+      const sel = (state.solidSubsetElements || []).filter(e => allowed.has(e));
+      return sel.length ? sel : [...(elems || [])];
+    }
+
+    function pruneSolidSubsetElements(elems) {
+      state.solidSubsetElements = selectedSubsetElements(elems);
+      return state.solidSubsetElements;
+    }
+
+    function onSolidSubsetChange(ev) {
+      const cb = ev.target;
+      if (!cb || cb.type !== "checkbox" || !cb.dataset?.elem) return;
+      const result = runtime.lastResult;
+      const elems = result?.system_elements || systemElements();
+      const e = cb.dataset.elem;
+      // Re-base on the active result's elements so mode-switch leftovers cannot stick.
+      let sel = selectedSubsetElements(elems);
+      if (cb.checked) {
+        if (!sel.includes(e)) sel = [...sel, e];
+      } else {
+        sel = sel.filter(x => x !== e);
+      }
+      if (!sel.length) {
+        sel = [e];
+        cb.checked = true;
+      }
+      state.solidSubsetElements = sel;
+      persist();
+      if (result) drawDiagram(result);
+    }
+
     function renderSolidSubsetBoxes(result) {
       const wrap = $("solidSubsetBoxes");
+      if (!wrap) return;
       const elems = result?.system_elements || systemElements();
-      if (!state.solidSubsetElements.length) {
-        state.solidSubsetElements = [...elems];
-      }
+      pruneSolidSubsetElements(elems);
       wrap.innerHTML = elems.map(e => {
         const checked = state.solidSubsetElements.includes(e) ? "checked" : "";
         return `<label class="toggle" style="font-size:0.78rem"><input type="checkbox" data-elem="${e}" ${checked} /> ${e}</label>`;
       }).join("");
-      wrap.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-        cb.addEventListener("change", () => {
-          const e = cb.dataset.elem;
-          if (cb.checked) {
-            if (!state.solidSubsetElements.includes(e)) state.solidSubsetElements.push(e);
-          } else {
-            state.solidSubsetElements = state.solidSubsetElements.filter(x => x !== e);
-          }
-          if (!state.solidSubsetElements.length) {
-            state.solidSubsetElements = [e];
-            cb.checked = true;
-          }
-          persist();
-          if (runtime.lastResult) drawDiagram(runtime.lastResult);
-        });
-      });
+      // Delegate once — redraws rebuild the inputs but must not stack listeners.
+      if (!wrap.dataset.subsetBound) {
+        wrap.dataset.subsetBound = "1";
+        wrap.addEventListener("change", onSolidSubsetChange);
+      }
     }
 
     // Which solid/mineral and aqueous families exist in a computed result.
@@ -2537,7 +2598,14 @@
       const result = runtime.lastResult;
       populateDisplayModeOptions(result);
       syncDisplayControls(result);
-      if (result) renderSolidSubsetBoxes(result);
+      if (result) {
+        renderSolidSubsetBoxes(result);
+      } else {
+        const boxes = $("solidSubsetBoxes");
+        if (boxes) boxes.innerHTML = "";
+        const wrap = $("solidSubsetWrap");
+        if (wrap) wrap.style.display = "none";
+      }
     }
 
     // Area slider: position t∈[0,1] → pct = max·t² so small values get finer control.
@@ -2671,16 +2739,15 @@
     // per-element subsets were computed, otherwise the full system set.
     function activeSubsetKey(elems, result = runtime.lastResult) {
       const cfg = displayLayerConfig(result);
-      if (cfg.elements && state.solidSubsetElements.length) {
-        return subsetKey(state.solidSubsetElements);
+      if (cfg.elements) {
+        return subsetKey(selectedSubsetElements(elems));
       }
       return subsetKey(elems);
     }
 
     function subsetLabelText(elems, result = runtime.lastResult) {
       const cfg = displayLayerConfig(result);
-      const used = cfg.elements && state.solidSubsetElements.length
-        ? state.solidSubsetElements : elems;
+      const used = cfg.elements ? selectedSubsetElements(elems) : elems;
       return [...used].sort().join(", ");
     }
 
@@ -2688,13 +2755,34 @@
     function displayedSystemElements(result = runtime.lastResult) {
       const full = result?.system_elements || systemElements();
       const cfg = displayLayerConfig(result);
-      if (cfg.elements && state.solidSubsetElements.length) {
-        const sel = new Set(state.solidSubsetElements);
-        const filtered = full.filter(e => sel.has(e));
+      if (cfg.elements) {
+        const sel = selectedSubsetElements(full);
         // Partial subset → checked elements only; all checked → full input system.
-        if (filtered.length && filtered.length < full.length) return filtered;
+        if (sel.length && sel.length < full.length) return sel;
       }
       return full;
+    }
+
+    /** Pick a packed subset layer; avoid falling back to full-system when a
+        partial selection's key is missing (that made filters look "stuck"). */
+    function pickSubsetLayer(subsets, elems, result) {
+      if (!subsets || typeof subsets !== "object") return null;
+      const key = activeSubsetKey(elems, result);
+      if (subsets[key]) return subsets[key];
+      const fullKey = subsetKey(elems);
+      const sel = selectedSubsetElements(elems);
+      // Selection is the full system (or empty → treated as full): full map is correct.
+      if (sel.length === elems.length && subsets[fullKey]) return subsets[fullKey];
+      // Large systems pack only singles/pairs/full — try dropping to available keys.
+      if (sel.length >= 2) {
+        const pairKey = subsetKey(sel.slice(0, 2));
+        if (subsets[pairKey]) return subsets[pairKey];
+      }
+      if (sel.length >= 1) {
+        const oneKey = subsetKey([sel[0]]);
+        if (subsets[oneKey]) return subsets[oneKey];
+      }
+      return subsets[fullKey] || null;
     }
 
     function chemicalSystemLabelText(result = runtime.lastResult) {
@@ -2729,17 +2817,16 @@
       const src = source || result;
       const layers = src.layers || {};
       const elems = src.system_elements || result.system_elements || systemElements();
-      const key = activeSubsetKey(elems, result);
       if (state.displayMode === "aqueous") {
         const aqSubsets = layers.aqueous_subsets || {};
-        const layer = aqSubsets[key] || aqSubsets[subsetKey(elems)];
+        const layer = pickSubsetLayer(aqSubsets, elems, result);
         if (layer) {
           return { grid: layer.grid, names: layer.names, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
         }
       }
       const solidKey = solidFamilyKey(result);
       const solidSubsets = layers[solidKey] || layers.mineral_subsets || layers.solid_subsets || {};
-      const layer = solidSubsets[key] || solidSubsets[subsetKey(elems)];
+      const layer = pickSubsetLayer(solidSubsets, elems, result);
       if (layer) {
         const isAsm = solidKey === "mineral_subsets";
         const label = isAsm
@@ -2758,12 +2845,11 @@
     function activeVectorLayer(result) {
       const layers = result.display?.layers || {};
       const elems = result.system_elements || systemElements();
-      const key = activeSubsetKey(elems, result);
       const aqSubsets = layers.aqueous_subsets || {};
       const solidKey = solidFamilyKey(result);
       const solidSubsets = layers[solidKey] || layers.mineral_subsets || layers.solid_subsets || {};
-      const aqLayer = aqSubsets[key] || aqSubsets[subsetKey(elems)];
-      const solidLayer = solidSubsets[key] || solidSubsets[subsetKey(elems)];
+      const aqLayer = pickSubsetLayer(aqSubsets, elems, result);
+      const solidLayer = pickSubsetLayer(solidSubsets, elems, result);
       // Prefer the selected family, but fall back to whichever was computed so a
       // mode/layer mismatch can never crash the render.
       if (state.displayMode === "aqueous" && aqLayer) {
@@ -5308,8 +5394,8 @@
     function hoverElementsFilter(result) {
       const elems = result.system_elements || systemElements();
       const cfg = displayLayerConfig(result);
-      if (cfg.elements && state.solidSubsetElements.length) {
-        return new Set(state.solidSubsetElements);
+      if (cfg.elements) {
+        return new Set(selectedSubsetElements(elems));
       }
       return new Set(elems);
     }
