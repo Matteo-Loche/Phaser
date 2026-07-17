@@ -1010,6 +1010,58 @@
     .disp-inline-control .disp-stepper {
       margin-left: auto;
     }
+    .export-layers-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      max-height: clamp(120px, 22vh, 220px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .export-layers-list > .export-status {
+      padding: 0.55rem 0.6rem;
+    }
+    .export-layers-list label.toggle {
+      font-size: 0.76rem;
+      line-height: 1.25;
+      padding: 0.45rem 0.6rem;
+      border-bottom: 1px solid var(--border);
+      margin: 0;
+    }
+    .export-layers-list label.toggle:last-child { border-bottom: none; }
+    .export-layers-actions {
+      display: flex;
+      gap: 0.35rem;
+      flex-wrap: wrap;
+    }
+    .export-layers-actions button {
+      font-size: 0.72rem;
+      padding: 0.2rem 0.45rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .export-layers-actions button:hover { color: var(--text); }
+    .export-status {
+      font-size: 0.72rem;
+      color: var(--muted);
+      min-height: 1.1em;
+    }
+    #exportPlotDiv {
+      position: fixed;
+      left: -99999px;
+      top: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
     .disp-color-picker {
       display: flex;
       flex-direction: column;
@@ -1489,6 +1541,7 @@
         <div class="plot-wrap">
           <div class="plot-square">
             <div id="plotDiv"></div>
+            <div id="exportPlotDiv" aria-hidden="true"></div>
             <div class="empty" id="plotEmpty">
               <div style="font-size:2rem">⬡</div>
               <div>Set your system and press <b>Compute diagram</b>.</div>
@@ -1614,6 +1667,46 @@
                   <button type="button" id="boundaryWidthInc" aria-label="Increase boundary width">+</button>
                 </span>
               </div>
+            </div>
+          </details>
+
+          <details class="card disp-card" id="exportCard">
+            <summary>Download <span class="chev">›</span></summary>
+            <div class="body">
+              <div class="disp-row" title="Layout size matches the on-screen plot; DPI scales every feature (fonts, lines) so relative sizes stay the same">
+                <label>Size</label>
+                <span class="disp-val" id="exportSizeReadout">—</span>
+              </div>
+              <div class="disp-row" title="Export width÷height (step 0.025). Default 1:1. On-screen plot stays as-is.">
+                <label for="exportAspect">Aspect</label>
+                <span class="disp-stepper">
+                  <button type="button" id="exportAspectDec" aria-label="Decrease aspect ratio">−</button>
+                  <input type="number" id="exportAspect" min="0.85" max="1.25" step="0.025" value="1" />
+                  <button type="button" id="exportAspectInc" aria-label="Increase aspect ratio">+</button>
+                </span>
+              </div>
+              <div class="disp-row" title="Higher DPI uses Plotly scale so text and lines grow with the image (not a larger empty canvas)">
+                <label for="exportDpi">DPI</label>
+                <span class="disp-stepper">
+                  <button type="button" id="exportDpiDec" aria-label="Decrease DPI">−</button>
+                  <input type="number" id="exportDpi" min="100" max="400" step="25" value="300" />
+                  <button type="button" id="exportDpiInc" aria-label="Increase DPI">+</button>
+                </span>
+              </div>
+              <div class="disp-row" style="align-items:flex-start">
+                <span style="flex:1 1 auto">Layers</span>
+                <span class="export-layers-actions">
+                  <button type="button" id="exportLayersAll">All</button>
+                  <button type="button" id="exportLayersNone">None</button>
+                </span>
+              </div>
+              <div id="exportLayersList" class="export-layers-list soft-scroll" role="group" aria-label="Layers to download">
+                <span class="export-status">Compute a diagram first.</span>
+              </div>
+              <button type="button" class="btn block secondary" id="exportDownloadBtn" disabled>
+                Download selected
+              </button>
+              <div class="export-status" id="exportStatus" aria-live="polite"></div>
             </div>
           </details>
 
@@ -1784,6 +1877,8 @@
       labelMinAreaPct: 0.1,   // % of grid cells (0–1); minCells = max(4, floor(total * pct/100))
       calloutArrows: true,    // arrow callouts for overlap / tip cover / self-obscure
       hoverSpeciesCount: 4,   // aqueous species listed in hover tooltip (2–8)
+      exportAspect: 1,        // export width÷height (0.85–1.25, step 0.025)
+      exportDpi: 300,         // Plotly scale = dpi/96 — fonts/lines scale with pixels (100–400, step 25)
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
       colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
     };
@@ -1807,6 +1902,9 @@
       statsWindow: "30d",
       fillColorTarget: null,
       fillColorRedrawTimer: null,
+      exportBusy: false,
+      exportChecked: null, // Set of target ids for this session only
+      exportResultSysKey: null,
     };
 
     const MODES = {
@@ -2744,6 +2842,38 @@
       return Math.min(20, Math.max(10, Math.round(Number(v) || 14)));
     }
 
+    // Regular 0.025 steps contained within the previous 1/1.2…1/0.8 range.
+    const EXPORT_ASPECT_MIN = 0.85;
+    const EXPORT_ASPECT_MAX = 1.25;
+    const EXPORT_ASPECT_STEP = 0.025;
+    const EXPORT_DPI_MIN = 100;
+    const EXPORT_DPI_MAX = 400;
+    const EXPORT_DPI_STEP = 25;
+    const EXPORT_CSS_DPI = 96; // CSS px ↔ Plotly scale baseline
+
+    function clampExportAspect(v) {
+      // Migrate old string presets / fine-slider values from earlier Download UX.
+      if (typeof v === "string") {
+        const map = { "1:1": 1, "4:3": 4 / 3, "16:9": 16 / 9, "3:4": 3 / 4 };
+        v = map[v] ?? 1;
+      }
+      const n = Number(v);
+      if (!Number.isFinite(n)) return 1;
+      const stepped = Math.round(n / EXPORT_ASPECT_STEP) * EXPORT_ASPECT_STEP;
+      return Math.min(EXPORT_ASPECT_MAX, Math.max(EXPORT_ASPECT_MIN, stepped));
+    }
+
+    function clampExportDpi(v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return 300;
+      const stepped = Math.round(n / EXPORT_DPI_STEP) * EXPORT_DPI_STEP;
+      return Math.min(EXPORT_DPI_MAX, Math.max(EXPORT_DPI_MIN, stepped));
+    }
+
+    function exportScaleFromDpi(dpi = state.exportDpi) {
+      return clampExportDpi(dpi) / EXPORT_CSS_DPI;
+    }
+
     function clampSystemLabelSize(v) {
       return Math.min(35, Math.max(15, Math.round(Number(v) || 20)));
     }
@@ -2855,18 +2985,50 @@
 
     // Subset key for the active display: the selected element subset when
     // per-element subsets were computed, otherwise the full system set.
-    function activeSubsetKey(elems, result = runtime.lastResult) {
+    function viewSubsetElements(elems, view = null) {
+      if (!view || view.isCurrentView) return selectedSubsetElements(elems);
+      if (view.subsetElements?.length) return [...view.subsetElements];
+      return [...(elems || [])];
+    }
+
+    function resolveDisplayMode(view = null) {
+      if (!view) return state.displayMode;
+      if (view.isCurrentView) return state.displayMode;
+      return view.displayMode ?? state.displayMode;
+    }
+
+    function activeSubsetKey(elems, result = runtime.lastResult, view = null) {
       const cfg = displayLayerConfig(result);
+      if (view && !view.isCurrentView && view.subsetElements?.length) {
+        return subsetKey(view.subsetElements);
+      }
       if (cfg.elements) {
-        return subsetKey(selectedSubsetElements(elems));
+        return subsetKey(viewSubsetElements(elems, view));
       }
       return subsetKey(elems);
     }
 
-    function subsetLabelText(elems, result = runtime.lastResult) {
+    function subsetLabelText(elems, result = runtime.lastResult, view = null) {
       const cfg = displayLayerConfig(result);
-      const used = cfg.elements ? selectedSubsetElements(elems) : elems;
+      let used;
+      if (view && !view.isCurrentView && view.subsetElements?.length) {
+        used = view.subsetElements;
+      } else if (cfg.elements) {
+        used = viewSubsetElements(elems, view);
+      } else {
+        used = elems;
+      }
+      const full = elems || [];
+      if (used.length && used.length >= full.length) return "all";
       return [...used].sort().join(", ");
+    }
+
+    function isFullSystemElements(subsetElements, result = runtime.lastResult) {
+      const full = result?.system_elements || systemElements();
+      if (!subsetElements?.length || !full.length) return !subsetElements?.length;
+      if (subsetElements.length !== full.length) return false;
+      const a = new Set(subsetElements);
+      return full.every(e => a.has(e));
     }
 
     /** Elements shown in the corner system badge (Fe-C-S). */
@@ -2883,12 +3045,14 @@
 
     /** Pick a packed subset layer; avoid falling back to full-system when a
         partial selection's key is missing (that made filters look "stuck"). */
-    function pickSubsetLayer(subsets, elems, result) {
+    function pickSubsetLayer(subsets, elems, result, view = null) {
       if (!subsets || typeof subsets !== "object") return null;
-      const key = activeSubsetKey(elems, result);
+      const key = activeSubsetKey(elems, result, view);
       if (subsets[key]) return subsets[key];
       const fullKey = subsetKey(elems);
-      const sel = selectedSubsetElements(elems);
+      const sel = view && !view.isCurrentView && view.subsetElements?.length
+        ? view.subsetElements
+        : selectedSubsetElements(elems);
       // Selection is the full system (or empty → treated as full): full map is correct.
       if (sel.length === elems.length && subsets[fullKey]) return subsets[fullKey];
       // Large systems pack only singles/pairs/full — try dropping to available keys.
@@ -2904,7 +3068,15 @@
     }
 
     function chemicalSystemLabelText(result = runtime.lastResult) {
-      return displayedSystemElements(result).join("-");
+      const full = result?.system_elements || systemElements();
+      const shown = displayedSystemElements(result);
+      const text = shown.join("-");
+      if (!text) return "";
+      // Full initial system → brackets; active subset → plain (no brackets).
+      if (isFullSystemElements(shown, result) || shown.length >= full.length) {
+        return `[${text}]`;
+      }
+      return text;
     }
 
     function systemLabelAnnotation(result) {
@@ -2976,25 +3148,31 @@
       };
     }
 
-    function activeLayer(result, source = null) {
+    function activeLayer(result, source = null, view = null) {
       const src = source || result;
       const layers = src.layers || {};
       const elems = src.system_elements || result.system_elements || systemElements();
-      if (state.displayMode === "aqueous") {
+      const displayMode = resolveDisplayMode(view);
+      if (displayMode === "aqueous") {
         const aqSubsets = layers.aqueous_subsets || {};
-        const layer = pickSubsetLayer(aqSubsets, elems, result);
+        const layer = pickSubsetLayer(aqSubsets, elems, result, view);
         if (layer) {
-          return { grid: layer.grid, names: layer.names, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
+          return {
+            grid: layer.grid,
+            names: layer.names,
+            label: `Aqueous (${subsetLabelText(elems, result, view)})`,
+            aqueous: [],
+          };
         }
       }
       const solidKey = solidFamilyKey(result);
       const solidSubsets = layers[solidKey] || layers.mineral_subsets || layers.solid_subsets || {};
-      const layer = pickSubsetLayer(solidSubsets, elems, result);
+      const layer = pickSubsetLayer(solidSubsets, elems, result, view);
       if (layer) {
         const isAsm = solidKey === "mineral_subsets";
         const label = isAsm
-          ? `Minerals (${subsetLabelText(elems, result)}) + fluid species`
-          : `Solids (${subsetLabelText(elems, result)}) + fluid species`;
+          ? `Minerals (${subsetLabelText(elems, result, view)}) + fluid species`
+          : `Solids (${subsetLabelText(elems, result, view)}) + fluid species`;
         return { grid: layer.grid, names: layer.names, label, aqueous: layer.aqueous_names || [] };
       }
       return {
@@ -3005,28 +3183,29 @@
       };
     }
 
-    function activeVectorLayer(result) {
+    function activeVectorLayer(result, view = null) {
       const layers = result.display?.layers || {};
       const elems = result.system_elements || systemElements();
       const aqSubsets = layers.aqueous_subsets || {};
       const solidKey = solidFamilyKey(result);
       const solidSubsets = layers[solidKey] || layers.mineral_subsets || layers.solid_subsets || {};
-      const aqLayer = pickSubsetLayer(aqSubsets, elems, result);
-      const solidLayer = pickSubsetLayer(solidSubsets, elems, result);
+      const aqLayer = pickSubsetLayer(aqSubsets, elems, result, view);
+      const solidLayer = pickSubsetLayer(solidSubsets, elems, result, view);
+      const displayMode = resolveDisplayMode(view);
       // Prefer the selected family, but fall back to whichever was computed so a
       // mode/layer mismatch can never crash the render.
-      if (state.displayMode === "aqueous" && aqLayer) {
-        return { ...aqLayer, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
+      if (displayMode === "aqueous" && aqLayer) {
+        return { ...aqLayer, label: `Aqueous (${subsetLabelText(elems, result, view)})`, aqueous: [] };
       }
       if (solidLayer) {
         const isAsm = solidKey === "mineral_subsets";
         const label = isAsm
-          ? `Minerals (${subsetLabelText(elems, result)}) + fluid species`
-          : `Solids (${subsetLabelText(elems, result)}) + fluid species`;
+          ? `Minerals (${subsetLabelText(elems, result, view)}) + fluid species`
+          : `Solids (${subsetLabelText(elems, result, view)}) + fluid species`;
         return { ...solidLayer, label, aqueous: solidLayer.aqueous_names || [] };
       }
       if (aqLayer) {
-        return { ...aqLayer, label: `Aqueous (${subsetLabelText(elems, result)})`, aqueous: [] };
+        return { ...aqLayer, label: `Aqueous (${subsetLabelText(elems, result, view)})`, aqueous: [] };
       }
       return null;
     }
@@ -3418,6 +3597,9 @@
       state.layerElements ??= false;
       state.showSystemLabel ??= true;
       state.showCompositionBox ??= true;
+      delete state.exportSize;
+      state.exportAspect = clampExportAspect(state.exportAspect);
+      state.exportDpi = clampExportDpi(state.exportDpi);
       const modes = (runtime.cfg?.solution_modes || []).map(m => m.id);
       const defaultMode = runtime.cfg?.default_solution_mode || "dummy_titration";
       // Removed "direct" (fixed pH/pe) calculation mode — remap saved sessions.
@@ -3955,6 +4137,7 @@
       if (window.Plotly && document.getElementById("plotDiv") && runtime.lastResult) {
         try { Plotly.Plots.resize("plotDiv"); } catch (e) {}
       }
+      syncExportControls(runtime.lastResult);
     }
 
     function clampSidebarW(px) {
@@ -4366,6 +4549,73 @@
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       });
 
+      $("exportAspect").addEventListener("change", e => {
+        state.exportAspect = clampExportAspect(e.target.value);
+        syncExportControls();
+        persist();
+      });
+      $("exportAspect").addEventListener("keydown", e => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          state.exportAspect = clampExportAspect(e.target.value);
+          syncExportControls();
+          persist();
+          e.target.blur();
+        }
+      });
+      const bumpExportAspect = (delta) => {
+        state.exportAspect = clampExportAspect(state.exportAspect + delta);
+        syncExportControls();
+        persist();
+      };
+      $("exportAspectDec").addEventListener("click", () => bumpExportAspect(-EXPORT_ASPECT_STEP));
+      $("exportAspectInc").addEventListener("click", () => bumpExportAspect(EXPORT_ASPECT_STEP));
+      $("exportDpi").addEventListener("change", e => {
+        state.exportDpi = clampExportDpi(e.target.value);
+        syncExportControls();
+        persist();
+      });
+      $("exportDpi").addEventListener("keydown", e => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          state.exportDpi = clampExportDpi(e.target.value);
+          syncExportControls();
+          persist();
+          e.target.blur();
+        }
+      });
+      const bumpExportDpi = (delta) => {
+        state.exportDpi = clampExportDpi(state.exportDpi + delta);
+        syncExportControls();
+        persist();
+      };
+      $("exportDpiDec").addEventListener("click", () => bumpExportDpi(-EXPORT_DPI_STEP));
+      $("exportDpiInc").addEventListener("click", () => bumpExportDpi(EXPORT_DPI_STEP));
+      $("exportLayersList").addEventListener("change", e => {
+        const cb = e.target;
+        if (!cb || cb.type !== "checkbox" || !cb.dataset.exportId) return;
+        const checked = ensureExportChecked();
+        if (cb.checked) checked.add(cb.dataset.exportId);
+        else checked.delete(cb.dataset.exportId);
+        syncExportControls();
+      });
+      $("exportLayersAll").addEventListener("click", () => {
+        const result = runtime.lastResult;
+        if (!result) return;
+        const checked = ensureExportChecked();
+        checked.clear();
+        listExportTargets(result).forEach(t => checked.add(t.id));
+        renderExportChecklist(result);
+      });
+      $("exportLayersNone").addEventListener("click", () => {
+        const checked = ensureExportChecked();
+        checked.clear();
+        renderExportChecklist(runtime.lastResult);
+      });
+      $("exportDownloadBtn").addEventListener("click", () => {
+        runPngExport();
+      });
+
       $("addSpeciesBtn").addEventListener("click", () => addSpecies($("speciesPicker").value));
       $("speciesPicker").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addSpecies(e.target.value); } });
 
@@ -4452,6 +4702,7 @@
       $("showBoundaries").checked = state.showBoundaries;
       $("showSystemLabel").checked = state.showSystemLabel !== false;
       $("showCompositionBox").checked = !!state.showCompositionBox;
+      renderExportChecklist(runtime.lastResult);
       const mode = normalizeUiSolutionMode(
         state.solutionMode || runtime.cfg?.default_solution_mode || "dummy_titration"
       );
@@ -5752,18 +6003,142 @@
 
     const INVISIBLE_COLORSCALE = [[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]];
 
-    function drawDiagram(result) {
-      if (!result) return;
-      if (isDiagramMode(activeModeId) && !resultMatchesMode(activeModeId, result)) {
-        return;
-      }
-      runtime.lastResult = result;
-      $("plotEmpty").style.display = "none";
-      syncDisplayFromPlot();
+    /** On-screen plot box size — base for PNG so fonts/overlays match what the user sees. */
+    function screenPlotBaseSize() {
+      const box = document.querySelector(".plot-square") || $("plotDiv");
+      const w = Math.round(box?.clientWidth || 0);
+      const h = Math.round(box?.clientHeight || 0);
+      if (w >= 64 && h >= 64) return { width: w, height: h };
+      return { width: 800, height: 800 };
+    }
 
+    /**
+     * Export pixels from the on-screen plot size + aspect (width÷height).
+     * Long side stays the screen long side so relative font size is unchanged.
+     */
+    function exportPixelSize() {
+      const base = screenPlotBaseSize();
+      const S = Math.max(base.width, base.height);
+      const ratio = clampExportAspect(state.exportAspect);
+      let width, height;
+      if (ratio >= 1) {
+        width = S;
+        height = Math.max(1, Math.round(S / ratio));
+      } else {
+        height = S;
+        width = Math.max(1, Math.round(S * ratio));
+      }
+      return { width, height, base };
+    }
+
+    function packedLayerRoot(result) {
+      return usesVectorDisplay(result)
+        ? (result.display?.layers || {})
+        : (result.layers || {});
+    }
+
+    function subsetKeySortCmp(a, b) {
+      const na = a.split("-").length;
+      const nb = b.split("-").length;
+      if (nb !== na) return nb - na;
+      return a.localeCompare(b);
+    }
+
+    function exportTargetLabel(result, family, subsetElements) {
+      const text = isFullSystemElements(subsetElements, result)
+        ? "all"
+        : [...subsetElements].sort().join(", ");
+      if (family === "aqueous") return `Aqueous (${text})`;
+      const solidKey = solidFamilyKey(result);
+      if (solidKey === "mineral_subsets") return `Minerals (${text}) + fluid species`;
+      return `Solids (${text}) + fluid species`;
+    }
+
+    function listExportTargets(result) {
+      if (!result) return [];
+      const elems = result.system_elements || systemElements();
+      const currentLayer = activeLayer(result);
+      const currentFamily = state.displayMode === "aqueous" ? "aqueous" : "solid";
+      const currentKey = activeSubsetKey(elems, result);
+      const targets = [{
+        id: "__current__",
+        isCurrentView: true,
+        displayMode: state.displayMode,
+        subsetElements: selectedSubsetElements(elems),
+        label: currentLayer.label,
+      }];
+      const root = packedLayerRoot(result);
+      const solidKey = solidFamilyKey(result);
+      // Seed with the active view's resolved layer so it is never listed twice.
+      const seen = new Set(["__current__", `${currentFamily}:${currentKey}`]);
+
+      const addTarget = (family, key) => {
+        const id = `${family}:${key}`;
+        if (seen.has(id)) return;
+        seen.add(id);
+        const subsetElements = key.split("-").filter(Boolean);
+        targets.push({
+          id,
+          family,
+          displayMode: family === "aqueous" ? "aqueous" : "solid",
+          subsetElements,
+          subsetKey: key,
+          label: exportTargetLabel(result, family, subsetElements),
+        });
+      };
+
+      const solidSubsets = root[solidKey] || root.solid_subsets || root.mineral_subsets || {};
+      Object.keys(solidSubsets).sort(subsetKeySortCmp).forEach(k => addTarget("solid", k));
+
+      const aqSubsets = root.aqueous_subsets || {};
+      Object.keys(aqSubsets).sort(subsetKeySortCmp).forEach(k => addTarget("aqueous", k));
+
+      return targets;
+    }
+
+    function ensureExportChecked() {
+      if (!(runtime.exportChecked instanceof Set)) {
+        runtime.exportChecked = new Set(["__current__"]);
+      }
+      return runtime.exportChecked;
+    }
+
+    function sanitizeFilename(name) {
+      // Keep [] so full-system tags like [Fe-C] survive in download names.
+      return String(name).replace(/[^a-zA-Z0-9._\[\]-]+/g, "_").replace(/_+/g, "_");
+    }
+
+    function buildExportFilename(result, target, dpi) {
+      const elems = result.system_elements || systemElements();
+      const sys = sanitizeFilename(`[${elems.join("-") || "system"}]`);
+      let part;
+      if (target.id === "__current__") {
+        const sel = selectedSubsetElements(elems);
+        const family = state.displayMode === "aqueous" ? "aqueous" : "solid";
+        const sub = isFullSystemElements(sel, result) ? "all" : subsetKey(sel);
+        part = `${family}_${sanitizeFilename(sub)}`;
+      } else if (isFullSystemElements(target.subsetElements, result)) {
+        part = `${target.family}_all`;
+      } else {
+        part = `${target.family}_${sanitizeFilename(target.subsetKey || subsetKey(target.subsetElements))}`;
+      }
+      return sanitizeFilename(`phaser_${sys}_${part}_${dpi}dpi.png`);
+    }
+
+    function exportViewFromTarget(target) {
+      return {
+        isCurrentView: !!target.isCurrentView,
+        displayMode: target.displayMode,
+        subsetElements: target.subsetElements,
+        forExport: true,
+      };
+    }
+
+    function buildDiagramSpec(result, view = null) {
+      const forExport = !!view?.forExport;
       const vectorMode = usesVectorDisplay(result);
-      const vectorLayer = vectorMode ? activeVectorLayer(result) : null;
-      const layer = activeLayer(result);
+      const vectorLayer = vectorMode ? activeVectorLayer(result, view) : null;
+      const layer = activeLayer(result, null, view);
       const x = result.ph;
       const pe = plotPeAxis(result);
       const y = plotYValues(result);
@@ -5771,7 +6146,6 @@
       const grid = layer.grid;
       const names = layer.names;
       const aqueousSet = new Set(layer.aqueous || []);
-      // Heatmap / grid-boundary helpers use remapped y; labels need native pe.
       const plotResult = { ph: x, y, pe, grid, phase_names: names, y_label: yLabel, temp_c: result.temp_c };
       const n = names.length;
       const traces = [];
@@ -5801,19 +6175,20 @@
         traces.push(boundaryTrace(plotResult));
       }
 
-      // Invisible base-grid hover layer (always on top for mouse capture).
-      const hGrid = layer.grid;
-      const hNames = layer.names;
-      const hn = hNames.length;
-      traces.push({
-        type: "heatmap", x, y,
-        z: hGrid.map(r => r.map(v => (v < 0 ? -1 : v))),
-        zmin: -0.5, zmax: Math.max(hn - 0.5, 0.5),
-        colorscale: INVISIBLE_COLORSCALE,
-        showscale: false, xgap: 0, ygap: 0,
-        customdata: buildHoverCustomData(hGrid, hNames, result),
-        hovertemplate: vectorMode ? baseHoverTpl : hoverTpl,
-      });
+      if (!forExport) {
+        const hGrid = layer.grid;
+        const hNames = layer.names;
+        const hn = hNames.length;
+        traces.push({
+          type: "heatmap", x, y,
+          z: hGrid.map(r => r.map(v => (v < 0 ? -1 : v))),
+          zmin: -0.5, zmax: Math.max(hn - 0.5, 0.5),
+          colorscale: INVISIBLE_COLORSCALE,
+          showscale: false, xgap: 0, ygap: 0,
+          customdata: buildHoverCustomData(hGrid, hNames, result),
+          hovertemplate: vectorMode ? baseHoverTpl : hoverTpl,
+        });
+      }
 
       const ax = {
         showgrid: false, zeroline: false, mirror: true, ticks: "outside", linecolor: "#222",
@@ -5837,17 +6212,227 @@
       const compAnn = compositionBoxAnnotation(result);
       if (compAnn) layout.annotations.push(compAnn);
       if (!traces.length) {
-        traces.push({ type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",
-          marker: { opacity: 0 }, hoverinfo: "skip", showlegend: false });
+        traces.push({
+          type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",
+          marker: { opacity: 0 }, hoverinfo: "skip", showlegend: false,
+        });
       }
+      return { traces, layout, label: layer.label };
+    }
+
+    function setExportStatus(text) {
+      const el = $("exportStatus");
+      if (el) el.textContent = text || "";
+    }
+
+    function syncExportControls(result = runtime.lastResult) {
+      const btn = $("exportDownloadBtn");
+      const aspectEl = $("exportAspect");
+      const dpiEl = $("exportDpi");
+      const sizeReadout = $("exportSizeReadout");
+      state.exportAspect = clampExportAspect(state.exportAspect);
+      state.exportDpi = clampExportDpi(state.exportDpi);
+      if (aspectEl && document.activeElement !== aspectEl) {
+        aspectEl.value = String(state.exportAspect);
+      }
+      if (dpiEl && document.activeElement !== dpiEl) {
+        dpiEl.value = String(state.exportDpi);
+      }
+      if (sizeReadout) {
+        const { width, height } = exportPixelSize();
+        const scale = exportScaleFromDpi();
+        const outW = Math.round(width * scale);
+        const outH = Math.round(height * scale);
+        if (!result) {
+          sizeReadout.textContent = "—";
+        } else if (scale <= 1.001) {
+          sizeReadout.textContent = `${width}×${height} px`;
+        } else {
+          sizeReadout.textContent = `${width}×${height} → ${outW}×${outH} px`;
+        }
+      }
+      const checked = ensureExportChecked();
+      const hasChecks = [...(result ? listExportTargets(result) : [])].some(t => checked.has(t.id));
+      if (btn) {
+        btn.disabled = !result || runtime.exportBusy || !hasChecks;
+      }
+      const allBtn = $("exportLayersAll");
+      const noneBtn = $("exportLayersNone");
+      if (allBtn) allBtn.disabled = !result || runtime.exportBusy;
+      if (noneBtn) noneBtn.disabled = !result || runtime.exportBusy;
+      const aspectDec = $("exportAspectDec");
+      const aspectInc = $("exportAspectInc");
+      const dpiDec = $("exportDpiDec");
+      const dpiInc = $("exportDpiInc");
+      if (aspectDec) aspectDec.disabled = !!runtime.exportBusy;
+      if (aspectInc) aspectInc.disabled = !!runtime.exportBusy;
+      if (dpiDec) dpiDec.disabled = !!runtime.exportBusy;
+      if (dpiInc) dpiInc.disabled = !!runtime.exportBusy;
+      if (aspectEl) aspectEl.disabled = !!runtime.exportBusy;
+      if (dpiEl) dpiEl.disabled = !!runtime.exportBusy;
+    }
+
+    function renderExportChecklist(result = runtime.lastResult) {
+      const box = $("exportLayersList");
+      if (!box) return;
+      if (!result) {
+        box.innerHTML = '<span class="export-status">Compute a diagram first.</span>';
+        syncExportControls(null);
+        return;
+      }
+      const targets = listExportTargets(result);
+      const checked = ensureExportChecked();
+      const validIds = new Set(targets.map(t => t.id));
+      for (const id of [...checked]) {
+        if (!validIds.has(id)) checked.delete(id);
+      }
+      if (!checked.size) checked.add("__current__");
+
+      box.replaceChildren();
+      for (const t of targets) {
+        const lbl = document.createElement("label");
+        lbl.className = "toggle";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.dataset.exportId = t.id;
+        input.checked = checked.has(t.id);
+        input.disabled = !!runtime.exportBusy;
+        const span = document.createElement("span");
+        span.textContent = t.label;
+        lbl.appendChild(input);
+        lbl.appendChild(span);
+        box.appendChild(lbl);
+      }
+      syncExportControls(result);
+    }
+
+    function getCheckedExportTargets(result = runtime.lastResult) {
+      const checked = ensureExportChecked();
+      return listExportTargets(result).filter(t => checked.has(t.id));
+    }
+
+    function dataUrlToBlob(dataUrl) {
+      const [header, b64] = dataUrl.split(",");
+      const mime = (header.match(/:(.*?);/) || [])[1] || "image/png";
+      const bytes = atob(b64);
+      const arr = new Uint8Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      return new Blob([arr], { type: mime });
+    }
+
+    function triggerBlobDownload(blob, filename) {
+      return new Promise(resolve => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          URL.revokeObjectURL(url);
+          a.remove();
+          resolve();
+        }, 0);
+      });
+    }
+
+    function purgeExportPlot() {
+      try { Plotly.purge("exportPlotDiv"); } catch (e) { /* ignore */ }
+      const el = $("exportPlotDiv");
+      if (el) el.replaceChildren();
+    }
+
+    function exportDelay(ms) {
+      return new Promise(r => setTimeout(r, ms));
+    }
+
+    async function runPngExport() {
+      const result = runtime.lastResult;
+      if (!result || runtime.exportBusy) return;
+      const targets = getCheckedExportTargets(result);
+      if (!targets.length) return;
+
+      runtime.exportBusy = true;
+      syncExportControls(result);
+      renderExportChecklist(result);
+      const { width, height } = exportPixelSize();
+      const dpi = clampExportDpi(state.exportDpi);
+      const scale = exportScaleFromDpi(dpi);
+      const exportEl = $("exportPlotDiv");
+      if (exportEl) {
+        exportEl.style.width = `${width}px`;
+        exportEl.style.height = `${height}px`;
+      }
+      let saved = 0;
+      const doneFiles = new Set();
+
+      try {
+        for (let i = 0; i < targets.length; i++) {
+          const target = targets[i];
+          const filename = buildExportFilename(result, target, dpi);
+          // Skip a layer that resolves to a file already exported this run
+          // (e.g. the active view duplicating its packed subset twin).
+          if (doneFiles.has(filename)) continue;
+          setExportStatus(`Exporting ${i + 1}/${targets.length}…`);
+          const view = exportViewFromTarget(target);
+          const spec = buildDiagramSpec(result, view);
+          await Plotly.react("exportPlotDiv", spec.traces, spec.layout, {
+            displayModeBar: false,
+            responsive: false,
+          });
+          // scale (not larger width/height alone) keeps fonts/lines proportional —
+          // see Plotly.toImage scale docs / plotly.js#1979.
+          const dataUrl = await Plotly.toImage("exportPlotDiv", {
+            format: "png",
+            width,
+            height,
+            scale,
+          });
+          const blob = dataUrlToBlob(dataUrl);
+          await triggerBlobDownload(blob, filename);
+          doneFiles.add(filename);
+          saved++;
+          if (i < targets.length - 1) await exportDelay(180);
+        }
+        setExportStatus(`Saved ${saved} PNG${saved === 1 ? "" : "s"}`);
+      } catch (e) {
+        setExportStatus(`Export failed: ${e.message || e}`);
+      } finally {
+        purgeExportPlot();
+        runtime.exportBusy = false;
+        renderExportChecklist(result);
+      }
+    }
+
+    function drawDiagram(result) {
+      if (!result) return;
+      if (isDiagramMode(activeModeId) && !resultMatchesMode(activeModeId, result)) {
+        return;
+      }
+      runtime.lastResult = result;
+      $("plotEmpty").style.display = "none";
+      syncDisplayFromPlot();
+
+      const sysKey = (result.system_elements || []).join("-");
+      if (runtime.exportResultSysKey !== sysKey) {
+        runtime.exportChecked = new Set(["__current__"]);
+        runtime.exportResultSysKey = sysKey;
+      }
+
+      const spec = buildDiagramSpec(result);
+      const layer = activeLayer(result);
+      const vectorLayer = usesVectorDisplay(result) ? activeVectorLayer(result) : null;
       fitPlotBox();
-      Plotly.react("plotDiv", traces, layout, {
-        responsive: true, displaylogo: false,
-        toImageButtonOptions: { format: "png", filename: "phase_diagram", scale: 2 },
+      Plotly.react("plotDiv", spec.traces, spec.layout, {
+        responsive: true,
+        displaylogo: false,
+        displayModeBar: false,
       }).then(() => clearPlotHover(), () => {});
       const mode = adaptiveStatusSuffix(result);
       $("plotMeta").textContent =
         `${result.n_converged}/${result.n_total} converged · ${(vectorLayer || layer).label} · T=${result.temp_c} °C${mode}`;
+      renderExportChecklist(result);
     }
 
     async function restoreSessionResult() {

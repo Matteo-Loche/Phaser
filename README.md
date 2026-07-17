@@ -852,7 +852,7 @@ Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement 
 
 Display controls describe the **plotted result**, not pending Configuration toggles. Recompute after changing layer options to update them.
 
-Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overlays**) share soft-scroll with the left sidebar. On phones (≤900px) opening one card closes the others; wider layouts allow several open at once and scroll the panel when content exceeds the available height.
+Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overlays**, **Download**) share soft-scroll with the left sidebar. On phones (≤900px) opening one card closes the others; wider layouts allow several open at once and scroll the panel when content exceeds the available height.
 
 | Control | Effect |
 |---------|--------|
@@ -865,11 +865,12 @@ Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overla
 | **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%). Slider uses a square curve for finer control near 0%. Threshold is `max(4, floor(n_cells × pct/100))` |
 | **Arrow callout for conflict or small regions** | When on (default), labels that overlap, would cover another tip, or hide their own small patch (≥ ~92% of the visible bbox) shift aside with an arrow when the leader is clear; otherwise they shift without an arrow. When off, all names stay at the region tip (overlap allowed) |
 | **Hover species** | How many aqueous species to list in the plot hover tooltip (default **4**; choices 2 / 4 / 6 / 8). Display-only truncate of packed `hover_species`; new jobs pack up to **8** per element |
-| **System label** | Top-right chemical-system badge (e.g. `Fe-C`): show/hide toggle plus − / value / + font size (default **20** px, range 15–35). Full input system, or the active element subset when per-element filters are on |
+| **System label** | Top-right chemical-system badge: full initial system is bracketed (e.g. `[Fe-C]`); an active element subset is plain (e.g. `Fe-C`). Show/hide toggle plus − / value / + font size (default **20** px, range 15–35) |
 | **Initial system [C]** | Bottom-left box listing overall initial input species and concentrations (e.g. `Fe = 1 mmol/kgw`; display units from the job): on by default; − / value / + font size (default **16** px, range 15–35). Always the full input system (not the element subset filter) |
 | **Boundary width** | Phase-boundary stroke thickness in px (default **1**, range 0.25–2.5, step 0.25). Stability/gas-limit dashes scale with it; show/hide via **Boundaries** |
 | **No fill** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
+| **Download** | PNG export (replaces the Plotly camera icon). **Size** matches the on-screen plot box (shown as e.g. `842×842 px`, or `842×842 → 2631×2631 px` at higher DPI) so layout matches what you see. **Aspect** − / value / + in steps of **0.025** (range **0.85–1.25**, default **1:1**); live plot unchanged. **DPI** − / value / + in steps of **25** (range **100–400**, default **300**) maps to Plotly `toImage` **scale** (`dpi/96`), which enlarges fonts and lines with the image — unlike bumping width/height alone, which would shrink labels relatively. **Layers** checklist: the active plot plus every packed solid/mineral and aqueous subset (full-system layers labeled **all** instead of listing every element); **All** / **None**; **Download selected** uses current Display / Labels / Fill / Overlays without mutating the live plot. Filenames include the bracketed initial system, family, subset (or **all**), and DPI (e.g. `phaser_[Fe-C]_solids_all_300dpi.png`). PNGs are ephemeral (not kept in browser storage) |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
 
 **Touch / hover.** Plotly hover labels stick on touch devices until another plot tap; tapping anywhere outside the plot data area (or redrawing the figure) dismisses them via `Plotly.Fx.unhover`.
