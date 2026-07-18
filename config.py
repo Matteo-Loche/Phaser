@@ -185,8 +185,8 @@ DEFAULT_SPECIES_CONC = 1.0
 # Default grid if client omits values.
 PH_MIN = 2.0
 PH_MAX = 12.0
-PE_MIN = -10.0
-PE_MAX = 14.0
+PE_MIN = -14.0
+PE_MAX = 20.0
 GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
 MIN_GRID_LEVELS = 50  # UI + API floor for ph_levels / pe_levels
 MAX_GRID_LEVELS = 200  # matches MAX_GRID_POINTS = 200×200

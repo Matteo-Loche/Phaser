@@ -1929,7 +1929,7 @@
       o2LimitAtm: 0.21,
       h2LimitAtm: 1.0,
       ph: { min: 2, max: 12 },
-      y: { axis: "eh", peMin: -10, peMax: 14 },
+      y: { axis: "eh", peMin: -14, peMax: 20 },
       gridLevels: 100,
       adaptiveBoundaries: true,
       knobsMode: "standard",
@@ -1962,6 +1962,7 @@
       exportDpi: 300,         // Plotly scale = dpi/96 — fonts/lines scale with pixels (100–400, step 25)
       phaseSel: {},   // name -> bool (user selection, preserved across refreshes)
       colorByName: {}, // phase/species name -> hex color (persisted across refreshes)
+      panelOpen: {},  // panel key -> bool (open/closed state of sidebar + toolbar cards)
     };
 
     const runtime = {
@@ -3650,6 +3651,9 @@
       state.phaseSel = state.phaseSel || {};
       state.colorByName = state.colorByName && typeof state.colorByName === "object"
         ? state.colorByName
+        : {};
+      state.panelOpen = state.panelOpen && typeof state.panelOpen === "object"
+        ? state.panelOpen
         : {};
       state.totals = Array.isArray(state.totals) ? state.totals : structuredClone(DEFAULT_STATE.totals);
       if (state.gridLevels == null) {
@@ -6685,6 +6689,49 @@
       renderGridMeta();
       syncDisplayFromPlot();
       refreshPhases();
+      initPanelPersistence();
+    }
+
+    // Stable key for a collapsible card: container + its own id or summary label.
+    function panelKey(el) {
+      const container = el.closest("#sidebar") ? "side" : "plot";
+      let label = el.id || "";
+      if (!label) {
+        const sum = el.querySelector(":scope > summary");
+        if (sum) {
+          for (const node of sum.childNodes) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              const t = node.textContent.trim();
+              if (t) { label = t; break; }
+            }
+          }
+          if (!label) label = sum.textContent.trim();
+        }
+      }
+      return `${container}:${label.toLowerCase()}`;
+    }
+
+    // Persist open/closed state of every sidebar + toolbar card. First run keeps
+    // the HTML `open` attributes as the default; later toggles are remembered.
+    function initPanelPersistence() {
+      if (!state.panelOpen || typeof state.panelOpen !== "object") state.panelOpen = {};
+      const cards = document.querySelectorAll(
+        "#sidebar > details.card, .plot-toolbar > details.card"
+      );
+      cards.forEach(el => {
+        const key = panelKey(el);
+        if (Object.prototype.hasOwnProperty.call(state.panelOpen, key)) {
+          el.open = !!state.panelOpen[key];
+        } else {
+          state.panelOpen[key] = el.open;
+        }
+        el.addEventListener("toggle", () => {
+          if (state.panelOpen[key] === el.open) return;
+          state.panelOpen[key] = el.open;
+          persist();
+        });
+      });
+      persist();
     }
 
     function initDispCards() {

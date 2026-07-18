@@ -548,6 +548,8 @@ Limits (`config.py`):
 
 | Constant | Default | Purpose |
 |----------|---------|---------|
+| `PH_MIN`, `PH_MAX` | 2.0, 12.0 | Default pH axis bounds when the client omits them |
+| `PE_MIN`, `PE_MAX` | −14.0, 20.0 | Default redox (pe) axis bounds; Eh / log fO₂ are derived from these |
 | `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
 | `MIN_GRID_LEVELS` | 50 | Minimum allowed `ph_levels` / `pe_levels` |
 | `MAX_GRID_LEVELS` | 200 | Maximum allowed `ph_levels` / `pe_levels` |
@@ -811,7 +813,7 @@ Elements no longer need a manual reload button — everything refreshes when the
 |------|----------|
 | **Database** | *(narrow screens only)* Same `db_id` selector as the header, plus filename / source / catalog-status meta |
 | **Chemical system** | Species picker with concentrations, unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
-| **Axes** | pH min/max; redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
+| **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (default **pe −14 to 20**, converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
 | **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips |
 | **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
@@ -852,7 +854,7 @@ Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement 
 
 Display controls describe the **plotted result**, not pending Configuration toggles. Recompute after changing layer options to update them.
 
-Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overlays**, **Download**) share soft-scroll with the left sidebar. On phones (≤900px) opening one card closes the others; wider layouts allow several open at once and scroll the panel when content exceeds the available height.
+Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overlays**, **Axes**, **Download**) share soft-scroll with the left sidebar. On phones (≤900px) opening one card closes the others; wider layouts allow several open at once and scroll the panel when content exceeds the available height. Each card's open/closed state (both panels) is remembered in browser storage.
 
 | Control | Effect |
 |---------|--------|
@@ -870,6 +872,7 @@ Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overla
 | **Boundary width** | Phase-boundary stroke thickness in px (default **1**, range 0.25–2.5, step 0.25). Stability/gas-limit dashes scale with it; show/hide via **Boundaries** |
 | **No fill** | Region labels without fill colours |
 | **Boundaries** | Phase and gas-limit boundary polylines |
+| **Axes** | Live styling of the plot axes (redraw only, no recompute; also applied to PNG exports). **Ticks X** / **Ticks Y** independent tick-spacing dropdowns — **Standard** (Plotly automatic) or a fixed step (`every 0.25 / 0.5 / 1 / 2 / 4 / 5 / 10 / 20 / 30`, applied as Plotly `dtick`); the wider steps suit log fO₂ ranges. **Tick font** (px, 8–28, default 15), **Title font** (axis pH / Eh title, px, 10–30, default 18), and **Axis width** (frame/axis line thickness, px, 0.5–4 step 0.5, default 1). Axis titles use `automargin` so labels never overlap when fonts grow |
 | **Download** | PNG export (replaces the Plotly camera icon). **Size** matches the on-screen plot box (shown as e.g. `842×842 px`, or `842×842 → 2631×2631 px` at higher DPI) so layout matches what you see. **Aspect** − / value / + in steps of **0.025** (range **0.85–1.25**, default **1:1**); live plot unchanged. **DPI** − / value / + in steps of **25** (range **100–400**, default **300**) maps to Plotly `toImage` **scale** (`dpi/96`), which enlarges fonts and lines with the image — unlike bumping width/height alone, which would shrink labels relatively. **Layers** checklist: the active plot plus every packed solid/mineral and aqueous subset (full-system layers labeled **all** instead of listing every element); **All** / **None**; **Download selected** uses current Display / Labels / Fill / Overlays without mutating the live plot. Filenames include the bracketed initial system, family, subset (or **all**), and DPI (e.g. `phaser_[Fe-C]_solids_all_300dpi.png`). PNGs are ephemeral (not kept in browser storage) |
 | **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
 
@@ -918,7 +921,7 @@ Starting a **new** compute abandons the previous server job reference (running s
 
 ### Redox axis (log fO₂ / Eh / pe)
 
-The vertical axis can be shown as **Eh**, **pe**, or **log fO₂**. All three describe the same thermodynamic state; conversions are exact at each `(pH, pe, T)`. The compute grid is swept in **`pe`**; Eh and log fO₂ are applied when packing and plotting results. Default display axis: **Eh**.
+The vertical axis can be shown as **Eh**, **pe**, or **log fO₂**. All three describe the same thermodynamic state; conversions are exact at each `(pH, pe, T)`. The compute grid is swept in **`pe`**; Eh and log fO₂ are applied when packing and plotting results. Default display axis: **Eh**; default redox bounds: **pe −14 to 20** (`PE_MIN`/`PE_MAX`), shown as their Eh / log fO₂ equivalents when those axes are selected.
 
 **Conversion relations** (all logs base-10; `T` in °C, `T_K = T + 273.15`):
 
