@@ -1395,7 +1395,7 @@
         <summary>Chemical system <span class="pill" id="elemCount">0</span><span class="chev">›</span></summary>
         <div class="body">
           <div class="add-species">
-            <input id="speciesPicker" list="speciesOptions" placeholder="Add species (exact case: Fe, Cu, C(4))" />
+            <input id="speciesPicker" list="speciesOptions" placeholder="Add species" />
             <datalist id="speciesOptions"></datalist>
             <button class="btn" id="addSpeciesBtn">Add</button>
           </div>
@@ -1860,21 +1860,6 @@
       "all": "all time",
     };
     const F = 2.303 * 8.314462618 / 96485.33212; // pe -> Eh (display only)
-    const LOG_K_O2_25 = 20.75;
-    const LOG_K_O2_DT = 0.0018;
-
-    function logKO2(tempC) {
-      const t = tempC ?? state.tempC ?? 25;
-      return LOG_K_O2_25 + LOG_K_O2_DT * (t - 25);
-    }
-
-    function peToLogFO2(pe, ph, tempC) {
-      return 4 * (pe + ph - logKO2(tempC));
-    }
-
-    function logFO2ToPe(logFO2, ph, tempC) {
-      return logFO2 / 4 - ph + logKO2(tempC);
-    }
 
     function roundLogFO2(v) {
       if (!Number.isFinite(v)) return v;
@@ -1923,13 +1908,13 @@
 
     const DEFAULT_STATE = {
       dbId: "",
-      totals: [{ species: "Fe", value: 1 }, { species: "C(4)", value: 1 }],
+      totals: [{ species: "Fe", value: 1 }, { species: "C", value: 1 }],
       units: "mmol/kgw",
       tempC: 25,
       o2LimitAtm: 0.21,
       h2LimitAtm: 1.0,
       ph: { min: 2, max: 12 },
-      y: { axis: "eh", peMin: -14, peMax: 20 },
+      y: { axis: "eh", peMin: -14, peMax: 20, logFo2Min: -90, logFo2Max: 10 },
       gridLevels: 100,
       adaptiveBoundaries: true,
       knobsMode: "standard",
@@ -2126,8 +2111,12 @@
         if (result && resultMatchesMode(activeModeId, result)) {
           runtime.lastResult = result;
           runtime.hasResult = true;
-          drawDiagram(result);
-          triggerPlotResize();
+          if (axisMatchesResult(result)) {
+            drawDiagram(result);
+            triggerPlotResize();
+          } else {
+            markStale();
+          }
         } else {
           runtime.lastResult = null;
           runtime.hasResult = false;
@@ -2536,6 +2525,31 @@
     function peToEh(pe, t) { return pe * F * (t + 273.15); }
     function ehToPe(eh, t) { return eh / (F * (t + 273.15)); }
 
+    function isPeFamilyAxis(axis) {
+      return axis === "pe" || axis === "eh";
+    }
+    function resultRedoxAxis(result) {
+      const r = result?.redox_axis;
+      return r === "log_fo2" ? "log_fo2" : "pe";
+    }
+    function axisMatchesResult(result) {
+      if (!result) return true;
+      const native = resultRedoxAxis(result);
+      if (state.y.axis === "log_fo2") return native === "log_fo2";
+      return native !== "log_fo2";
+    }
+    function yNativeFromPlot(source) {
+      return source.pe || source.y || [];
+    }
+    // Map packed native y → display. pe↔Eh only; log fO₂ is identity when
+    // result.redox_axis matches (mismatched family → null / do not draw).
+    function mapYNativeToDisplay(yNative, ph, tempC, result) {
+      if (yNative == null) return null;
+      if (!axisMatchesResult(result)) return null;
+      if (state.y.axis === "eh") return peToEh(yNative, tempC);
+      return yNative;
+    }
+
     function convertConc(value, fromUnit, toUnit) {
       const src = normalizeUnit(fromUnit);
       const dst = normalizeUnit(toUnit);
@@ -2548,27 +2562,24 @@
     function displayYMin() {
       const t = state.tempC;
       if (state.y.axis === "eh") return peToEh(state.y.peMin, t);
-      if (state.y.axis === "log_fo2") return peToLogFO2(state.y.peMin, state.ph.min, t);
+      if (state.y.axis === "log_fo2") return state.y.logFo2Min;
       return state.y.peMin;
     }
     function displayYMax() {
       const t = state.tempC;
       if (state.y.axis === "eh") return peToEh(state.y.peMax, t);
-      if (state.y.axis === "log_fo2") return peToLogFO2(state.y.peMax, state.ph.max, t);
+      if (state.y.axis === "log_fo2") return state.y.logFo2Max;
       return state.y.peMax;
     }
     function plotPeAxis(source) {
-      return source.pe || source.y || [];
+      return yNativeFromPlot(source);
     }
     function plotYValues(source, tempC) {
-      const pe = plotPeAxis(source);
+      const y = yNativeFromPlot(source);
       const t = tempC ?? source.temp_c ?? state.tempC;
-      if (state.y.axis === "eh") return pe.map(p => peToEh(p, t));
-      if (state.y.axis === "log_fo2") {
-        const phMid = (state.ph.min + state.ph.max) / 2;
-        return pe.map(p => peToLogFO2(p, phMid, t));
-      }
-      return pe;
+      if (!axisMatchesResult(source)) return [];
+      if (state.y.axis === "eh") return y.map(p => (p == null ? null : peToEh(p, t)));
+      return y;
     }
     function plotYLabel() {
       if (state.y.axis === "eh") return "Eh (V)";
@@ -2576,19 +2587,19 @@
       return "pe";
     }
 
-    function mapPlotXY(xs, ys, tempC) {
+    function mapPlotXY(xs, ys, tempC, result) {
+      result = result || runtime.lastResult;
       if (!xs?.length || !ys?.length) return { x: xs || [], y: ys || [] };
       const yOut = [];
       for (let i = 0; i < ys.length; i++) {
-        const pe = ys[i];
+        const yNat = ys[i];
         const ph = xs[i];
-        if (pe == null || ph == null) {
+        if (yNat == null || ph == null) {
           yOut.push(null);
           continue;
         }
-        if (state.y.axis === "eh") yOut.push(peToEh(pe, tempC));
-        else if (state.y.axis === "log_fo2") yOut.push(peToLogFO2(pe, ph, tempC));
-        else yOut.push(pe);
+        const mapped = mapYNativeToDisplay(yNat, ph, tempC, result);
+        yOut.push(mapped);
       }
       return { x: xs, y: yOut };
     }
@@ -3644,6 +3655,28 @@
       } catch (e) {}
       return null;
     }
+    // Map valence totals (C(4), S(6), …) to the bare parent element for the picker.
+    function bareElementFromTotal(key) {
+      const m = String(key || "").trim().match(/^([A-Z][a-z]?)/);
+      return m ? m[1] : String(key || "").trim();
+    }
+    function coerceTotalsToGeneralElements(totals) {
+      const merged = [];
+      const indexByElem = new Map();
+      for (const row of totals || []) {
+        const elem = bareElementFromTotal(row?.species);
+        if (!elem) continue;
+        const value = Number(row?.value);
+        const conc = Number.isFinite(value) ? value : 1;
+        if (indexByElem.has(elem)) {
+          merged[indexByElem.get(elem)].value += conc;
+        } else {
+          indexByElem.set(elem, merged.length);
+          merged.push({ species: elem, value: conc });
+        }
+      }
+      return merged.length ? merged : structuredClone(DEFAULT_STATE.totals);
+    }
     function applyState(next) {
       state = Object.assign(structuredClone(DEFAULT_STATE), next || {});
       state.ph = Object.assign({}, DEFAULT_STATE.ph, state.ph);
@@ -3656,6 +3689,7 @@
         ? state.panelOpen
         : {};
       state.totals = Array.isArray(state.totals) ? state.totals : structuredClone(DEFAULT_STATE.totals);
+      state.totals = coerceTotalsToGeneralElements(state.totals);
       if (state.gridLevels == null) {
         state.gridLevels = state.ph?.levels ?? state.y?.levels ?? DEFAULT_STATE.gridLevels;
       }
@@ -3677,6 +3711,14 @@
         state.y.peMax ??= DEFAULT_STATE.y.peMax;
         state.y.axis ??= "pe";
         if (!["pe", "eh", "log_fo2"].includes(state.y.axis)) state.y.axis = "pe";
+        if (state.y.logFo2Min == null || state.y.logFo2Max == null) {
+          const d = runtime.cfg?.defaults;
+          state.y.logFo2Min = roundLogFO2(d?.log_fo2_min ?? DEFAULT_STATE.y.logFo2Min);
+          state.y.logFo2Max = roundLogFO2(d?.log_fo2_max ?? DEFAULT_STATE.y.logFo2Max);
+        } else {
+          state.y.logFo2Min = roundLogFO2(state.y.logFo2Min);
+          state.y.logFo2Max = roundLogFO2(state.y.logFo2Max);
+        }
         delete state.y.levels;
       }
       if (state.ph) delete state.ph.levels;
@@ -4423,30 +4465,24 @@
 
       $("phMin").addEventListener("input", e => {
         state.ph.min = roundPh(parseFloat(e.target.value));
-        if (state.y.axis === "log_fo2") fillInputs();
         commit();
       });
       $("phMax").addEventListener("input", e => {
         state.ph.max = roundPh(parseFloat(e.target.value));
-        if (state.y.axis === "log_fo2") fillInputs();
         commit();
       });
       $("yMin").addEventListener("input", e => {
         const v = parseFloat(e.target.value);
         if (state.y.axis === "eh") state.y.peMin = roundPe(ehToPe(v, state.tempC));
-        else if (state.y.axis === "log_fo2") {
-          // Same corner as displayYMin: axis bottom = fO₂ at (pH_min, pe_min).
-          state.y.peMin = roundPe(logFO2ToPe(v, state.ph.min, state.tempC));
-        } else state.y.peMin = roundPe(v);
+        else if (state.y.axis === "log_fo2") state.y.logFo2Min = roundLogFO2(v);
+        else state.y.peMin = roundPe(v);
         commit();
       });
       $("yMax").addEventListener("input", e => {
         const v = parseFloat(e.target.value);
         if (state.y.axis === "eh") state.y.peMax = roundPe(ehToPe(v, state.tempC));
-        else if (state.y.axis === "log_fo2") {
-          // Same corner as displayYMax: axis top = fO₂ at (pH_max, pe_max).
-          state.y.peMax = roundPe(logFO2ToPe(v, state.ph.max, state.tempC));
-        } else state.y.peMax = roundPe(v);
+        else if (state.y.axis === "log_fo2") state.y.logFo2Max = roundLogFO2(v);
+        else state.y.peMax = roundPe(v);
         commit();
       });
       $("o2LimitAtm").addEventListener("input", e => {
@@ -4538,14 +4574,24 @@
 
       document.querySelectorAll("#yAxisSeg button").forEach(b => {
         b.addEventListener("click", () => {
-          if (b.dataset.axis === state.y.axis) return;
+          const prev = state.y.axis;
+          const next = b.dataset.axis;
+          if (next === prev) return;
           state.y.peMin = roundPe(state.y.peMin);
           state.y.peMax = roundPe(state.y.peMax);
-          state.y.axis = b.dataset.axis;
+          state.y.axis = next;
           fillInputs();
           syncAxisUI();
           persist();
-          if (runtime.lastResult) drawDiagram(runtime.lastResult);
+          if (!runtime.lastResult) return;
+          const crossFamily = (prev === "log_fo2") !== (next === "log_fo2");
+          if (crossFamily) {
+            markStale();
+            return;
+          }
+          if (isPeFamilyAxis(prev) && isPeFamilyAxis(next) && axisMatchesResult(runtime.lastResult)) {
+            drawDiagram(runtime.lastResult);
+          }
         });
       });
 
@@ -4855,12 +4901,12 @@
       $("yMin").value = state.y.axis === "eh"
         ? roundEh(displayYMin())
         : state.y.axis === "log_fo2"
-          ? roundLogFO2(displayYMin())
+          ? roundLogFO2(state.y.logFo2Min)
           : roundPe(state.y.peMin);
       $("yMax").value = state.y.axis === "eh"
         ? roundEh(displayYMax())
         : state.y.axis === "log_fo2"
-          ? roundLogFO2(displayYMax())
+          ? roundLogFO2(state.y.logFo2Max)
           : roundPe(state.y.peMax);
       $("displayMode").value = state.displayMode;
       syncDisplayFromPlot();
@@ -5118,7 +5164,9 @@
         db_id: state.dbId,
         temp_c: t,
         ph_min: state.ph.min, ph_max: state.ph.max, ph_levels: state.gridLevels,
+        redox_axis: state.y.axis === "log_fo2" ? "log_fo2" : "pe",
         pe_min: state.y.peMin, pe_max: state.y.peMax, pe_levels: state.gridLevels,
+        log_fo2_min: state.y.logFo2Min, log_fo2_max: state.y.logFo2Max,
         totals,
         units: state.units,
         o2_limit_atm: state.o2LimitAtm,
@@ -5400,14 +5448,12 @@
       };
     }
 
-    // Map a grid cell center into current display coordinates. log fO₂ must use
-    // the cell's own pH (not mid-pH), matching mapPlotXY for vector geometry.
-    function cellPlotXY(ix, iy, ph, pe, tempC) {
+    // Map a grid cell center into current display coordinates.
+    function cellPlotXY(ix, iy, ph, pe, tempC, result) {
+      result = result || runtime.lastResult;
       const x = ph[ix];
-      const peV = pe[iy];
-      if (state.y.axis === "eh") return [x, peToEh(peV, tempC)];
-      if (state.y.axis === "log_fo2") return [x, peToLogFO2(peV, x, tempC)];
-      return [x, peV];
+      const yNat = pe[iy];
+      return [x, mapYNativeToDisplay(yNat, x, tempC, result)];
     }
 
     // Gas-domain labels: nearest cell to the index-space centroid (axis-
@@ -5626,10 +5672,9 @@
       return [ux * dist, uy * dist];
     }
 
-    function tipDisplayXY(phV, peV, tempC) {
-      if (state.y.axis === "eh") return [phV, peToEh(peV, tempC)];
-      if (state.y.axis === "log_fo2") return [phV, peToLogFO2(peV, phV, tempC)];
-      return [phV, peV];
+    function tipDisplayXY(phV, peV, tempC, result) {
+      result = result || runtime.lastResult;
+      return [phV, mapYNativeToDisplay(peV, phV, tempC, result)];
     }
 
     function splitNullRings(xs, ys) {
@@ -5831,7 +5876,7 @@
     }
 
     function componentAnnotations(result, vectorLayer = null) {
-      // pe must be the native pe axis — never the mid-pH remapped heatmap y.
+      // Native y axis from packed result (pe or log fO₂ depending on redox_axis).
       const ph = result.ph;
       const pe = result.pe || result.y;
       const { grid, phase_names: names } = result;
@@ -5993,11 +6038,6 @@
         anns.push({ ...base, showarrow: false });
       }
       return anns;
-    }
-
-    function mapPlotY(values, tempC) {
-      if (state.y.axis === "eh") return values.map(v => (v == null ? null : peToEh(v, tempC)));
-      return values;
     }
 
     function vectorFillTraces(layer, aqueousSet, tempC) {
@@ -6588,6 +6628,10 @@
       if (isDiagramMode(activeModeId) && !resultMatchesMode(activeModeId, result)) {
         return;
       }
+      if (!axisMatchesResult(result)) {
+        markStale();
+        return;
+      }
       runtime.lastResult = result;
       $("plotEmpty").style.display = "none";
       syncDisplayFromPlot();
@@ -6658,9 +6702,11 @@
       state.units = state.units || runtime.cfg.default_units || DEFAULT_STATE.units;
       state.ph = { min: d.ph_min, max: d.ph_max };
       state.y = {
-        axis: "pe",
+        axis: "eh",
         peMin: d.pe_min,
         peMax: d.pe_max,
+        logFo2Min: roundLogFO2(d.log_fo2_min),
+        logFo2Max: roundLogFO2(d.log_fo2_max),
       };
       state.gridLevels = clampGridLevels(d.grid_levels ?? DEFAULT_STATE.gridLevels);
       state.o2LimitAtm = d.o2_limit_atm ?? DEFAULT_STATE.o2LimitAtm;

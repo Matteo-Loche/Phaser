@@ -26,10 +26,12 @@ _FIELD_PAD = -1.0e6  # border pad: closes regions touching the plot frame
 from ..phreeqc.adaptive import fine_axis_levels
 from ..phreeqc.engine import GridJobParams
 from ..phreeqc.gas_limits import (
+    is_log_fo2_redox,
     water_gas_boundary_segments,
     water_gas_outside_labels,
     water_gas_scalar_grids,
     water_gas_sum_window,
+    water_log_fo2_window,
     water_stability_limits_enabled,
 )
 from .packer import (
@@ -339,6 +341,19 @@ def _clip_polygon_halfplane(
 def _water_band_scalars(params: GridJobParams) -> tuple[Callable[[float, float], float], Callable[[float, float], float]]:
     from ..phreeqc.gas_limits import water_gas_scalar
 
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+
+        def o2(ph: float, y: float) -> float:
+            del ph
+            return y - hi
+
+        def h2(ph: float, y: float) -> float:
+            del ph
+            return lo - y
+
+        return o2, h2
+
     def o2(ph: float, pe: float) -> float:
         return water_gas_scalar(
             "O2(g)", ph=ph, pe=pe, temp_c=params.temp_c, limit_atm=params.o2_limit_atm,
@@ -437,6 +452,42 @@ def _clip_segments_to_sum_window(
             t0, t1 = 0.0, 1.0
             ok = True
             for p, q in ((ds, upper - s0), (-ds, s0 - lower)):
+                if p == 0.0:
+                    if q < 0.0:
+                        ok = False
+                        break
+                    continue
+                r = q / p
+                if p < 0.0:
+                    t0 = max(t0, r)
+                else:
+                    t1 = min(t1, r)
+            if not ok or t0 > t1:
+                continue
+            ax, ay = x0 + t0 * (x1 - x0), y0 + t0 * (y1 - y0)
+            bx, by = x0 + t1 * (x1 - x0), y0 + t1 * (y1 - y0)
+            out.append({"x": [ax, bx], "y": [ay, by]})
+    return out
+
+
+def _clip_segments_to_y_window(
+    segments: list[dict[str, Any]], *, lower: float, upper: float
+) -> list[dict[str, Any]]:
+    """Clip polyline segments to ``lower <= y <= upper`` (horizontal band).
+
+    Used in log fO₂ mode where O₂/H₂ limits are constant log10(fO₂).
+    """
+    out: list[dict[str, Any]] = []
+    for seg in segments:
+        xs = seg.get("x") or []
+        ys = seg.get("y") or []
+        for k in range(len(xs) - 1):
+            x0, y0 = float(xs[k]), float(ys[k])
+            x1, y1 = float(xs[k + 1]), float(ys[k + 1])
+            dy = y1 - y0
+            t0, t1 = 0.0, 1.0
+            ok = True
+            for p, q in ((dy, upper - y0), (-dy, y0 - lower)):
                 if p == 0.0:
                     if q < 0.0:
                         ok = False
@@ -772,12 +823,18 @@ def _pack_one_layer(
     # water-stability window plus analytic O₂/H₂ gas-limit lines.
     chem_segments = list(layer_nodes.get("boundaries") or [])
     if use_water:
-        lower_sum, upper_sum = water_gas_sum_window(params)
-        chem_segments = _clip_segments_to_sum_window(
-            chem_segments,
-            lower=lower_sum,
-            upper=upper_sum,
-        )
+        if is_log_fo2_redox(params):
+            lo, hi = water_log_fo2_window(params)
+            chem_segments = _clip_segments_to_y_window(
+                chem_segments, lower=lo, upper=hi,
+            )
+        else:
+            lower_sum, upper_sum = water_gas_sum_window(params)
+            chem_segments = _clip_segments_to_sum_window(
+                chem_segments,
+                lower=lower_sum,
+                upper=upper_sum,
+            )
         chem_segments.extend(
             water_gas_boundary_segments(
                 params,

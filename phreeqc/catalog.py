@@ -99,12 +99,6 @@ class ElementProbeHit:
 
 
 @dataclass(frozen=True)
-class ElementProbeResult:
-    count: int
-    entries: tuple[ElementProbeHit, ...]
-
-
-@dataclass(frozen=True)
 class MasterSpeciesEntry:
     """One ``SOLUTION_MASTER_SPECIES`` row."""
 
@@ -221,60 +215,6 @@ def _delimited_phase_punch_block() -> str:
     ) + "\n"
 
 
-def _delimited_element_punch_block() -> str:
-    return "\n".join(
-        [
-            "USER_PUNCH",
-            "    -headings n_elements element_blob",
-            "    -start",
-            "10 n = SYS(\"elements\", count, name$, type$, moles)",
-            "20 blob$ = \"\"",
-            "30 FOR i = 1 TO count",
-            f"40   IF i > 1 THEN blob$ = blob$ + \"{_DELIM}\"",
-            "50   blob$ = blob$ + name$(i) + \" \" + type$(i)",
-            "60 NEXT i",
-            "70 PUNCH count, blob$",
-            "    -end",
-        ]
-    ) + "\n"
-
-
-def _delimited_aqueous_punch_block() -> str:
-    return "\n".join(
-        [
-            "USER_PUNCH",
-            "    -headings n_aq aq_blob",
-            "    -start",
-            "10 n = SYS(\"aq\", count, nm$, ty$, mo)",
-            "20 blob$ = \"\"",
-            "30 FOR i = 1 TO count",
-            f"40   IF i > 1 THEN blob$ = blob$ + \"{_DELIM}\"",
-            "50   blob$ = blob$ + nm$(i)",
-            "60 NEXT i",
-            "70 PUNCH count, blob$",
-            "    -end",
-        ]
-    ) + "\n"
-
-
-def _delimited_species_punch_block(element: str) -> str:
-    return "\n".join(
-        [
-            "USER_PUNCH",
-            "    -headings n_species species_blob",
-            "    -start",
-            f"10 n = SYS(\"{element}\", count, nm$, ty$, mo)",
-            "20 blob$ = \"\"",
-            "30 FOR i = 1 TO count",
-            f"40   IF i > 1 THEN blob$ = blob$ + \"{_DELIM}\"",
-            "50   blob$ = blob$ + nm$(i) + \" \" + ty$(i)",
-            "60 NEXT i",
-            "70 PUNCH count, blob$",
-            "    -end",
-        ]
-    ) + "\n"
-
-
 def build_probe_input(
     *,
     totals: dict[str, float],
@@ -334,24 +274,6 @@ def _parse_delimited_phases(blob: str) -> list[PhaseProbeHit]:
     return hits
 
 
-def _parse_delimited_elements(blob: str) -> list[ElementProbeHit]:
-    hits: list[ElementProbeHit] = []
-    for part in str(blob or "").strip().split(_DELIM):
-        name, kind = _split_blob_pair(part)
-        if name:
-            hits.append(ElementProbeHit(name=name, kind=kind))
-    return hits
-
-
-def _parse_delimited_species(blob: str) -> list[tuple[str, str]]:
-    hits: list[tuple[str, str]] = []
-    for part in str(blob or "").strip().split(_DELIM):
-        name, kind = _split_blob_pair(part)
-        if name:
-            hits.append((name, kind))
-    return hits
-
-
 def run_phases_delimited_probe(
     pq,
     *,
@@ -398,50 +320,6 @@ def converging_phases_probe(
     raise last_exc
 
 
-def run_elements_delimited_probe(
-    pq,
-    *,
-    totals: dict[str, float],
-    units: str = config.DEFAULT_UNITS,
-) -> ElementProbeResult:
-    inp = build_probe_input(
-        totals=totals,
-        punch_block=_delimited_element_punch_block(),
-        units=units,
-    )
-    pq.run_string(inp)
-    row = selected_dict(pq)
-    count = int(float(row.get("n_elements", 0) or 0))
-    entries = tuple(_parse_delimited_elements(str(row.get("element_blob", "") or "")))
-    return ElementProbeResult(count=count, entries=entries)
-
-
-def run_aqueous_species_probe(
-    pq,
-    *,
-    totals: dict[str, float],
-    units: str = config.DEFAULT_UNITS,
-) -> tuple[str, ...]:
-    """All aqueous species for the solution in ONE equilibration via SYS("aq").
-
-    Far cheaper than probing each element separately, which re-equilibrates the
-    full (often large) solution once per element.
-    """
-    inp = build_probe_input(
-        totals=totals,
-        punch_block=_delimited_aqueous_punch_block(),
-        units=units,
-    )
-    pq.run_string(inp)
-    row = selected_dict(pq)
-    blob = str(row.get("aq_blob", "") or "")
-    names = [s.strip() for s in blob.split(_DELIM) if s.strip()]
-    seen: dict[str, None] = {}
-    for name in names:
-        seen.setdefault(name, None)
-    return tuple(seen)
-
-
 def group_species_by_element(
     species: tuple[str, ...],
     symbols: tuple[str, ...],
@@ -456,25 +334,6 @@ def group_species_by_element(
     return {sym: tuple(names) for sym, names in buckets.items()}
 
 
-def run_species_delimited_probe(
-    pq,
-    element: str,
-    *,
-    totals: dict[str, float],
-    units: str = config.DEFAULT_UNITS,
-) -> tuple[int, tuple[str, ...]]:
-    inp = build_probe_input(
-        totals=totals,
-        punch_block=_delimited_species_punch_block(element),
-        units=units,
-    )
-    pq.run_string(inp)
-    row = selected_dict(pq)
-    count = int(float(row.get("n_species", 0) or 0))
-    hits = _parse_delimited_species(str(row.get("species_blob", "") or ""))
-    return count, tuple(name for name, _kind in hits)
-
-
 def open_phreeqc(db_path: str, dll_path: str):
     from phreeqpy.iphreeqc import phreeqc_dll as phreeqc_dll_mod
 
@@ -484,44 +343,6 @@ def open_phreeqc(db_path: str, dll_path: str):
     if err:
         raise RuntimeError(f"Failed to load database {db_path}:\n{err}")
     return pq
-
-
-def probe_total_accepted(
-    pq,
-    total_key: str,
-    *,
-    units: str = config.DEFAULT_UNITS,
-    amount: float = config.CATALOG_PROBE_AMOUNT,
-) -> bool:
-    symbol = element_from_total_key(total_key)
-    try:
-        count, names = run_species_delimited_probe(
-            pq,
-            symbol,
-            totals={total_key: amount},
-            units=units,
-        )
-        return count > 0 and len(names) > 0
-    except Exception:
-        return False
-
-
-def probe_accepted_totals(
-    pq,
-    candidates: tuple[str, ...] = config.CATALOG_TOTAL_CANDIDATES,
-    *,
-    units: str = config.DEFAULT_UNITS,
-    amount: float = config.CATALOG_PROBE_AMOUNT,
-) -> tuple[str, ...]:
-    """Legacy per-total acceptance probe (kept for diagnostics/tests).
-
-    Production catalogs use ``parse_solution_master_species`` instead.
-    """
-    accepted: list[str] = []
-    for key in candidates:
-        if probe_total_accepted(pq, key, units=units, amount=amount):
-            accepted.append(key)
-    return tuple(accepted)
 
 
 def detect_solid_aqueous_collisions(

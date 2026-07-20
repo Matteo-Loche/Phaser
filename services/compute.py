@@ -439,6 +439,11 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
         if not is_valid_unit(input_units):
             raise ValueError(f"Unsupported concentration unit: {body.units!r}")
         totals_mmol = totals_to_mmol_kgw(body.totals, input_units)
+        redox_axis = body.redox_axis
+        if redox_axis == config.REDOX_AXIS_LOG_FO2:
+            y_min, y_max = body.log_fo2_min, body.log_fo2_max
+        else:
+            y_min, y_max = body.pe_min, body.pe_max
         params = GridJobParams(
             db_path=db,
             dll_path=dll,
@@ -446,9 +451,10 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             ph_min=body.ph_min,
             ph_max=body.ph_max,
             ph_levels=body.ph_levels,
-            pe_min=body.pe_min,
-            pe_max=body.pe_max,
+            pe_min=y_min,
+            pe_max=y_max,
             pe_levels=body.pe_levels,
+            redox_axis=redox_axis,
             totals=totals_mmol,
             phases=phase_names,
             system_elements=sys_tuple,

@@ -4,7 +4,7 @@ from __future__ import annotations
 from .. import config
 from .dummy_medium import BG_TITRANT_BASE, medium_lines
 from .engine import format_selected_output_suffix, totals_lines
-from .gas_limits import log_f_o2
+from .gas_limits import target_log_fo2
 
 # Acidic seed (same as charge-balanced titration): redox is set by the O2(g) pin.
 _SEED_PH = 1.8
@@ -26,7 +26,7 @@ def format_dummy_titration_input(
     On PHREEQC failure the caller must retry once with ``flip_charge=True``.
     """
     lines = totals_lines(params)
-    target_log_f_o2 = log_f_o2(ph=ph, pe=pe, temp_c=params.temp_c)
+    target_log_f_o2 = target_log_fo2(ph=ph, y=pe, params=params)
     bg = medium_lines(
         _SEED_PH,
         params.totals,

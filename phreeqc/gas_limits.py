@@ -43,6 +43,31 @@ def log_f_o2(*, ph: float, pe: float, temp_c: float) -> float:
     return 4.0 * (pe + ph - log_k_o2_water(temp_c=temp_c))
 
 
+def is_log_fo2_redox(params: GridJobParams) -> bool:
+    return getattr(params, "redox_axis", config.REDOX_AXIS_PE) == config.REDOX_AXIS_LOG_FO2
+
+
+def target_log_fo2(*, ph: float, y: float, params: GridJobParams) -> float:
+    """O2(g) pin value: native log fO₂ when that is the sweep axis, else from pe."""
+    if is_log_fo2_redox(params):
+        return float(y)
+    return log_f_o2(ph=ph, pe=y, temp_c=params.temp_c)
+
+
+def water_log_fo2_window(params: GridJobParams) -> tuple[float, float]:
+    """``(lower, upper)`` bounds on log10(fO₂) for the water-stability band.
+
+    Both limits are horizontal in (pH, log fO₂):
+    * upper (O₂): ``log fO₂ <= log10(fO2_limit)``
+    * lower (H₂): ``log fO₂ >= 4·(-log10(fH2_limit)/2 − K_O2)``
+    """
+    upper = math.log10(params.o2_limit_atm)
+    lower = 4.0 * (
+        -math.log10(params.h2_limit_atm) / 2.0 - log_k_o2_water(temp_c=params.temp_c)
+    )
+    return lower, upper
+
+
 def log_f_h2(*, ph: float, pe: float, temp_c: float) -> float:
     """log10(fugacity H2 in atm) from pe/pH (log K ≈ 0 at 25 °C)."""
     del temp_c
@@ -102,14 +127,28 @@ def split_water_band_points(
     cell_ph: float,
     cell_pe: float,
 ) -> tuple[list[tuple[float, float]], list[tuple[tuple[float, float], str]]]:
-    """Partition grid points into inside-band PHREEQC targets and outside synthetics."""
+    """Partition grid points into inside-band PHREEQC targets and outside synthetics.
+
+    Second coordinate is pe (pe-mode) or log10(fO₂) (log_fo2-mode).
+    """
     if not water_band_active(params):
         return points, []
-    lo, hi = water_gas_sum_window(params)
-    margin = config.SWEEP_WATER_MARGIN_CELLS * (cell_ph + cell_pe)
     o2_lab, h2_lab = water_gas_outside_labels(params)
     inside: list[tuple[float, float]] = []
     outside: list[tuple[tuple[float, float], str]] = []
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        margin = config.SWEEP_WATER_MARGIN_CELLS * cell_pe
+        for ph, y in points:
+            if y > hi + margin:
+                outside.append(((ph, y), o2_lab))
+            elif y < lo - margin:
+                outside.append(((ph, y), h2_lab))
+            else:
+                inside.append((ph, y))
+        return inside, outside
+    lo, hi = water_gas_sum_window(params)
+    margin = config.SWEEP_WATER_MARGIN_CELLS * (cell_ph + cell_pe)
     for ph, pe in points:
         s = ph + pe
         if s > hi + margin:
@@ -149,8 +188,17 @@ def water_gas_scalar_grids(
     fine_pe: np.ndarray,
     params: GridJobParams,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Signed-distance scalars for O₂/H₂ limits on the fine raster (pe × pH)."""
+    """Signed-distance scalars for O₂/H₂ limits on the fine raster (y × pH).
+
+    Second axis is pe or log10(fO₂) depending on ``params.redox_axis``.
+    """
     pe_grid, ph_grid = np.meshgrid(fine_pe, fine_ph, indexing="ij")
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        o2 = pe_grid - hi
+        h2 = lo - pe_grid
+        inside = (o2 <= 0.0) & (h2 <= 0.0)
+        return o2, h2, inside
     k_o2 = log_k_o2_water(temp_c=params.temp_c)
     log_o2_lim = math.log10(params.o2_limit_atm)
     log_h2_lim = math.log10(params.h2_limit_atm)
@@ -158,6 +206,30 @@ def water_gas_scalar_grids(
     h2 = -2.0 * (pe_grid + ph_grid) - log_h2_lim
     inside = (o2 <= 0.0) & (h2 <= 0.0)
     return o2, h2, inside
+
+
+def water_gas_domain_labels_for_params(
+    *,
+    ph: float,
+    y: float,
+    params: GridJobParams,
+) -> dict[str, str]:
+    """Outside-water labels at a grid point (y = pe or log fO₂)."""
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        out: dict[str, str] = {}
+        if y > hi:
+            out["O2(g)"] = f"O2(g) > {params.o2_limit_atm:g} atm"
+        if y < lo:
+            out["H2(g)"] = f"H2(g) > {params.h2_limit_atm:g} atm"
+        return out
+    return water_gas_domain_labels(
+        ph=ph,
+        pe=y,
+        temp_c=params.temp_c,
+        o2_limit_atm=params.o2_limit_atm,
+        h2_limit_atm=params.h2_limit_atm,
+    )
 
 
 def water_gas_sum_window(params: GridJobParams) -> tuple[float, float]:
@@ -179,8 +251,18 @@ def water_gas_boundary_segments(
     pe_min: float,
     pe_max: float,
 ) -> list[dict[str, Any]]:
-    """Clipped O₂/H₂ lines as boundary vectors for the display frame."""
+    """Clipped O₂/H₂ lines as boundary vectors for the display frame.
+
+    In pe-mode the lines are diagonal (slope −1). In log_fo2-mode they are
+    horizontal at constant log10(fO₂).
+    """
     segments: list[dict[str, Any]] = []
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        for y in (hi, lo):
+            if pe_min - 1e-9 <= y <= pe_max + 1e-9:
+                segments.append({"x": [ph_min, ph_max], "y": [y, y]})
+        return segments
     for gas, limit_atm in (
         ("O2(g)", params.o2_limit_atm),
         ("H2(g)", params.h2_limit_atm),

@@ -265,7 +265,7 @@ re-parse the `.dat` on every job).
 
 | Catalog data | Source | Why |
 |--------------|--------|-----|
-| Accepted totals / dissolved elements | **`.dat` `SOLUTION_MASTER_SPECIES` text** (`parse_solution_master_species`) | Complete and independent of probe conditions. Element-resolvable keys (`Fe`, `Fe(+3)`, `C(4)`, …); pseudo-totals like `Alkalinity` / `Acetate` are omitted from the totals table that drives the element picker |
+| Accepted totals / dissolved elements | **`.dat` `SOLUTION_MASTER_SPECIES` text** (`parse_solution_master_species`) | Complete and independent of probe conditions. Element-resolvable keys (`Fe`, `Fe(+3)`, `C(4)`, …); pseudo-totals like `Alkalinity` / `Acetate` are omitted. The UI chemical-system picker shows **general element symbols only** (`C`, `S`, …) from the dissolved-elements list |
 | Aqueous species (grouped per element) | **`.dat` `SOLUTION_SPECIES` text** (`parse_solution_species_names`) | Complete and **independent of temperature / pH / pe**. `SYS("aq")` only reports species present at the probe condition and silently drops complexes such as LLNL `Fe(OH)3` |
 | Phase names, kind (solid/gas), element composition, **display formula** | **`.dat` `PHASES` block text** (`parse_phases`) | Complete and **independent of temperature / pH / pe**. Formula is the stoichiometric LHS reactant from the dissolution reaction (e.g. Goethite → `FeOOH`), not a PHREEQC probe. `SYS("phases")` is condition-dependent and exposes no element composition |
 | Saturation-index metadata (`si_probe`) | **PHREEQC engine** — one `SYS("phases")` equilibration | Best-effort display metadata only — **not** a parse sanity check. Inventories come from text; the probe may miss redox-mismatched solids |
@@ -372,7 +372,7 @@ Each grid point `(pH, pe)` is evaluated through **`format_grid_input`**, which d
 | `assemblage_dummy_titration` | Mineral stability — dummy electrolyte + selected solids in `EQUILIBRIUM_PHASES` |
 | `assemblage_titration` | Mineral stability — Cl⁻/NaOH + selected solids in `EQUILIBRIUM_PHASES` |
 
-The sweep coordinate is always **`pe`**; `Eh` and `log fO₂` are derived from `(pH, pe, T)` for plotting (see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
+The sweep coordinate is **`pe`** when `redox_axis` is `pe` (Eh display maps to pe for compute), or **`log fO₂`** when `redox_axis` is `log_fo2` (see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
 
 #### Titration-style modes (dummy + real electrolyte titration)
 
@@ -549,7 +549,8 @@ Limits (`config.py`):
 | Constant | Default | Purpose |
 |----------|---------|---------|
 | `PH_MIN`, `PH_MAX` | 2.0, 12.0 | Default pH axis bounds when the client omits them |
-| `PE_MIN`, `PE_MAX` | −14.0, 20.0 | Default redox (pe) axis bounds; Eh / log fO₂ are derived from these |
+| `PE_MIN`, `PE_MAX` | −14.0, 20.0 | Default redox (pe) axis bounds for pe/Eh compute mode |
+| `LOG_FO2_MIN`, `LOG_FO2_MAX` | −90.0, 10.0 | Default log fO₂ bounds for `redox_axis=log_fo2` |
 | `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
 | `MIN_GRID_LEVELS` | 50 | Minimum allowed `ph_levels` / `pe_levels` |
 | `MAX_GRID_LEVELS` | 200 | Maximum allowed `ph_levels` / `pe_levels` |
@@ -601,7 +602,7 @@ The `diagram` package exports packers via lazy `__getattr__` so spawned ProcessP
 
 Before compute:
 
-1. Derive **system elements** from total concentrations (e.g. `Fe`, `C(4)` → `Fe`, `C`).
+1. Derive **system elements** from total concentrations (e.g. `Fe`, `C` → `Fe`, `C`).
 2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog. Each phase also includes a **`formula`** field parsed from the PHASES reaction for display (the UI toggles mineral name / formula / both client-side without repacking; join labels format each part the same way).
 3. User-selected phases (or auto-discovered set) become the `phases` tuple passed to PHREEQC.
 
@@ -616,7 +617,7 @@ After the sweep, each grid point has SI values and aqueous dominance data (assem
 
 Shared behaviour:
 
-1. Builds axis arrays in `pe` (Eh and log fO₂ applied at plot time; see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
+1. Builds axis arrays in the native compute coordinate (`pe` or `log fO₂`; see [Redox axis](#redox-axis-log-fo₂--eh--pe)). Packed results echo `redox_axis`.
 2. For each **element subset** enabled by the layer toggles, assigns a category per point:
    - **Solid predominance** (`layer_solids` + SI pack) — highest SI ≥ 0 among eligible phases in that subset; otherwise dominant aqueous species in the subset.
    - **Mineral stability** (`layer_solids` + mineral pack) — `moles` (argmax precipitated moles) or `costability` (all moles > ε joined); otherwise dominant aqueous species in the subset.
@@ -788,7 +789,7 @@ The dashboard **Period** control selects a trailing window (`24h`, `7d`, `30d` d
 | **Top databases** | Most-used `db_id` values (≤15) |
 | **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) (≤15) |
 | **Layer configurations** | Solid / aqueous / per-element subset combinations (≤15) |
-| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C(4) · Mg`), ranked by frequency (≤15) |
+| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C · Mg`), ranked by frequency (≤15) |
 | **Avg compute time** | Wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds) |
 | **Avg queue at start** | Mean number of jobs ahead when each job began running, captured at enqueue time (`0` = started immediately) |
 | **Avg wait time** | Mean time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
@@ -812,8 +813,8 @@ Elements no longer need a manual reload button — everything refreshes when the
 | Card | Contents |
 |------|----------|
 | **Database** | *(narrow screens only)* Same `db_id` selector as the header, plus filename / source / catalog-status meta |
-| **Chemical system** | Species picker with concentrations, unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
-| **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max (default **pe −14 to 20**, converted for display, stored as `pe` internally). See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
+| **Chemical system** | Element picker with concentrations (general element symbols only, e.g. `C` not `C(4)`), unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
+| **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max — **pe −14 to 20** for Eh/pe (stored as `peMin`/`peMax`), independent **log fO₂** bounds for log fO₂ mode. See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
 | **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips |
 | **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
@@ -895,7 +896,7 @@ Non-convergent / `none` cells render **white**; aqueous species use light grey i
 
 Vector polygons are batched by category (largest phase first) so Plotly uses one fill trace per phase; within a trace, null-separated rings paint correctly. Stability limits (converged↔failed) render as distinct dashed lines.
 
-Redox axis choice (**Eh / pe / log fO₂**) is display-only: the packed grid is always in `pe`; vertices are transformed per-point when plotting (`mapPlotXY`).
+Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display remap on pe-native results (no recompute). **log fO₂** is a separate compute mode — switching to or from log fO₂ marks the diagram stale until recomputed.
 
 ### Settings persistence
 
@@ -921,9 +922,9 @@ Starting a **new** compute abandons the previous server job reference (running s
 
 ### Redox axis (log fO₂ / Eh / pe)
 
-The vertical axis can be shown as **Eh**, **pe**, or **log fO₂**. All three describe the same thermodynamic state; conversions are exact at each `(pH, pe, T)`. The compute grid is swept in **`pe`**; Eh and log fO₂ are applied when packing and plotting results. Default display axis: **Eh**; default redox bounds: **pe −14 to 20** (`PE_MIN`/`PE_MAX`), shown as their Eh / log fO₂ equivalents when those axes are selected.
+The vertical axis can be shown as **Eh**, **pe**, or **log fO₂**. **pe** and **Eh** are one family: the grid is swept in **`pe`**, and switching between pe and Eh only remaps the y-axis for display (no recompute). **log fO₂** is a separate **native compute mode**: the grid is swept in `(pH, log fO₂)`, typed min/max are exact axis bounds, and switching to or from log fO₂ requires **recompute**. Default display axis: **Eh**; default pe bounds: **−14 to 20** (`PE_MIN`/`PE_MAX`); default log fO₂ bounds: **−90 to 10** (`LOG_FO2_MIN`/`LOG_FO2_MAX`).
 
-**Conversion relations** (all logs base-10; `T` in °C, `T_K = T + 273.15`):
+**Conversion relations** (all logs base-10; `T` in °C, `T_K = T + 273.15`) — used for pe-mode PHREEQC pinning and pe↔Eh display:
 
 | Axis | From `pe` | Back to `pe` |
 |------|-----------|--------------|
@@ -939,9 +940,16 @@ log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20
 
 (`log_k_o2_water()` / `log_f_o2()` in `phreeqc/gas_limits.py`; same relation used for `O2(g)` in equilibration.)
 
-**Coordinate geometry.** `Eh` is a linear, pH-independent rescaling of `pe`. `log fO₂` couples to both `pe` and `pH`, so a rectangular `(pH, pe)` grid maps to a sheared grid in `(pH, log fO₂)`. Vector geometry is transformed **per vertex** (`mapPlotXY(pH, pe)`), which preserves boundary positions when switching axes. Region label placement is scored in **grid-index** space (clearance from edges for chemistry; index centroid for gas domains), then mapped to the active axis — so pe ↔ Eh ↔ log fO₂ does not re-pick a different cell. O₂/H₂ stability lines are horizontal in a `log fO₂` plot (constant fugacity).
+**Compute API.** Send `redox_axis`: `"pe"` (default; Eh UI maps here) or `"log_fo2"`. Use `pe_min`/`pe_max` for pe mode; `log_fo2_min`/`log_fo2_max` for log fO₂ mode. Packed results include `redox_axis` so the client knows whether y is native pe or log fO₂.
 
-**log fO₂ axis limits** — min/max inputs convert to `pe` at the same rectangle corners used for the axis extent: `peMin = fO₂min/4 − pH_min + log K_O₂`, `peMax = fO₂max/4 − pH_max + log K_O₂` (so `displayYMin`/`displayYMax` round-trip). Changing pH refreshes the displayed limits. The hover heatmap uses mid-pH for its rectangular y ticks; vector fills, boundaries, and phase labels use the exact per-point conversion.
+**Display behaviour.**
+
+| Switch | Recompute? |
+|--------|------------|
+| pe ↔ Eh | No — linear remap, same pe-native grid |
+| pe/Eh ↔ log fO₂ | Yes — stale until recomputed; no remapping of the other mode's grid |
+
+O₂/H₂ stability limits are horizontal in a log fO₂ plot (constant fugacity). Region label placement stays in grid-index space so pe ↔ Eh does not re-pick labels.
 
 ---
 
@@ -1030,7 +1038,7 @@ Key fields in the JSON body:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C(4)": 1.0}` |
+| `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C": 1.0}` |
 | `ph_levels`, `pe_levels` | `GRID_LEVELS` | Grid resolution (both axes; clamped to `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`) |
 | `ph_min`, `ph_max`, `pe_min`, `pe_max` | config defaults | Axis bounds |
 | `phases` | auto-discover | Selected solid phase names |

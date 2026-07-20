@@ -7,7 +7,7 @@ from .engine import (
     format_assemblage_selected_output_suffix,
     totals_lines,
 )
-from .gas_limits import log_f_o2
+from .gas_limits import target_log_fo2
 
 
 def format_assemblage_titration_input(
@@ -18,7 +18,7 @@ def format_assemblage_titration_input(
 ) -> str:
     """Cl seed + Fix_H+/NaOH + O2 pin + selected solids at SI=0 / 0 moles initial."""
     lines = totals_lines(params)
-    target_log_f_o2 = log_f_o2(ph=ph, pe=pe, temp_c=params.temp_c)
+    target_log_f_o2 = target_log_fo2(ph=ph, y=pe, params=params)
     solids = assemblage_solid_lines(params)
     return f"""TITLE Mineral stability (real electrolyte titration assemblage)
 PHASES

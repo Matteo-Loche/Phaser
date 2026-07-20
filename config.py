@@ -187,6 +187,14 @@ PH_MIN = 2.0
 PH_MAX = 12.0
 PE_MIN = -14.0
 PE_MAX = 20.0
+# Default log fO₂ axis bounds (native compute mode; independent of pe).
+LOG_FO2_MIN = -90.0
+LOG_FO2_MAX = 10.0
+# Compute redox frame: pe (also Eh display) or native log fO₂.
+REDOX_AXIS_PE = "pe"
+REDOX_AXIS_LOG_FO2 = "log_fo2"
+REDOX_AXES = (REDOX_AXIS_PE, REDOX_AXIS_LOG_FO2)
+REDOX_AXIS_DEFAULT = REDOX_AXIS_PE
 GRID_LEVELS = 100  # single resolution for both pH and pe/Eh axes
 MIN_GRID_LEVELS = 50  # UI + API floor for ph_levels / pe_levels
 MAX_GRID_LEVELS = 200  # matches MAX_GRID_POINTS = 200×200
@@ -372,31 +380,12 @@ SWEEP_WATER_MARGIN_CELLS = float(os.environ.get("PHASER_SWEEP_WATER_MARGIN_CELLS
 # receive mmol/kgw (DEFAULT_UNITS); values are converted before engine input.
 UNIT_OPTIONS = ("mol/kgw", "mmol/kgw", "umol/kgw")
 
-# Master species labels accepted in the UI (PHREEQC input names).
+# Preferred general-element labels for the chemical-system picker (bare symbols
+# only — no valence states like C(4) / S(6)). Order is the UI suggestion priority.
 KNOWN_TOTALS = (
-    "Fe", "Ca", "Mg", "Na", "K", "Al", "Si", "C(4)", "S(6)", "S(-2)",
-    "Cl", "N(5)", "P", "Mn", "Zn", "Cu", "Pb", "Ba", "Sr", "Ni", "Cr",
+    "Fe", "Ca", "Mg", "Na", "K", "Al", "Si", "C", "S",
+    "Cl", "N", "P", "Mn", "Zn", "Cu", "Pb", "Ba", "Sr", "Ni", "Cr",
 )
-
-# Broader parser-free candidate totals for full database catalog scans.
-_CATALOG_ELEMENTS = (
-    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al", "Si", "P",
-    "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu",
-    "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr", "Nb", "Mo", "Tc",
-    "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn", "Sb", "Te", "I", "Xe", "Cs", "Ba", "La",
-    "Ce", "Pr", "Nd", "Pm", "Sm", "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu",
-    "Hf", "Ta", "W", "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At",
-    "Rn", "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf", "Es",
-    "Fm", "Md", "No", "Lr",
-)
-_CATALOG_REDOX_ALIASES = (
-    "C(4)", "C(-4)", "N(5)", "N(3)", "N(0)", "N(-3)",
-    "S(6)", "S(4)", "S(0)", "S(-2)",
-    "P(5)", "P(3)", "P(-3)",
-    "Fe(2)", "Fe(3)", "Cu(1)", "Cu(2)", "Mn(2)", "Mn(3)", "Mn(4)", "Mn(6)", "Mn(7)",
-    "Cr(3)", "Cr(6)", "Cl(-1)", "As(3)", "As(5)",
-)
-CATALOG_TOTAL_CANDIDATES = tuple(dict.fromkeys((*_CATALOG_ELEMENTS, *_CATALOG_REDOX_ALIASES)))
 
 CATALOG_DB = Path(
     os.environ.get("PHASER_CATALOG_DB", str(PACKAGE_DIR / "data" / "catalog.sqlite"))

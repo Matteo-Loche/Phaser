@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from .. import config
 from .engine import format_selected_output_suffix, totals_lines
-from .gas_limits import log_f_o2
+from .gas_limits import target_log_fo2
 
 
 def format_titration_input(
@@ -17,7 +17,7 @@ def format_titration_input(
 ) -> str:
     """Real-electrolyte titration: acidic Cl seed + Fix_H+/NaOH + fixed O2 fugacity."""
     lines = totals_lines(params)
-    target_log_f_o2 = log_f_o2(ph=ph, pe=pe, temp_c=params.temp_c)
+    target_log_f_o2 = target_log_fo2(ph=ph, y=pe, params=params)
     return f"""TITLE Phase diagram (real electrolyte titration)
 PHASES
 Fix_H+

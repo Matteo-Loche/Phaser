@@ -494,6 +494,7 @@ def pack_grid_results(
     return {
         "ph": ph.tolist(),
         "pe": pe.tolist(),
+        "redox_axis": getattr(params, "redox_axis", config.REDOX_AXIS_PE),
         "system_elements": list(params.system_elements),
         "layer_solids": params.layer_solids,
         "layer_aqueous": params.layer_aqueous,
@@ -696,6 +697,7 @@ def pack_mineral_grid_results(
     return {
         "ph": ph.tolist(),
         "pe": pe.tolist(),
+        "redox_axis": getattr(params, "redox_axis", config.REDOX_AXIS_PE),
         "system_elements": list(params.system_elements),
         "layer_solids": params.layer_solids,
         "layer_aqueous": params.layer_aqueous,

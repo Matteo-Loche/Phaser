@@ -24,6 +24,9 @@ class GridJobParams:
     pe_levels: int
     totals: dict[str, float]
     phases: tuple[str, ...]
+    # Native redox frame for the y-axis sweep: "pe" or "log_fo2".
+    # When "log_fo2", pe_min/pe_max hold log10(fO₂) bounds (packed as ``pe`` array).
+    redox_axis: str = config.REDOX_AXIS_DEFAULT
     system_elements: tuple[str, ...] = ()
     units: str = config.DEFAULT_UNITS
     # Extra aqueous species for SELECTED_OUTPUT -mol (boundary tracing).
@@ -73,6 +76,13 @@ def grid_job_params_from_dict(data: dict) -> GridJobParams:
         }
     if "knobs_mode" in kwargs:
         kwargs["knobs_mode"] = config.normalize_knobs_mode(kwargs.get("knobs_mode"))
+    if "redox_axis" in kwargs:
+        axis = str(kwargs.get("redox_axis") or config.REDOX_AXIS_DEFAULT).strip().lower()
+        if axis == "eh":
+            axis = config.REDOX_AXIS_PE
+        if axis not in config.REDOX_AXES:
+            axis = config.REDOX_AXIS_DEFAULT
+        kwargs["redox_axis"] = axis
     return GridJobParams(**kwargs)
 
 
@@ -484,18 +494,12 @@ def _parse_grid_row(
         if g in si and si[g] == si[g]
     }
 
-    from .gas_limits import water_gas_domain_labels, water_stability_limits_enabled
+    from .gas_limits import water_gas_domain_labels_for_params, water_stability_limits_enabled
 
     gas_domain: dict[str, str] = {}
     if water_stability_limits_enabled(params):
         gas_domain.update(
-            water_gas_domain_labels(
-                ph=ph,
-                pe=pe,
-                temp_c=params.temp_c,
-                o2_limit_atm=params.o2_limit_atm,
-                h2_limit_atm=params.h2_limit_atm,
-            )
+            water_gas_domain_labels_for_params(ph=ph, y=pe, params=params)
         )
     for gas, val in gas_si.items():
         if gas not in ("O2(g)", "H2(g)") and val > math.log10(params.component_gas_limit_atm):

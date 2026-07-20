@@ -28,6 +28,10 @@ class ComputeRequest(BaseModel):
     pe_min: float = config.PE_MIN
     pe_max: float = config.PE_MAX
     pe_levels: int = Field(default=config.GRID_LEVELS, ge=config.MIN_GRID_LEVELS, le=config.MAX_GRID_LEVELS)
+    # pe = pe/Eh family (bounds in pe_min/pe_max); log_fo2 = native fO₂ sweep.
+    redox_axis: str = config.REDOX_AXIS_DEFAULT
+    log_fo2_min: float = config.LOG_FO2_MIN
+    log_fo2_max: float = config.LOG_FO2_MAX
     totals: dict[str, float]
     units: str = config.DEFAULT_UNITS
     phases: list[str] | None = None
@@ -70,6 +74,17 @@ class ComputeRequest(BaseModel):
     @classmethod
     def _validate_knobs_mode(cls, value: str) -> str:
         return config.normalize_knobs_mode(value)
+
+    @field_validator("redox_axis")
+    @classmethod
+    def _validate_redox_axis(cls, value: str) -> str:
+        axis = (value or "").strip().lower()
+        if axis == "eh":
+            axis = config.REDOX_AXIS_PE
+        if axis not in config.REDOX_AXES:
+            allowed = ", ".join(config.REDOX_AXES)
+            raise ValueError(f"Unsupported redox_axis: {value!r}. Use one of: {allowed}.")
+        return axis
 
     @field_validator("units")
     @classmethod
