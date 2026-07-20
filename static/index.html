@@ -768,6 +768,11 @@
     button.btn.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
     button.btn.block { width: 100%; justify-content: center; }
     button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    #computeBtn:disabled {
+      opacity: 0.42;
+      filter: grayscale(0.25);
+      box-shadow: none;
+    }
 
     .pill {
       display: inline-flex; align-items: center; gap: 0.3rem;
@@ -778,6 +783,13 @@
     .pill.ok { background: rgba(61,214,140,0.16); color: var(--ok); }
     .pill.err { background: rgba(255,107,107,0.16); color: var(--err); }
     .pill.warn { background: rgba(245,166,35,0.16); color: var(--warn); }
+    .pill.stale {
+      background: rgba(255, 72, 72, 0.2);
+      color: #ff5252;
+      font-size: 0.92rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
 
     .status { font-size: 0.8rem; color: var(--muted); min-height: 1.1rem; }
     .status.ok { color: var(--ok); } .status.err { color: var(--err); }
@@ -1567,7 +1579,7 @@
         <div class="plot-resizer" id="plotResizer"
              title="Drag to resize · double-click to reset" aria-hidden="true"></div>
         <div class="plot-toolbar soft-scroll">
-          <span class="pill" id="stalePill" style="display:none">stale — recompute</span>
+          <span class="pill stale" id="stalePill" style="display:none">stale — recompute</span>
 
           <details class="card disp-card disp-card-display" open>
             <summary>Display <span class="chev">›</span></summary>
@@ -1964,6 +1976,8 @@
       phaseSeq: 0,
       phaseDebounce: null,
       hasResult: false,
+      isStale: false,
+      computeInProgress: false,
       computeStartedAt: null,
       modeMenuOpen: false,
       statsWindow: "30d",
@@ -2096,6 +2110,25 @@
         if (full) full.textContent = mode.computeLabelFull || "Compute";
         if (short) short.textContent = mode.computeLabelShort || "Run";
       }
+      syncComputeBtn();
+    }
+
+    function syncComputeBtn() {
+      const btn = $("computeBtn");
+      if (!btn || !getActiveMode().hasCompute) return;
+      const fresh = runtime.hasResult && !runtime.isStale;
+      const disabled = !!runtime.computeInProgress || fresh;
+      btn.disabled = disabled;
+      btn.title = runtime.computeInProgress
+        ? "Computing…"
+        : fresh
+          ? "Diagram is up to date — change settings to recompute"
+          : "";
+    }
+
+    function setComputeInProgress(on) {
+      runtime.computeInProgress = !!on;
+      syncComputeBtn();
     }
 
     function restoreModeView() {
@@ -2112,6 +2145,7 @@
           runtime.lastResult = result;
           runtime.hasResult = true;
           if (axisMatchesResult(result)) {
+            clearStale();
             drawDiagram(result);
             triggerPlotResize();
           } else {
@@ -2120,6 +2154,7 @@
         } else {
           runtime.lastResult = null;
           runtime.hasResult = false;
+          runtime.isStale = false;
           if (window.Plotly) {
             try { Plotly.purge("plotDiv"); } catch (e) {}
           }
@@ -2131,6 +2166,7 @@
           }
           syncDisplayFromPlot();
         }
+        syncComputeBtn();
       } else if (activeModeId === "stats") {
         enterStatsMode();
       }
@@ -2164,7 +2200,14 @@
       if (activeModeId === modeId) {
         runtime.lastResult = result;
         runtime.hasResult = true;
-        drawDiagram(result);
+        if (axisMatchesResult(result)) {
+          clearStale();
+          drawDiagram(result);
+        } else {
+          markStale();
+        }
+      } else {
+        syncComputeBtn();
       }
     }
 
@@ -3870,8 +3913,20 @@
       syncLayerElementsControl();
       renderGridMeta();
     }
+    function clearStale() {
+      runtime.isStale = false;
+      $("stalePill").style.display = "none";
+      syncComputeBtn();
+    }
     function markStale() {
-      $("stalePill").style.display = runtime.hasResult ? "inline-flex" : "none";
+      if (!runtime.hasResult) {
+        runtime.isStale = false;
+        $("stalePill").style.display = "none";
+      } else {
+        runtime.isStale = true;
+        $("stalePill").style.display = "inline-flex";
+      }
+      syncComputeBtn();
     }
 
     /* ---------------- rendering: species ---------------- */
@@ -4586,7 +4641,12 @@
           if (!runtime.lastResult) return;
           const crossFamily = (prev === "log_fo2") !== (next === "log_fo2");
           if (crossFamily) {
-            markStale();
+            if (axisMatchesResult(runtime.lastResult)) {
+              clearStale();
+              drawDiagram(runtime.lastResult);
+            } else {
+              markStale();
+            }
             return;
           }
           if (isPeFamilyAxis(prev) && isPeFamilyAxis(next) && axisMatchesResult(runtime.lastResult)) {
@@ -5115,10 +5175,9 @@
       forgetServerJob(jobId);
       JobProgress.setPhase("render", 0.4);
       renderModeResult(jobModeId, result);
-      if (jobModeId === activeModeId) $("stalePill").style.display = "none";
       JobProgress.finish();
       setLogoComputing(false);
-      $("computeBtn").disabled = false;
+      setComputeInProgress(false);
       const runs = result.adaptive_stats?.n_evaluated ?? result.n_total;
       const dur = runtime.computeStartedAt
         ? formatDuration((performance.now() - runtime.computeStartedAt) / 1000)
@@ -5191,7 +5250,7 @@
       }
 
       try {
-        $("computeBtn").disabled = true;
+        setComputeInProgress(true);
         $("app").classList.remove("drawer-open");
         runtime.activeJobModeId = modeId;
         const cacheKey = cacheKeyFor(stableStringify(cachePayloadForMode(modeId, body)));
@@ -5199,10 +5258,9 @@
           const cached = await getCachedResult(cacheKey);
           if (cached) {
             renderModeResult(modeId, cached);
-            $("stalePill").style.display = "none";
             setStatus("Cached", "ok");
             runtime.activeJobModeId = null;
-            $("computeBtn").disabled = false;
+            setComputeInProgress(false);
             try {
               sessionStorage.setItem(
                 RESULT_SESSION_KEY,
@@ -5236,7 +5294,7 @@
         JobProgress.fail();
         setLogoComputing(false);
         runtime.activeJobModeId = null;
-        $("computeBtn").disabled = false;
+        setComputeInProgress(false);
       }
     }
 
@@ -5332,7 +5390,7 @@
             JobProgress.fail();
             setLogoComputing(false);
             runtime.activeJobModeId = null;
-            $("computeBtn").disabled = false;
+            setComputeInProgress(false);
             clearActiveJob();
             forgetServerJob(jobId);
             setStatus(jobErrorStatusText(st), "err");
@@ -5346,7 +5404,7 @@
           JobProgress.fail();
           setLogoComputing(false);
           runtime.activeJobModeId = null;
-          $("computeBtn").disabled = false;
+          setComputeInProgress(false);
           if (e.message && /not found|404/i.test(e.message)) {
             clearActiveJob();
           }
@@ -5375,13 +5433,13 @@
           } else {
             setStatus(msg, "warn");
           }
-          $("computeBtn").disabled = true;
+          setComputeInProgress(true);
           pollJob(rec.jobId, rec.cacheKey, jobModeId);
           return true;
         }
         if (st.status === "done") {
           setStatus("Compute finished while you were away — loading result…", "warn");
-          $("computeBtn").disabled = true;
+          setComputeInProgress(true);
           await fetchAndRenderJobResult(rec.jobId, rec.cacheKey, st, jobModeId);
           return true;
         }
@@ -5389,11 +5447,13 @@
           clearActiveJob();
           runtime.activeJobModeId = null;
           forgetServerJob(rec.jobId);
+          setComputeInProgress(false);
           setStatus(jobErrorStatusText(st), "err");
         }
       } catch (e) {
         clearActiveJob();
         runtime.activeJobModeId = null;
+        setComputeInProgress(false);
       }
       return false;
     }
@@ -5719,8 +5779,13 @@
       return dMin;
     }
 
-    // Max clearance inside visible polygon rings (native pH/pe). Optional bbox
-    // keeps the tip on the same connected component as the grid label.
+    // Max clearance inside visible polygon rings. Optional bbox keeps the tip
+    // on the same connected component as the grid label.
+    //
+    // Clearance is scored in *bbox-normalized* unit space so elongated domains
+    // (e.g. a tall thin Zincite strip in log fO₂) are not dominated by the short
+    // axis — raw (pH, y) Euclidean would make every interior point look equally
+    // far from the long edges and the scan would bias toward the first samples.
     function tipInPolygonRings(rings, bbox) {
       if (!rings?.length) return null;
       let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
@@ -5736,25 +5801,41 @@
         y0 = Math.max(y0, bbox.y0); y1 = Math.min(y1, bbox.y1);
       }
       if (!(x1 > x0 && y1 > y0)) return null;
-      // Denser sampling for tiny wedges so the tip still lands inside the fill.
-      const span = Math.hypot(x1 - x0, y1 - y0);
-      const n = span < 1e-6 ? 8 : Math.min(36, Math.max(14, Math.ceil(28 / Math.max(span, 0.05))));
-      let best = null, bestD = -1;
+      const sx = (x1 - x0) || 1;
+      const sy = (y1 - y0) || 1;
+      const toU = (x, y) => [(x - x0) / sx, (y - y0) / sy];
+      const uRings = rings.map(r => ({
+        x: r.x.map((x, i) => toU(x, r.y[i])[0]),
+        y: r.y.map((y, i) => toU(r.x[i], y)[1]),
+      }));
+      // Denser sampling for tiny / skinny wedges.
+      const aspect = Math.max(sx / sy, sy / sx);
+      const span = Math.hypot(sx, sy);
+      const n = span < 1e-6
+        ? 8
+        : Math.min(48, Math.max(16, Math.ceil(28 / Math.max(span, 0.05) + aspect * 2)));
+      const EPS = 1e-12;
+      let best = null, bestD = -1, bestTie = Infinity;
       for (let iy = 0; iy <= n; iy++) {
         for (let ix = 0; ix <= n; ix++) {
-          const px = x0 + (ix / n) * (x1 - x0);
-          const py = y0 + (iy / n) * (y1 - y0);
-          let inside = false, dMin = Infinity;
+          const px = x0 + (ix / n) * sx;
+          const py = y0 + (iy / n) * sy;
+          let inside = false;
           for (const r of rings) {
-            if (pointInRing(px, py, r.x, r.y)) {
-              inside = true;
-              const d = minDistToRing(px, py, r.x, r.y);
-              if (d < dMin) dMin = d;
-            }
+            if (pointInRing(px, py, r.x, r.y)) { inside = true; break; }
           }
           if (!inside) continue;
-          if (dMin > bestD) {
+          const [ux, uy] = toU(px, py);
+          let dMin = Infinity;
+          for (const ur of uRings) {
+            const d = minDistToRing(ux, uy, ur.x, ur.y);
+            if (d < dMin) dMin = d;
+          }
+          // Prefer max clearance; near-ties → closer to bbox center (stable).
+          const tie = (ux - 0.5) ** 2 + (uy - 0.5) ** 2;
+          if (dMin > bestD + EPS || (Math.abs(dMin - bestD) <= EPS && tie < bestTie)) {
             bestD = dMin;
+            bestTie = tie;
             best = [px, py];
           }
         }
@@ -6680,7 +6761,6 @@
             : "phase-diagram";
         }
         renderModeResult(modeId, result);
-        if (activeModeId === modeId) $("stalePill").style.display = "none";
         setStatus("Restored last diagram from this browser session.", "ok");
       } catch (e) {
         /* IndexedDB unavailable or cache miss — ignore */
@@ -6736,6 +6816,7 @@
       syncDisplayFromPlot();
       refreshPhases();
       initPanelPersistence();
+      syncComputeBtn();
     }
 
     // Stable key for a collapsible card: container + its own id or summary label.
