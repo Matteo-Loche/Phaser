@@ -131,8 +131,284 @@
     header .brand.is-computing #phaser-logo .b2  { animation-delay: 1.00s; }
     header .brand.is-computing #phaser-logo .b1  { animation-delay: 1.10s; }
     header .spacer { flex: 1; }
-    .header-compute { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+    .header-compute {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      min-width: 0;
+      position: relative;
+    }
     .header-compute .btn { white-space: nowrap; }
+    .history-wrap { position: relative; flex: none; }
+    #historyBtn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.28rem;
+      min-height: 0;
+      min-width: 2.35rem;
+      padding: 0.32rem 0.55rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.72rem;
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: 0.02em;
+    }
+    #historyBtn .hist-icon {
+      display: block;
+      width: 1.05rem;
+      height: 1.05rem;
+      flex: none;
+    }
+    #historyBtn .hist-label { display: none; }
+    @media (min-width: 1101px) {
+      #historyBtn { padding: 0.32rem 0.7rem 0.32rem 0.55rem; }
+      #historyBtn .hist-label { display: inline; }
+    }
+    #historyBtn:hover:not(:disabled) { border-color: var(--accent-dim); }
+    #historyBtn[aria-expanded="true"] {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+    }
+    #historyBtn:disabled {
+      opacity: 0.42;
+      cursor: not-allowed;
+      filter: grayscale(0.25);
+    }
+    .history-menu {
+      position: fixed;
+      z-index: 80;
+      width: min(460px, calc(100vw - 1rem));
+      max-height: min(520px, calc(100vh - 1rem));
+      overflow: auto;
+      padding: 0.45rem;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--panel);
+      box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+    .history-menu[hidden] { display: none; }
+    .history-menu .history-empty {
+      padding: 0.85rem 0.75rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      text-align: center;
+    }
+    .history-menu .history-card {
+      border-radius: 10px;
+      margin-bottom: 0;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      box-shadow: 0 1px 0 color-mix(in srgb, #000 18%, transparent);
+    }
+    .history-menu .history-card:hover {
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+      background: color-mix(in srgb, var(--accent) 6%, var(--panel-2));
+    }
+    .history-menu .history-card.is-open {
+      border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+      background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+    }
+    .history-menu .h-card-body {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+      padding: 0.5rem 0.5rem 0.15rem 0.55rem;
+    }
+    .history-menu .history-main {
+      flex: 1;
+      min-width: 0;
+      display: block;
+      text-align: left;
+      padding: 0.05rem 0.15rem 0.15rem 0;
+      border: none;
+      border-radius: 0;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text);
+    }
+    .history-menu .h-thumb-btn {
+      flex: none;
+      width: 112px;
+      height: 112px;
+      margin: 0;
+      padding: 0;
+      border: none;
+      border-radius: 8px;
+      background: transparent;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .history-menu .h-thumb {
+      width: 112px;
+      height: 112px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #fff;
+      object-fit: contain;
+      display: block;
+      pointer-events: none;
+    }
+    .history-menu .history-main .h-line1 {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.3rem 0.55rem;
+      font-size: 0.98rem;
+      font-weight: 750;
+      line-height: 1.3;
+      letter-spacing: 0.01em;
+      color: var(--text);
+    }
+    .history-menu .history-main .h-chem {
+      white-space: normal;
+      word-break: break-word;
+    }
+    .history-menu .history-main .h-units,
+    .history-menu .history-main .h-temp {
+      font-size: 0.82rem;
+      font-weight: 650;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .history-menu .history-main .h-axes {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.35rem 0.65rem;
+      margin-top: 0.35rem;
+      font-size: 0.98rem;
+      font-weight: 750;
+      line-height: 1.3;
+      color: var(--text);
+      letter-spacing: 0.01em;
+    }
+    .history-menu .history-main .h-axis-ph,
+    .history-menu .history-main .h-axis-y {
+      white-space: nowrap;
+    }
+    .history-menu .history-main .h-axis-grid {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .history-menu .history-main .h-when {
+      display: block;
+      margin-top: 0.25rem;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.01em;
+    }
+    .history-menu .history-main .h-badges {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.3rem;
+      margin-top: 0.35rem;
+    }
+    .history-menu .h-badge {
+      display: inline-block;
+      margin-left: 0;
+      padding: 0.05rem 0.35rem;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 18%, var(--panel-2));
+      color: var(--accent);
+      font-size: 0.65rem;
+      font-weight: 700;
+    }
+    .history-menu .history-actions {
+      display: flex;
+      justify-content: flex-end;
+      padding: 0 0.45rem 0.35rem 0.55rem;
+    }
+    .history-menu .history-details-btn {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 650;
+      cursor: pointer;
+      padding: 0.2rem 0.4rem;
+      border-radius: 6px;
+    }
+    .history-menu .history-details-btn:hover {
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .history-menu .history-details {
+      padding: 0.15rem 0.65rem 0.55rem;
+      border-top: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+      margin: 0 0.35rem 0.25rem;
+    }
+    .history-menu .history-details[hidden] { display: none; }
+    .history-menu .h-dl {
+      display: grid;
+      grid-template-columns: 6.4rem minmax(0, 1fr);
+      gap: 0.28rem 0.55rem;
+      font-size: 0.72rem;
+      line-height: 1.35;
+    }
+    .history-menu .h-dl dt {
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .history-menu .h-dl dd {
+      margin: 0;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .history-menu .h-phases {
+      margin-top: 0.45rem;
+    }
+    .history-menu .h-phases-label {
+      font-size: 0.7rem;
+      font-weight: 650;
+      color: var(--muted);
+      margin-bottom: 0.25rem;
+    }
+    .history-menu .h-phases-list {
+      max-height: min(180px, 28vh);
+      overflow: auto;
+      padding: 0.35rem 0.45rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      scrollbar-width: thin;
+    }
+    .history-menu .history-footer {
+      display: flex;
+      justify-content: flex-end;
+      padding: 0.35rem 0.4rem 0.2rem;
+      border-top: 1px solid var(--border);
+      margin-top: 0.25rem;
+    }
+    .history-menu .history-clear {
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0.35rem 0.45rem;
+      border-radius: 6px;
+    }
+    .history-menu .history-clear:hover {
+      color: var(--err);
+      background: color-mix(in srgb, var(--err) 12%, transparent);
+    }
     .btn-short { display: none; }
     /* Compute | progress | status (status stays to the right of the bar). */
     .header-job-slot {
@@ -331,6 +607,7 @@
     /* The compute button has display:inline-flex, so the [hidden] attribute
        alone cannot hide it; drive visibility from the active mode instead. */
     .app.mode-stats #computeBtn { display: none !important; }
+    .app.mode-stats #historyWrap { display: none !important; }
     .stats-workspace {
       flex: 1; padding: var(--space);
       overflow-y: auto;
@@ -483,9 +760,12 @@
     /* Mobile / drawer: mode left, job slot (queue → bar → report) on the right. */
     @media (max-width: 900px) {
       header {
-        grid-template-columns: auto auto 1fr auto;
+        /* Run is auto-sized; flexible spacer sits between Run and DB so they
+           cannot collide when History is present. */
+        grid-template-columns: auto auto auto minmax(0, 1fr) auto;
         grid-template-areas:
-          "menu brand compute db";
+          "menu brand compute . db";
+        column-gap: 0.4rem;
       }
       header .mode-switcher {
         grid-row: 2;
@@ -527,8 +807,34 @@
       }
       .header-db select { display: none; }
       .db-dot { cursor: pointer; width: 13px; height: 13px; }
-      .brand-logo-wrap { height: 32px; }
-      header .brand { padding: 0.15rem 0.35rem; }
+      header .brand {
+        padding: 0.1rem 0.28rem;
+        max-width: none;
+      }
+      header .brand-logo-wrap {
+        height: 43px;
+        width: auto;
+        max-width: 9.9rem;
+      }
+      header .brand-logo-wrap svg {
+        width: auto;
+        height: 100%;
+        max-width: 100%;
+        object-fit: contain;
+        object-position: left center;
+      }
+      header .header-compute {
+        gap: 0.3rem;
+        min-width: 0;
+      }
+      header #historyBtn {
+        min-width: 2.1rem;
+        padding: 0.28rem 0.45rem;
+      }
+      header .header-compute .btn {
+        padding-left: 0.65rem;
+        padding-right: 0.65rem;
+      }
     }
     /* Wide screens: the selector sits in the header, so the sidebar's own
        Database card is redundant and hidden. */
@@ -1214,7 +1520,7 @@
         align-self: auto;
         gap: 0.45rem;
     /* Cap height and scroll so open submenus never crop off-screen. */
-        max-height: min(50vh, 22rem);
+        max-height: min(38vh, 16rem);
         overflow-x: hidden;
         overflow-y: auto;
         /* LTR so wrapped cards read left→right (desktop column uses RTL only
@@ -1222,16 +1528,23 @@
         direction: ltr;
         border-bottom: 1px solid var(--border);
       }
-      /* Prefer wrapping to a new row over crushing content past the border.
-         ~14rem is enough for steppers + long toggle labels. */
+      /* Equal-width tiles in the wrapping top bar (narrow / tablet). */
       .plot-toolbar .disp-card {
-        align-self: flex-start;
-        flex: 1 1 14rem;
-        min-width: min(100%, 13rem);
+        align-self: stretch;
+        flex: 1 1 calc((100% - 0.9rem) / 3);
+        min-width: min(100%, 11.5rem);
         max-width: 100%;
+        box-sizing: border-box;
       }
       .plot-toolbar .disp-card-display {
-        flex: 1 1 15rem;
+        flex: 1 1 calc((100% - 0.9rem) / 3);
+      }
+      .plot-toolbar .disp-card > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 2.6rem;
+        box-sizing: border-box;
       }
       /* Keep overlays stacked in the card; row layout only helps when the
          card is full-width and was causing overflow in the multi-column bar. */
@@ -1260,16 +1573,35 @@
         min-height: 2.2rem;
       }
     }
-    /* Tablets get a bit more vertical room for the stacked options bar. */
+    /* Tablets: keep equal tiles; a bit more vertical room for the bar. */
     @media (min-width: 901px) and (max-width: 1280px) {
       .plot-toolbar {
-        max-height: min(55vh, 28rem);
+        max-height: min(42vh, 18rem);
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+        align-items: start;
+      }
+      .plot-toolbar .disp-card,
+      .plot-toolbar .disp-card-display {
+        flex: unset;
+        width: auto;
+        min-width: 0;
+      }
+      .plot-toolbar > .meta,
+      .plot-toolbar > .pill {
+        grid-column: 1 / -1;
+      }
+    }
+    @media (max-width: 900px) {
+      .plot-toolbar {
+        gap: 0.4rem;
+        max-height: min(28vh, 11.5rem);
       }
     }
     @media (max-width: 560px) {
       .plot-toolbar {
-        gap: 0.4rem;
-        max-height: min(45vh, 20rem);
+        gap: 0.35rem;
+        max-height: min(24vh, 10rem);
       }
       .plot-toolbar .disp-card {
         flex: 1 1 100%;
@@ -1368,7 +1700,23 @@
         </div>
       </div>
       <div class="header-compute" id="headerCompute">
-        <button class="btn" id="computeBtn"><span class="btn-full">Compute diagram</span><span class="btn-short">Run</span></button>
+        <div class="history-wrap" id="historyWrap">
+          <button type="button" id="historyBtn"
+                  aria-haspopup="menu" aria-expanded="false" aria-controls="historyMenu"
+                  title="History — saved diagrams for this mode" aria-label="History">
+            <svg class="hist-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12a9 9 0 1 0 3-6.7"/>
+              <polyline points="3 4 3 9 8 9"/>
+              <polyline points="12 7 12 12 16 14"/>
+            </svg>
+            <span class="hist-label">History</span>
+          </button>
+          <div class="history-menu soft-scroll" id="historyMenu" role="menu" hidden></div>
+        </div>
+        <button class="btn" id="computeBtn" type="button">
+          <span class="btn-full">Compute</span><span class="btn-short">Run</span>
+        </button>
       </div>
       <div class="header-job-slot" id="headerJobSlot" data-mode="idle">
         <span class="header-queue" id="queueMsg" hidden></span>
@@ -1397,7 +1745,7 @@
             <label for="dbSelect">PHREEQC database</label>
             <div id="sidebarDbSlot">
               <select id="dbSelect"></select>
-            </div>
+          </div>
             <div class="meta" id="dbMeta" style="margin-top:0.35rem"></div>
           </div>
         </div>
@@ -1420,7 +1768,7 @@
             </div>
             <div>
               <label for="tempC">Temp (°C)</label>
-              <input id="tempC" type="number" step="0.1" />
+              <input id="tempC" type="number" step="0.1" inputmode="decimal" />
             </div>
           </div>
         </div>
@@ -1486,11 +1834,11 @@
       <details class="card">
         <summary>Configuration <span class="chev">›</span></summary>
         <div class="body">
-          <div>
+      <div>
             <div class="label-row">
               <label for="gridLevelsInput">Plot resolution</label>
               <span class="meta" id="gridLevelsVal" style="margin-left:auto">100 × 100</span>
-            </div>
+      </div>
             <div class="disp-row" style="margin-bottom:0.35rem">
               <span class="disp-stepper">
                 <button type="button" id="gridLevelsDec" aria-label="Decrease grid resolution">−</button>
@@ -1572,7 +1920,7 @@
             <div id="exportPlotDiv" aria-hidden="true"></div>
             <div class="empty" id="plotEmpty">
               <div style="font-size:2rem">⬡</div>
-              <div>Set your system and press <b>Compute diagram</b>.</div>
+              <div>Set your system and press <b>Compute</b>.</div>
             </div>
           </div>
         </div>
@@ -1585,14 +1933,14 @@
             <summary>Display <span class="chev">›</span></summary>
             <div class="body">
               <select id="displayMode" class="disp-select" aria-label="Display layer">
-                <option value="solid">Solid predominance</option>
+          <option value="solid">Solid predominance</option>
                 <option value="aqueous">Aqueous predominance</option>
-              </select>
+        </select>
               <span id="solidSubsetWrap" class="disp-subset" style="display:none">
                 <span id="subsetLabel" style="color:var(--muted)">Elements:</span>
-                <span id="solidSubsetBoxes"></span>
-              </span>
-            </div>
+          <span id="solidSubsetBoxes"></span>
+        </span>
+      </div>
           </details>
 
           <details class="card disp-card">
@@ -1605,7 +1953,7 @@
                   <option value="formula">Formula</option>
                   <option value="both">Name + formula</option>
                 </select>
-              </div>
+        </div>
               <div class="disp-row" title="Phase label font size (px)">
                 <label for="labelFontSize">Size</label>
                 <span class="disp-stepper">
@@ -1800,8 +2148,8 @@
 
           <div class="spacer"></div>
           <span class="meta" id="plotMeta">No diagram yet.</span>
-        </div>
-      </main>
+      </div>
+    </main>
       <div id="statsMain" class="mode-panel stats-workspace" hidden>
         <div class="stats-dashboard" id="statsDashboard">
           <div class="stats-head">
@@ -1854,7 +2202,8 @@
     ];
     const LS_KEY = "phaseDiagramState.v8";
     const RESULT_DB = "phaserResultCache.v23";
-    const RESULT_STORE = "results";
+    const RESULT_STORE = "results";       // lightweight history meta + thumb
+    const RESULT_DATA_STORE = "resultData"; // heavy diagram payloads
     const RESULT_SESSION_KEY = "phaserLastResultKey.v2";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v2";
     const MODE_HASH_PREFIX = "#/";
@@ -1980,10 +2329,14 @@
       computeInProgress: false,
       computeStartedAt: null,
       modeMenuOpen: false,
+      historyMenuOpen: false,
+      pendingCacheRequest: null,
       statsWindow: "30d",
       fillColorTarget: null,
       fillColorRedrawTimer: null,
       exportBusy: false,
+      thumbBusy: false,
+      historyThumbUrls: [],
       exportChecked: null, // Set of target ids for this session only
       exportResultSysKey: null,
     };
@@ -1994,18 +2347,18 @@
         label: "Predominance",
         title: "PHASER — Predominance",
         hasCompute: true,
-        computeLabelFull: "Compute diagram",
+        computeLabelFull: "Compute",
         computeLabelShort: "Run",
-        emptyHint: "Set your system and press <b>Compute diagram</b>.",
+        emptyHint: "Set your system and press <b>Compute</b>.",
       },
       "mineral-stability": {
         id: "mineral-stability",
         label: "Mineral Stability",
         title: "PHASER — Mineral Stability",
         hasCompute: true,
-        computeLabelFull: "Compute diagram",
+        computeLabelFull: "Compute",
         computeLabelShort: "Run",
-        emptyHint: "Set your system and press <b>Compute diagram</b>.",
+        emptyHint: "Set your system and press <b>Compute</b>.",
       },
       stats: {
         id: "stats",
@@ -2085,11 +2438,434 @@
       runtime.modeMenuOpen = true;
       $("modeMenu").hidden = false;
       $("modeBtn").setAttribute("aria-expanded", "true");
+      closeHistoryMenu();
     }
 
     function toggleModeMenu() {
       if (runtime.modeMenuOpen) closeModeMenu();
       else openModeMenu();
+    }
+
+    function closeHistoryMenu() {
+      revokeHistoryThumbUrls();
+      runtime.historyMenuOpen = false;
+      const menu = $("historyMenu");
+      const btn = $("historyBtn");
+      if (menu) {
+        menu.hidden = true;
+        menu.style.top = "";
+        menu.style.left = "";
+        menu.style.maxHeight = "";
+        menu.style.width = "";
+      }
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    }
+
+    function positionHistoryMenu() {
+      const btn = $("historyBtn");
+      const menu = $("historyMenu");
+      if (!btn || !menu || menu.hidden) return;
+      const pad = 8;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const br = btn.getBoundingClientRect();
+      // Measure with temporary visibility if needed (already shown).
+      const mw = Math.min(420, vw - pad * 2);
+      menu.style.width = `${mw}px`;
+      // Prefer below the button; flip above if not enough room.
+      const spaceBelow = vh - br.bottom - pad;
+      const spaceAbove = br.top - pad;
+      const preferBelow = spaceBelow >= 160 || spaceBelow >= spaceAbove;
+      let maxH = preferBelow
+        ? Math.min(520, Math.max(120, spaceBelow))
+        : Math.min(520, Math.max(120, spaceAbove));
+      menu.style.maxHeight = `${maxH}px`;
+      // Horizontal: align to button left, clamp into viewport.
+      let left = br.left;
+      if (left + mw > vw - pad) left = vw - pad - mw;
+      if (left < pad) left = pad;
+      menu.style.left = `${Math.round(left)}px`;
+      // Vertical after width/maxHeight so scrollHeight is meaningful.
+      const mh = Math.min(menu.scrollHeight || maxH, maxH);
+      let top;
+      if (preferBelow) {
+        top = br.bottom + 6;
+        if (top + mh > vh - pad) top = Math.max(pad, vh - pad - mh);
+      } else {
+        top = br.top - 6 - mh;
+        if (top < pad) top = pad;
+      }
+      menu.style.top = `${Math.round(top)}px`;
+    }
+
+    function formatAbsoluteTime(ts) {
+      const d = new Date(Number(ts));
+      if (!Number.isFinite(d.getTime())) return "";
+      return d.toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function formatHistoryTotalsParts(req) {
+      const totals = req.totals || {};
+      const units = unitDisplay(req.units || state.units);
+      const parts = Object.keys(totals).sort().map(k => {
+        const v = totals[k];
+        const n = Number(v);
+        const s = Number.isFinite(n)
+          ? (Math.abs(n) >= 0.01 && Math.abs(n) < 1e4 ? String(Number(n.toPrecision(4))) : n.toExponential(2))
+          : String(v);
+        return `${k}=${s}`;
+      });
+      const chem = parts.length ? parts.join(" · ") : "—";
+      const t = Number(req.temp_c);
+      const tStr = Number.isFinite(t) ? `${t} °C` : "";
+      return { chem, units, temp: tStr };
+    }
+
+    function formatHistoryAxes(req) {
+      const fmt = (v, digits = 2) => {
+        const num = Number(v);
+        if (!Number.isFinite(num)) return "?";
+        const f = 10 ** digits;
+        return String(Math.round(num * f) / f);
+      };
+      const n = req.ph_levels || req.pe_levels || "?";
+      const isFo2 = req.redox_axis === "log_fo2";
+      const yLabel = isFo2 ? "log fO₂" : "pe";
+      const yLo = isFo2 ? req.log_fo2_min : req.pe_min;
+      const yHi = isFo2 ? req.log_fo2_max : req.pe_max;
+      const yDigits = isFo2 ? 2 : 3;
+      return {
+        ph: `pH ${fmt(req.ph_min)}–${fmt(req.ph_max)}`,
+        y: `${yLabel} ${fmt(yLo, yDigits)}–${fmt(yHi, yDigits)}`,
+        redoxBadge: isFo2 ? "log fO₂" : "pe / Eh",
+        grid: `${n}×${n}`,
+      };
+    }
+
+    function formatHistoryDb(req) {
+      const db = runtime.databases?.find(d => d.id === req.db_id);
+      return db?.name || db?.filename || req.db_id || "";
+    }
+
+    /** Details panel: extras not shown on the card summary + phase list. */
+    function historyDetailsHtml(req, modeId) {
+      const fmt = (v, digits = 4) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return "—";
+        const f = 10 ** digits;
+        return String(Math.round(n * f) / f);
+      };
+      const phases = Array.isArray(req.phases) ? [...req.phases].sort() : [];
+      const phaseText = phases.length
+        ? phases.map(p => escapeHtml(p)).join("\n")
+        : "—";
+      const layerBits = [];
+      if (req.layer_solids !== false) {
+        layerBits.push(modeId === "mineral-stability" ? "Minerals" : "Solids");
+      }
+      if (req.layer_aqueous !== false) layerBits.push("Aqueous");
+      if (req.layer_elements) layerBits.push("subsets");
+      const layers = layerBits.length ? layerBits.join(", ") : "None";
+      const uiSol = normalizeUiSolutionMode(req.solution_mode);
+      const electrolyte = uiSol === "titration" ? "Real electrolyte" : "Dummy electrolyte";
+      const knobs = normalizeKnobsMode(req.knobs_mode);
+      const convergence = knobs === "default" ? "Off"
+        : knobs === "maximum" ? "Maximum"
+        : "Standard";
+      const grid = req.adaptive_boundaries ? "Trace boundaries" : "Uniform grid";
+      const rows = [
+        ["Layers", layers],
+      ];
+      if (modeId === "mineral-stability") {
+        rows.push([
+          "Categories",
+          req.mineral_category_mode === "costability" ? "Co-stability" : "Predominant",
+        ]);
+      }
+      rows.push(
+        ["Electrolyte", electrolyte],
+        ["Convergence", convergence],
+        ["Grid", grid],
+        ["O₂ limit", `${fmt(req.o2_limit_atm)} atm`],
+        ["H₂ limit", `${fmt(req.h2_limit_atm)} atm`],
+      );
+      const dl = rows.map(([k, v]) =>
+        `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`
+      ).join("");
+      return `
+        <dl class="h-dl">${dl}</dl>
+        <div class="h-phases">
+          <div class="h-phases-label">Phases (${phases.length})</div>
+          <div class="h-phases-list soft-scroll">${phaseText}</div>
+        </div>`;
+    }
+
+    function escapeHtml(s) {
+      return String(s ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function revokeHistoryThumbUrls() {
+      (runtime.historyThumbUrls || []).forEach(url => {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      });
+      runtime.historyThumbUrls = [];
+    }
+
+    function historyThumbSrc(rec) {
+      const thumb = rec?.thumb;
+      if (!thumb) return "";
+      try {
+        if (thumb instanceof Blob) {
+          const url = URL.createObjectURL(thumb);
+          runtime.historyThumbUrls.push(url);
+          return url;
+        }
+        if (typeof thumb === "string" && thumb.startsWith("data:")) return thumb;
+      } catch (e) {}
+      return "";
+    }
+
+    async function renderHistoryMenu() {
+      const menu = $("historyMenu");
+      if (!menu || !isDiagramMode(activeModeId)) return;
+      revokeHistoryThumbUrls();
+      let rows = [];
+      try {
+        rows = await listCachedResults(activeModeId);
+      } catch (e) {
+        rows = [];
+      }
+      if (!rows.length) {
+        menu.innerHTML = `<div class="history-empty">No saved diagrams for this mode yet.<br>Compute once to populate history.</div>`;
+        return;
+      }
+      const modeId = activeModeId;
+      const items = rows.map(rec => {
+        const req = rec.request;
+        const axes = formatHistoryAxes(req);
+        const badges = [
+          `<span class="h-badge">${escapeHtml(axes.redoxBadge)}</span>`,
+        ];
+        const dbName = formatHistoryDb(req);
+        if (dbName) badges.push(`<span class="h-badge">${escapeHtml(`db: ${dbName}`)}</span>`);
+        const totals = formatHistoryTotalsParts(req);
+        const totalBits = [
+          `<span class="h-chem">${escapeHtml(totals.chem)}</span>`,
+        ];
+        if (totals.units) totalBits.push(`<span class="h-units">${escapeHtml(totals.units)}</span>`);
+        if (totals.temp) totalBits.push(`<span class="h-temp">${escapeHtml(totals.temp)}</span>`);
+        const when = formatAbsoluteTime(rec.createdAt);
+        const thumbSrc = historyThumbSrc(rec);
+        const thumbHtml = thumbSrc
+          ? `<button type="button" class="h-thumb-btn" tabindex="-1" aria-hidden="true">
+              <img class="h-thumb" src="${thumbSrc}" alt="" loading="lazy" decoding="async" />
+            </button>`
+          : "";
+        return `<div class="history-card" data-key="${escapeHtml(rec.key)}">
+          <div class="h-card-body">
+            <button type="button" class="history-main" role="menuitem">
+              <span class="h-line1">${totalBits.join("")}</span>
+              <span class="h-axes">
+                <span class="h-axis-ph">${escapeHtml(axes.ph)}</span>
+                <span class="h-axis-y">${escapeHtml(axes.y)}</span>
+                <span class="h-axis-grid">${escapeHtml(axes.grid)}</span>
+              </span>
+              <span class="h-badges">${badges.join("")}</span>
+              ${when ? `<span class="h-when">${escapeHtml(when)}</span>` : ""}
+            </button>
+            ${thumbHtml}
+          </div>
+          <div class="history-actions">
+            <button type="button" class="history-details-btn" aria-expanded="false">Details ▾</button>
+          </div>
+          <div class="history-details" hidden>${historyDetailsHtml(req, modeId)}</div>
+        </div>`;
+      }).join("");
+      menu.innerHTML = items
+        + `<div class="history-footer"><button type="button" class="history-clear" id="historyClearBtn">Clear history</button></div>`;
+    }
+
+    async function openHistoryMenu() {
+      if (!isDiagramMode(activeModeId) || runtime.computeInProgress) return;
+      closeModeMenu();
+      await renderHistoryMenu();
+      runtime.historyMenuOpen = true;
+      $("historyMenu").hidden = false;
+      $("historyBtn").setAttribute("aria-expanded", "true");
+      positionHistoryMenu();
+      // Reposition after layout (details content / fonts).
+      requestAnimationFrame(() => positionHistoryMenu());
+    }
+
+    async function toggleHistoryMenu() {
+      if (runtime.historyMenuOpen) closeHistoryMenu();
+      else await openHistoryMenu();
+    }
+
+    function applyRequestToState(req, modeId) {
+      if (!req || typeof req !== "object") return;
+      const totalsObj = req.totals || {};
+      const totals = Object.keys(totalsObj).sort().map(species => ({
+        species,
+        value: roundForUnit(Number(totalsObj[species]) || 0, normalizeUnit(req.units || state.units)),
+      }));
+      const phases = Array.isArray(req.phases) ? req.phases : [];
+      const phaseSel = {};
+      phases.forEach(name => { phaseSel[name] = true; });
+      // Keep previously selected phases unchecked when not in this job.
+      Object.keys(state.phaseSel || {}).forEach(name => {
+        if (!(name in phaseSel)) phaseSel[name] = false;
+      });
+
+      const redox = req.redox_axis === "log_fo2" ? "log_fo2" : "eh";
+      state.dbId = req.db_id || state.dbId;
+      state.tempC = Number(req.temp_c) || state.tempC;
+      state.units = normalizeUnit(req.units || state.units);
+      state.totals = totals.length ? totals : state.totals;
+      state.ph = {
+        min: roundPh(Number(req.ph_min)),
+        max: roundPh(Number(req.ph_max)),
+      };
+      state.gridLevels = clampGridLevels(req.ph_levels ?? req.pe_levels ?? state.gridLevels);
+      state.y = {
+        ...state.y,
+        axis: redox,
+        peMin: roundPe(Number(req.pe_min)),
+        peMax: roundPe(Number(req.pe_max)),
+        logFo2Min: roundLogFO2(Number(req.log_fo2_min ?? state.y.logFo2Min)),
+        logFo2Max: roundLogFO2(Number(req.log_fo2_max ?? state.y.logFo2Max)),
+      };
+      state.o2LimitAtm = Number(req.o2_limit_atm ?? state.o2LimitAtm);
+      state.h2LimitAtm = Number(req.h2_limit_atm ?? state.h2LimitAtm);
+      state.adaptiveBoundaries = !!req.adaptive_boundaries;
+      state.knobsMode = normalizeKnobsMode(req.knobs_mode || state.knobsMode);
+      state.solutionMode = normalizeUiSolutionMode(req.solution_mode || state.solutionMode);
+      state.layerSolids = req.layer_solids !== false;
+      state.layerAqueous = req.layer_aqueous !== false;
+      state.layerElements = !!req.layer_elements;
+      if (modeId === "mineral-stability" && req.mineral_category_mode) {
+        state.mineralCategoryMode = req.mineral_category_mode === "costability"
+          ? "costability"
+          : "moles";
+      }
+      state.phaseSel = phaseSel;
+      if (!state.layerSolids && state.layerAqueous) state.displayMode = "aqueous";
+      else if (state.layerSolids && !state.layerAqueous) state.displayMode = "solid";
+    }
+
+    function syncSidebarFromState() {
+      fillInputs();
+      fillSpeciesOptions();
+      fillUnitOptions();
+      fillSolutionModeOptions();
+      fillKnobsModeOptions();
+      fillMineralCategoryOptions();
+      syncMineralPlotOptionLabels();
+      renderSpecies();
+      syncAxisUI();
+      renderGridMeta();
+      syncDisplayFromPlot();
+      syncLayerElementsControl();
+      syncComputeBtn();
+    }
+
+    function catalogCoversPhases(phaseNames) {
+      if (!runtime.catalog?.length) return false;
+      const have = new Set(runtime.catalog.map(p => p.name));
+      return phaseNames.every(n => have.has(n));
+    }
+
+    function pinPhaseSelection(phaseNames) {
+      const jobPhases = new Set(Array.isArray(phaseNames) ? phaseNames : []);
+      Object.keys(state.phaseSel).forEach(name => {
+        state.phaseSel[name] = jobPhases.has(name);
+      });
+      jobPhases.forEach(name => { state.phaseSel[name] = true; });
+      // Ensure catalog entries exist for selected phases (names only) so the list renders.
+      if (!runtime.catalog) runtime.catalog = [];
+      if (!runtime.formulaByName) runtime.formulaByName = {};
+      const known = new Set(runtime.catalog.map(p => p.name));
+      jobPhases.forEach(name => {
+        if (!known.has(name)) {
+          runtime.catalog.push({ name, formula: name });
+          runtime.formulaByName[name] = name;
+        }
+      });
+      renderPhases();
+    }
+
+    async function restoreHistoryEntry(key) {
+      closeHistoryMenu();
+      let rec = null;
+      let result = null;
+      try {
+        rec = await getCachedRecord(key);
+        result = await getCachedResult(key);
+      } catch (e) {
+        setStatus(e.message || "Could not load saved diagram.", "err");
+        return;
+      }
+      if (!result || !rec?.request) {
+        setStatus("Saved diagram is incomplete or expired.", "err");
+        return;
+      }
+      if (Date.now() - rec.createdAt > RESULT_CACHE_TTL_MS) {
+        deleteCachedResult(key).catch(() => {});
+        setStatus("Saved diagram expired.", "warn");
+        return;
+      }
+      const modeId = rec.modeId
+        || (resultMatchesMode("mineral-stability", result) ? "mineral-stability" : "phase-diagram");
+      if (!isDiagramMode(modeId)) {
+        setStatus("Saved diagram mode is unknown.", "err");
+        return;
+      }
+
+      const prevDb = state.dbId;
+      const prevElems = systemElements().slice().sort().join(",");
+      applyRequestToState(rec.request, modeId);
+      persist();
+      fillDatabaseOptions();
+      syncSidebarFromState();
+
+      const nextDb = state.dbId;
+      const nextElems = systemElements().slice().sort().join(",");
+      const dbChanged = nextDb !== prevDb;
+      const elemsChanged = nextElems !== prevElems;
+      const jobPhases = Array.isArray(rec.request.phases) ? rec.request.phases : [];
+
+      // Diagram is already in IndexedDB — only hit the API if the sidebar catalog
+      // needs updating for a different DB / chemical system.
+      if (dbChanged || !runtime.allowedSpecies?.length) {
+        await reloadSpeciesSuggestions();
+      } else {
+        fillSpeciesOptions();
+      }
+
+      if (dbChanged || elemsChanged || !catalogCoversPhases(jobPhases)) {
+        try { await refreshPhases(); } catch (e) {}
+      }
+      pinPhaseSelection(jobPhases);
+      persist();
+
+      if (activeModeId !== modeId) {
+        setActiveMode(modeId, { updateHash: true });
+      }
+      renderModeResult(modeId, result);
+      try {
+        sessionStorage.setItem(RESULT_SESSION_KEY, JSON.stringify({ key, modeId }));
+      } catch (e) {}
+      setStatus("Restored from history", "ok");
     }
 
     function updateModeSwitcherUI() {
@@ -2103,27 +2879,43 @@
     function updateComputeChrome() {
       const mode = getActiveMode();
       const btn = $("computeBtn");
+      const wrap = $("historyWrap");
+      if (wrap) wrap.hidden = !mode.hasCompute;
       btn.hidden = !mode.hasCompute;
       if (mode.hasCompute) {
         const full = btn.querySelector(".btn-full");
         const short = btn.querySelector(".btn-short");
         if (full) full.textContent = mode.computeLabelFull || "Compute";
         if (short) short.textContent = mode.computeLabelShort || "Run";
+      } else {
+        closeHistoryMenu();
       }
       syncComputeBtn();
     }
 
     function syncComputeBtn() {
       const btn = $("computeBtn");
-      if (!btn || !getActiveMode().hasCompute) return;
+      const hist = $("historyBtn");
+      const wrap = $("historyWrap");
+      const mode = getActiveMode();
+      if (!btn || !mode.hasCompute) {
+        if (wrap) wrap.hidden = true;
+        closeHistoryMenu();
+        return;
+      }
+      if (wrap) wrap.hidden = false;
       const fresh = runtime.hasResult && !runtime.isStale;
-      const disabled = !!runtime.computeInProgress || fresh;
-      btn.disabled = disabled;
-      btn.title = runtime.computeInProgress
+      const busy = !!runtime.computeInProgress;
+      btn.disabled = busy || fresh;
+      btn.title = busy
         ? "Computing…"
         : fresh
           ? "Diagram is up to date — change settings to recompute"
           : "";
+      if (hist) {
+        hist.disabled = busy;
+        hist.title = busy ? "Computing…" : "History — saved diagrams for this mode";
+      }
     }
 
     function setComputeInProgress(on) {
@@ -2161,7 +2953,7 @@
           const empty = $("plotEmpty");
           if (empty) {
             empty.style.display = "";
-            const hint = mode.emptyHint || "Set your system and press <b>Compute diagram</b>.";
+            const hint = mode.emptyHint || "Set your system and press <b>Compute</b>.";
             empty.innerHTML = `<div style="font-size:2rem">⬡</div><div>${hint}</div>`;
           }
           syncDisplayFromPlot();
@@ -2179,6 +2971,7 @@
         return;
       }
       activeModeId = modeId;
+      closeHistoryMenu();
       restoreModeView();
       if (updateHash) setHashForMode(modeId);
       closeModeMenu();
@@ -2941,7 +3734,7 @@
       syncDisplayControls(result);
       if (result) {
         renderSolidSubsetBoxes(result);
-      } else {
+          } else {
         const boxes = $("solidSubsetBoxes");
         if (boxes) boxes.innerHTML = "";
         const wrap = $("solidSubsetWrap");
@@ -3336,7 +4129,7 @@
       if (displayMode === "aqueous") {
         const aqSubsets = layers.aqueous_subsets || {};
         const layer = pickSubsetLayer(aqSubsets, elems, result, view);
-        if (layer) {
+      if (layer) {
           return {
             grid: layer.grid,
             names: layer.names,
@@ -3938,11 +4731,26 @@
         row.className = "species-row";
         row.innerHTML = `
           <span class="name">${t.species}</span>
-          <input type="number" step="any" min="0" value="${roundForUnit(t.value, state.units)}" aria-label="${t.species} concentration" />
+          <input type="number" step="any" inputmode="decimal" value="${roundForUnit(t.value, state.units)}" aria-label="${t.species} concentration" />
           <button class="rm" title="Remove ${t.species}">×</button>`;
         const num = row.querySelector("input");
         num.addEventListener("input", () => {
-          state.totals[i].value = roundForUnit(parseFloat(num.value) || 0, state.units);
+          const v = parseNumberInput(num.value);
+          if (v == null) {
+            commit();
+            return;
+          }
+          state.totals[i].value = roundForUnit(v, state.units);
+          commit();
+        });
+        num.addEventListener("blur", () => {
+          const v = parseNumberInput(num.value);
+          if (v == null) {
+            num.value = roundForUnit(state.totals[i].value, state.units);
+            return;
+          }
+          state.totals[i].value = roundForUnit(v, state.units);
+          num.value = state.totals[i].value;
           commit();
         });
         row.querySelector(".rm").addEventListener("click", () => {
@@ -4498,10 +5306,16 @@
         refreshPhases();
         if (runtime.hasResult) markStale();
       });
-      $("tempC").addEventListener("input", e => {
-        state.tempC = parseFloat(e.target.value) || 25;
-        fillInputs();
-        commit();
+      bindNumericField("tempC", {
+        onCommit: v => {
+          state.tempC = v;
+          fillInputs();
+          commit();
+        },
+        onEmptyBlur: () => {
+          $("tempC").value = state.tempC;
+          fillInputs();
+        },
       });
       $("units").addEventListener("change", e => {
         const newUnit = normalizeUnit(e.target.value);
@@ -4518,35 +5332,51 @@
         commit();
       });
 
-      $("phMin").addEventListener("input", e => {
-        state.ph.min = roundPh(parseFloat(e.target.value));
-        commit();
+      bindNumericField("phMin", {
+        onCommit: v => { state.ph.min = roundPh(v); commit(); },
+        onEmptyBlur: () => { $("phMin").value = roundPh(state.ph.min); },
       });
-      $("phMax").addEventListener("input", e => {
-        state.ph.max = roundPh(parseFloat(e.target.value));
-        commit();
+      bindNumericField("phMax", {
+        onCommit: v => { state.ph.max = roundPh(v); commit(); },
+        onEmptyBlur: () => { $("phMax").value = roundPh(state.ph.max); },
       });
-      $("yMin").addEventListener("input", e => {
-        const v = parseFloat(e.target.value);
-        if (state.y.axis === "eh") state.y.peMin = roundPe(ehToPe(v, state.tempC));
-        else if (state.y.axis === "log_fo2") state.y.logFo2Min = roundLogFO2(v);
-        else state.y.peMin = roundPe(v);
-        commit();
+      bindNumericField("yMin", {
+        onCommit: v => {
+          if (state.y.axis === "eh") state.y.peMin = roundPe(ehToPe(v, state.tempC));
+          else if (state.y.axis === "log_fo2") state.y.logFo2Min = roundLogFO2(v);
+          else state.y.peMin = roundPe(v);
+          commit();
+        },
+        onEmptyBlur: () => {
+          $("yMin").value = state.y.axis === "eh"
+            ? roundEh(displayYMin())
+            : state.y.axis === "log_fo2"
+              ? roundLogFO2(state.y.logFo2Min)
+              : roundPe(state.y.peMin);
+        },
       });
-      $("yMax").addEventListener("input", e => {
-        const v = parseFloat(e.target.value);
-        if (state.y.axis === "eh") state.y.peMax = roundPe(ehToPe(v, state.tempC));
-        else if (state.y.axis === "log_fo2") state.y.logFo2Max = roundLogFO2(v);
-        else state.y.peMax = roundPe(v);
-        commit();
+      bindNumericField("yMax", {
+        onCommit: v => {
+          if (state.y.axis === "eh") state.y.peMax = roundPe(ehToPe(v, state.tempC));
+          else if (state.y.axis === "log_fo2") state.y.logFo2Max = roundLogFO2(v);
+          else state.y.peMax = roundPe(v);
+          commit();
+        },
+        onEmptyBlur: () => {
+          $("yMax").value = state.y.axis === "eh"
+            ? roundEh(displayYMax())
+            : state.y.axis === "log_fo2"
+              ? roundLogFO2(state.y.logFo2Max)
+              : roundPe(state.y.peMax);
+        },
       });
-      $("o2LimitAtm").addEventListener("input", e => {
-        state.o2LimitAtm = parseFloat(e.target.value) || runtime.cfg?.defaults?.o2_limit_atm || 0.21;
-        commit();
+      bindNumericField("o2LimitAtm", {
+        onCommit: v => { state.o2LimitAtm = v; commit(); },
+        onEmptyBlur: () => { $("o2LimitAtm").value = state.o2LimitAtm; },
       });
-      $("h2LimitAtm").addEventListener("input", e => {
-        state.h2LimitAtm = parseFloat(e.target.value) || runtime.cfg?.defaults?.h2_limit_atm || 1.0;
-        commit();
+      bindNumericField("h2LimitAtm", {
+        onCommit: v => { state.h2LimitAtm = v; commit(); },
+        onEmptyBlur: () => { $("h2LimitAtm").value = state.h2LimitAtm; },
       });
       $("gridLevels").addEventListener("input", e => {
         setGridLevels(e.target.value);
@@ -4900,6 +5730,49 @@
       $("selNone").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = false); renderPhases(); persist(); markStale(); });
 
       $("computeBtn").addEventListener("click", dispatchCompute);
+      $("historyBtn").addEventListener("click", e => {
+        e.stopPropagation();
+        toggleHistoryMenu();
+      });
+      $("historyMenu").addEventListener("click", e => {
+        e.stopPropagation();
+        if (e.target.closest("#historyClearBtn")) {
+          deleteCachedResultsForMode(activeModeId).then(() => {
+            renderHistoryMenu();
+            setStatus("History cleared for this mode.", "ok");
+          }).catch(() => {});
+          return;
+        }
+        const detailsBtn = e.target.closest(".history-details-btn");
+        if (detailsBtn) {
+          const card = detailsBtn.closest(".history-card");
+          const panel = card?.querySelector(".history-details");
+          if (!card || !panel) return;
+          const open = panel.hidden;
+          // Accordion: one details panel open at a time.
+          $("historyMenu").querySelectorAll(".history-card").forEach(c => {
+            c.classList.remove("is-open");
+            const p = c.querySelector(".history-details");
+            const b = c.querySelector(".history-details-btn");
+            if (p) p.hidden = true;
+            if (b) {
+              b.setAttribute("aria-expanded", "false");
+              b.textContent = "Details ▾";
+            }
+          });
+          if (open) {
+            panel.hidden = false;
+            card.classList.add("is-open");
+            detailsBtn.setAttribute("aria-expanded", "true");
+            detailsBtn.textContent = "Details ▴";
+            requestAnimationFrame(() => positionHistoryMenu());
+          }
+          return;
+        }
+        const main = e.target.closest(".history-main, .h-thumb-btn");
+        const card = main?.closest(".history-card[data-key]");
+        if (card) restoreHistoryEntry(card.dataset.key);
+      });
 
       $("modeBtn").addEventListener("click", e => {
         e.stopPropagation();
@@ -4911,13 +5784,25 @@
         setActiveMode(btn.dataset.mode);
       });
       document.addEventListener("click", e => {
-        if (!runtime.modeMenuOpen) return;
-        if ($("modeSwitcher").contains(e.target)) return;
-        closeModeMenu();
+        if (runtime.modeMenuOpen && !$("modeSwitcher").contains(e.target)) {
+          closeModeMenu();
+        }
+        if (runtime.historyMenuOpen && !$("historyWrap").contains(e.target)) {
+          closeHistoryMenu();
+        }
       });
       document.addEventListener("keydown", e => {
-        if (e.key === "Escape") closeModeMenu();
+        if (e.key === "Escape") {
+          closeModeMenu();
+          closeHistoryMenu();
+        }
       });
+      window.addEventListener("resize", () => {
+        if (runtime.historyMenuOpen) positionHistoryMenu();
+      });
+      window.addEventListener("scroll", () => {
+        if (runtime.historyMenuOpen) positionHistoryMenu();
+      }, true);
       window.addEventListener("hashchange", () => {
         setActiveMode(parseModeFromHash(), { updateHash: false });
       });
@@ -4942,37 +5827,53 @@
     }
 
     function fillInputs() {
-      $("dbSelect").value = state.dbId || "";
-      $("tempC").value = state.tempC;
-      $("phMin").value = roundPh(state.ph.min);
-      $("phMax").value = roundPh(state.ph.max);
+      // Never overwrite the field the user is typing in — Android/iOS number
+      // inputs often clear one digit at a time, and rewriting snaps the value back.
+      const focused = document.activeElement;
+      const setVal = (id, val) => {
+        const el = $(id);
+        if (!el || el === focused) return;
+        el.value = val;
+      };
+      if ($("dbSelect") !== focused) $("dbSelect").value = state.dbId || "";
+      setVal("tempC", state.tempC);
+      setVal("phMin", roundPh(state.ph.min));
+      setVal("phMax", roundPh(state.ph.max));
       syncGridLevelsControls();
       $("adaptiveBoundaries").checked = !!state.adaptiveBoundaries;
       {
         const knobsEl = $("knobsMode");
-        if (knobsEl) knobsEl.value = normalizeKnobsMode(state.knobsMode);
+        if (knobsEl && knobsEl !== focused) knobsEl.value = normalizeKnobsMode(state.knobsMode);
       }
       $("layerSolids").checked = !!state.layerSolids;
       $("layerAqueous").checked = !!state.layerAqueous;
       $("layerElements").checked = !!state.layerElements;
       syncLayerElementsControl();
-      $("o2LimitAtm").value = state.o2LimitAtm;
-      $("h2LimitAtm").value = state.h2LimitAtm;
-      $("yMin").value = state.y.axis === "eh"
-        ? roundEh(displayYMin())
-        : state.y.axis === "log_fo2"
-          ? roundLogFO2(state.y.logFo2Min)
-          : roundPe(state.y.peMin);
-      $("yMax").value = state.y.axis === "eh"
-        ? roundEh(displayYMax())
-        : state.y.axis === "log_fo2"
-          ? roundLogFO2(state.y.logFo2Max)
-          : roundPe(state.y.peMax);
-      $("displayMode").value = state.displayMode;
+      setVal("o2LimitAtm", state.o2LimitAtm);
+      setVal("h2LimitAtm", state.h2LimitAtm);
+      setVal(
+        "yMin",
+        state.y.axis === "eh"
+          ? roundEh(displayYMin())
+          : state.y.axis === "log_fo2"
+            ? roundLogFO2(state.y.logFo2Min)
+            : roundPe(state.y.peMin)
+      );
+      setVal(
+        "yMax",
+        state.y.axis === "eh"
+          ? roundEh(displayYMax())
+          : state.y.axis === "log_fo2"
+            ? roundLogFO2(state.y.logFo2Max)
+            : roundPe(state.y.peMax)
+      );
+      if ($("displayMode") !== focused) $("displayMode").value = state.displayMode;
       syncDisplayFromPlot();
-      $("phaseLabelMode").value = ["name", "formula", "both"].includes(state.phaseLabelMode)
-        ? state.phaseLabelMode
-        : "name";
+      if ($("phaseLabelMode") !== focused) {
+        $("phaseLabelMode").value = ["name", "formula", "both"].includes(state.phaseLabelMode)
+          ? state.phaseLabelMode
+          : "name";
+      }
       syncDisplayStyleControls();
       $("labelsOnly").checked = state.labelsOnly;
       $("showBoundaries").checked = state.showBoundaries;
@@ -4992,6 +5893,36 @@
       state.mineralCategoryMode = cat;
       document.querySelectorAll('input[name="mineralCategoryMode"]').forEach(r => {
         r.checked = r.value === cat;
+      });
+    }
+
+    /** Parse a numeric field; empty / partial input returns null (do not coerce). */
+    function parseNumberInput(raw) {
+      const s = String(raw ?? "").trim();
+      if (s === "" || s === "-" || s === "." || s === "-." || s === "+") return null;
+      const v = parseFloat(s);
+      return Number.isFinite(v) ? v : null;
+    }
+
+    function bindNumericField(id, { onCommit, onEmptyBlur }) {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("input", () => {
+        const v = parseNumberInput(el.value);
+        if (v == null) {
+          commit();
+          return;
+        }
+        onCommit(v);
+      });
+      el.addEventListener("blur", () => {
+        const v = parseNumberInput(el.value);
+        if (v == null) {
+          if (typeof onEmptyBlur === "function") onEmptyBlur();
+          else el.value = "";
+          return;
+        }
+        onCommit(v);
       });
     }
 
@@ -5051,12 +5982,48 @@
 
     function openResultDb() {
       return new Promise((resolve, reject) => {
-        const req = indexedDB.open(RESULT_DB, 1);
+        const req = indexedDB.open(RESULT_DB, 3);
         req.onupgradeneeded = () => {
           const db = req.result;
+          const tx = req.transaction;
+          let store;
           if (!db.objectStoreNames.contains(RESULT_STORE)) {
-            const store = db.createObjectStore(RESULT_STORE, { keyPath: "key" });
+            store = db.createObjectStore(RESULT_STORE, { keyPath: "key" });
             store.createIndex("createdAt", "createdAt");
+            store.createIndex("modeId", "modeId", { unique: false });
+          } else {
+            store = tx.objectStore(RESULT_STORE);
+            if (!store.indexNames.contains("createdAt")) {
+              store.createIndex("createdAt", "createdAt");
+            }
+            if (!store.indexNames.contains("modeId")) {
+              store.createIndex("modeId", "modeId", { unique: false });
+            }
+          }
+          if (!db.objectStoreNames.contains(RESULT_DATA_STORE)) {
+            db.createObjectStore(RESULT_DATA_STORE, { keyPath: "key" });
+          }
+          // v3: peel heavy `result` off meta records so History can list quickly.
+          if (req.oldVersion < 3 && db.objectStoreNames.contains(RESULT_DATA_STORE)) {
+            const metaStore = tx.objectStore(RESULT_STORE);
+            const dataStore = tx.objectStore(RESULT_DATA_STORE);
+            metaStore.openCursor().onsuccess = ev => {
+              const cursor = ev.target.result;
+              if (!cursor) return;
+              const r = cursor.value;
+              if (r && r.result != null) {
+                dataStore.put({ key: r.key, result: r.result });
+                const meta = {
+                  key: r.key,
+                  createdAt: r.createdAt,
+                  modeId: r.modeId,
+                };
+                if (r.request) meta.request = r.request;
+                if (r.thumb) meta.thumb = r.thumb;
+                cursor.update(meta);
+              }
+              cursor.continue();
+            };
           }
         };
         req.onsuccess = () => resolve(req.result);
@@ -5064,57 +6031,121 @@
       });
     }
 
-    function txStore(db, mode = "readonly") {
+    function txMeta(db, mode = "readonly") {
       return db.transaction(RESULT_STORE, mode).objectStore(RESULT_STORE);
+    }
+
+    function txData(db, mode = "readonly") {
+      return db.transaction(RESULT_DATA_STORE, mode).objectStore(RESULT_DATA_STORE);
+    }
+
+    function txBoth(db, mode = "readonly") {
+      return db.transaction([RESULT_STORE, RESULT_DATA_STORE], mode);
+    }
+
+    async function getCachedRecord(key) {
+      const db = await openResultDb();
+      return new Promise((resolve, reject) => {
+        const req = txMeta(db).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
     }
 
     async function getCachedResult(key) {
       const db = await openResultDb();
+      const meta = await new Promise((resolve, reject) => {
+        const req = txMeta(db).get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+      if (!meta) return null;
+      if (Date.now() - meta.createdAt > RESULT_CACHE_TTL_MS) {
+        deleteCachedResult(key).catch(() => {});
+        return null;
+      }
+      // Legacy rows (pre-split) may still carry result on the meta record.
+      if (meta.result != null) return meta.result;
       return new Promise((resolve, reject) => {
-        const req = txStore(db).get(key);
-        req.onsuccess = () => {
-          const rec = req.result;
-          if (!rec) { resolve(null); return; }
-          if (Date.now() - rec.createdAt > RESULT_CACHE_TTL_MS) {
-            deleteCachedResult(key).catch(() => {});
-            resolve(null);
-            return;
-          }
-          resolve(rec.result);
-        };
+        const req = txData(db).get(key);
+        req.onsuccess = () => resolve(req.result?.result || null);
         req.onerror = () => reject(req.error);
       });
     }
 
-    async function putCachedResult(key, result, modeId = null) {
+    async function putCachedResult(key, result, modeId = null, request = null) {
       const db = await openResultDb();
+      const mid = modeId
+        || runtime.activeJobModeId
+        || (resultMatchesMode("mineral-stability", result) ? "mineral-stability" : "phase-diagram");
+      const reqBody = request || runtime.pendingCacheRequest || null;
+      let prevThumb = null;
+      try {
+        const prev = await getCachedRecord(key);
+        if (prev?.thumb) prevThumb = prev.thumb;
+      } catch (e) {}
       await new Promise((resolve, reject) => {
-        const req = txStore(db, "readwrite").put({ key, result, createdAt: Date.now() });
-        req.onsuccess = () => resolve();
-        req.onerror = () => reject(req.error);
+        const tx = txBoth(db, "readwrite");
+        const meta = { key, createdAt: Date.now(), modeId: mid };
+        if (reqBody && typeof reqBody === "object") meta.request = reqBody;
+        if (prevThumb) meta.thumb = prevThumb;
+        tx.objectStore(RESULT_STORE).put(meta);
+        tx.objectStore(RESULT_DATA_STORE).put({ key, result });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
       });
       try {
-        const mid = modeId
-          || runtime.activeJobModeId
-          || (resultMatchesMode("mineral-stability", result) ? "mineral-stability" : "phase-diagram");
         sessionStorage.setItem(RESULT_SESSION_KEY, JSON.stringify({ key, modeId: mid }));
       } catch (e) {}
       pruneResultCache().catch(() => {});
     }
 
+    async function patchCachedThumb(key, thumb) {
+      if (!key || !thumb) return;
+      const rec = await getCachedRecord(key);
+      if (!rec) return;
+      rec.thumb = thumb;
+      delete rec.result; // never re-embed payload on the meta row
+      const db = await openResultDb();
+      await new Promise((resolve, reject) => {
+        const putReq = txMeta(db, "readwrite").put(rec);
+        putReq.onsuccess = () => resolve();
+        putReq.onerror = () => reject(putReq.error);
+      });
+    }
+
     async function deleteCachedResult(key) {
       const db = await openResultDb();
       return new Promise((resolve, reject) => {
-        const req = txStore(db, "readwrite").delete(key);
-        req.onsuccess = () => resolve();
+        const tx = txBoth(db, "readwrite");
+        tx.objectStore(RESULT_STORE).delete(key);
+        tx.objectStore(RESULT_DATA_STORE).delete(key);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function listCachedResults(modeId) {
+      // Meta store only — does not load diagram payloads (those live in resultData).
+      const db = await openResultDb();
+      const records = await new Promise((resolve, reject) => {
+        const req = txMeta(db).getAll();
+        req.onsuccess = () => resolve(req.result || []);
         req.onerror = () => reject(req.error);
       });
+      const now = Date.now();
+      return records
+        .filter(r => r
+          && r.modeId === modeId
+          && r.request
+          && now - r.createdAt <= RESULT_CACHE_TTL_MS)
+        .sort((a, b) => b.createdAt - a.createdAt);
     }
 
     async function pruneResultCache() {
       const db = await openResultDb();
       const records = await new Promise((resolve, reject) => {
-        const req = txStore(db).getAll();
+        const req = txMeta(db).getAll();
         req.onsuccess = () => resolve(req.result || []);
         req.onerror = () => reject(req.error);
       });
@@ -5124,6 +6155,106 @@
         .sort((a, b) => b.createdAt - a.createdAt);
       const overflow = fresh.slice(RESULT_CACHE_MAX);
       await Promise.all([...stale, ...overflow].map(r => deleteCachedResult(r.key)));
+    }
+
+    function historyMainThumbView(result, request) {
+      const elems = result.system_elements || [];
+      const wantSolids = request?.layer_solids != null
+        ? !!request.layer_solids
+        : (result.layer_solids !== false);
+      return {
+        isCurrentView: false,
+        displayMode: wantSolids ? "solid" : "aqueous",
+        subsetElements: elems.slice(),
+        forExport: true,
+        forThumb: true,
+      };
+    }
+
+    async function downscaleImageBlob(blob, maxSide) {
+      if (!blob || !maxSide) return blob;
+      const bitmap = await createImageBitmap(blob);
+      try {
+        const scale = maxSide / Math.max(bitmap.width, bitmap.height);
+        if (scale >= 0.98) {
+          return blob;
+        }
+        const w = Math.max(1, Math.round(bitmap.width * scale));
+        const h = Math.max(1, Math.round(bitmap.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return blob;
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(bitmap, 0, 0, w, h);
+        const out = await new Promise(resolve => {
+          canvas.toBlob(b => resolve(b || null), "image/jpeg", 0.82);
+        });
+        return out || blob;
+      } finally {
+        try { bitmap.close(); } catch (e) {}
+      }
+    }
+
+    async function captureHistoryThumb(result, request) {
+      if (!result || runtime.exportBusy || runtime.thumbBusy) return null;
+      if (typeof Plotly === "undefined" || !$("exportPlotDiv")) return null;
+      runtime.thumbBusy = true;
+      // Render at near-screen size so fonts/labels keep the same ratio as the
+      // live diagram, then downscale to a compact history miniature.
+      const base = screenPlotBaseSize();
+      const renderSize = Math.min(720, Math.max(480, Math.round(Math.max(base.width, base.height))));
+      const thumbSize = 224;
+      try {
+        const view = historyMainThumbView(result, request);
+        const spec = buildDiagramSpec(result, view);
+        const exportEl = $("exportPlotDiv");
+        exportEl.style.width = `${renderSize}px`;
+        exportEl.style.height = `${renderSize}px`;
+        await Plotly.react("exportPlotDiv", spec.traces, spec.layout, {
+          displayModeBar: false,
+          responsive: false,
+        });
+        const dataUrl = await Plotly.toImage("exportPlotDiv", {
+          format: "jpeg",
+          width: renderSize,
+          height: renderSize,
+          scale: 1,
+        });
+        const full = dataUrlToBlob(dataUrl);
+        return await downscaleImageBlob(full, thumbSize);
+      } catch (e) {
+        return null;
+      } finally {
+        purgeExportPlot();
+        runtime.thumbBusy = false;
+      }
+    }
+
+    function scheduleHistoryThumb(key, result, request) {
+      if (!key || !result) return;
+      setTimeout(() => {
+        ensureHistoryThumb(key, result, request).catch(() => {});
+      }, 40);
+    }
+
+    async function ensureHistoryThumb(key, result, request) {
+      try {
+        const rec = await getCachedRecord(key);
+        if (rec?.thumb) return;
+      } catch (e) {}
+      const blob = await captureHistoryThumb(result, request);
+      if (!blob) return;
+      try {
+        await patchCachedThumb(key, blob);
+      } catch (e) {}
+    }
+
+    async function deleteCachedResultsForMode(modeId) {
+      const rows = await listCachedResults(modeId);
+      await Promise.all(rows.map(r => deleteCachedResult(r.key)));
     }
 
     async function forgetServerJob(jobId) {
@@ -5136,12 +6267,13 @@
       try { await api(`/api/job/${jobId}`, { method: "DELETE" }); } catch (e) {}
     }
 
-    function saveActiveJob(jobId, cacheKey, modeId) {
+    function saveActiveJob(jobId, cacheKey, modeId, request = null) {
       try {
         sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({
           jobId,
           cacheKey,
           modeId: modeId || activeModeId,
+          request: request || runtime.pendingCacheRequest || null,
           startedAt: Date.now(),
         }));
       } catch (e) {}
@@ -5169,12 +6301,22 @@
         JobProgress.setPhase("download", pct == null ? null : pct / 100);
       });
       JobProgress.setPhase("cache", 0.5);
-      try { await putCachedResult(cacheKey, result, jobModeId); } catch (cacheErr) {}
+      const reqSnap = runtime.pendingCacheRequest;
+      try {
+        await putCachedResult(
+          cacheKey,
+          result,
+          jobModeId,
+          reqSnap
+        );
+      } catch (cacheErr) {}
+      runtime.pendingCacheRequest = null;
       clearActiveJob();
       runtime.activeJobModeId = null;
       forgetServerJob(jobId);
       JobProgress.setPhase("render", 0.4);
       renderModeResult(jobModeId, result);
+      scheduleHistoryThumb(cacheKey, result, reqSnap);
       JobProgress.finish();
       setLogoComputing(false);
       setComputeInProgress(false);
@@ -5251,22 +6393,21 @@
 
       try {
         setComputeInProgress(true);
+        closeHistoryMenu();
         $("app").classList.remove("drawer-open");
         runtime.activeJobModeId = modeId;
+        runtime.pendingCacheRequest = body;
         const cacheKey = cacheKeyFor(stableStringify(cachePayloadForMode(modeId, body)));
         try {
           const cached = await getCachedResult(cacheKey);
           if (cached) {
+            try { await putCachedResult(cacheKey, cached, modeId, body); } catch (e) {}
             renderModeResult(modeId, cached);
+            scheduleHistoryThumb(cacheKey, cached, body);
             setStatus("Cached", "ok");
             runtime.activeJobModeId = null;
+            runtime.pendingCacheRequest = null;
             setComputeInProgress(false);
-            try {
-              sessionStorage.setItem(
-                RESULT_SESSION_KEY,
-                JSON.stringify({ key: cacheKey, modeId })
-              );
-            } catch (e) {}
             return;
           }
         } catch (cacheErr) {
@@ -5282,7 +6423,7 @@
           forgetServerJob(prev.jobId);
         }
         const start = await api("/api/compute", { method: "POST", body: JSON.stringify(body) });
-        saveActiveJob(start.job_id, cacheKey, modeId);
+        saveActiveJob(start.job_id, cacheKey, modeId, body);
         if (start.status === "queued") {
           const q = queueStatusText(start) || "Queued…";
           JobProgress.setQueued(q.replace(/…$/, ""), (queueShortText(start) || "Queued").replace(/…$/, ""));
@@ -5294,6 +6435,7 @@
         JobProgress.fail();
         setLogoComputing(false);
         runtime.activeJobModeId = null;
+        runtime.pendingCacheRequest = null;
         setComputeInProgress(false);
       }
     }
@@ -5354,7 +6496,7 @@
       const epoch = runtime.pollEpoch;
       const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
       runtime.activeJobModeId = jobModeId;
-      saveActiveJob(jobId, cacheKey, jobModeId);
+      saveActiveJob(jobId, cacheKey, jobModeId, runtime.pendingCacheRequest);
       const adaptive = isDiagramMode(jobModeId) && !!state.adaptiveBoundaries;
       JobProgress.begin(adaptive);
       setLogoComputing(true, "Computing…");
@@ -5390,6 +6532,7 @@
             JobProgress.fail();
             setLogoComputing(false);
             runtime.activeJobModeId = null;
+            runtime.pendingCacheRequest = null;
             setComputeInProgress(false);
             clearActiveJob();
             forgetServerJob(jobId);
@@ -5404,6 +6547,7 @@
           JobProgress.fail();
           setLogoComputing(false);
           runtime.activeJobModeId = null;
+          runtime.pendingCacheRequest = null;
           setComputeInProgress(false);
           if (e.message && /not found|404/i.test(e.message)) {
             clearActiveJob();
@@ -5419,6 +6563,7 @@
       runtime.computeStartedAt = null;  // unknown across reloads → omit runtime
       const jobModeId = rec.modeId || DEFAULT_MODE_ID;
       runtime.activeJobModeId = jobModeId;
+      if (rec.request) runtime.pendingCacheRequest = rec.request;
       try {
         const st = await api(`/api/job/${rec.jobId}`);
         if (st.status === "queued" || st.status === "running") {
@@ -5446,6 +6591,7 @@
         if (st.status === "error") {
           clearActiveJob();
           runtime.activeJobModeId = null;
+          runtime.pendingCacheRequest = null;
           forgetServerJob(rec.jobId);
           setComputeInProgress(false);
           setStatus(jobErrorStatusText(st), "err");
@@ -5453,6 +6599,7 @@
       } catch (e) {
         clearActiveJob();
         runtime.activeJobModeId = null;
+        runtime.pendingCacheRequest = null;
         setComputeInProgress(false);
       }
       return false;
@@ -6426,7 +7573,13 @@
     }
 
     function buildDiagramSpec(result, view = null) {
-      const forExport = !!view?.forExport;
+      const forThumb = !!view?.forThumb;
+      const forExport = !!view?.forExport || forThumb;
+      const labelsOnly = forThumb ? false : !!state.labelsOnly;
+      const showBoundaries = forThumb ? true : !!state.showBoundaries;
+      const fillOpacity = forThumb
+        ? 1
+        : Math.min(1, Math.max(0.1, Number(state.fillOpacity) || 1));
       const vectorMode = usesVectorDisplay(result);
       const vectorLayer = vectorMode ? activeVectorLayer(result, view) : null;
       const layer = activeLayer(result, null, view);
@@ -6444,25 +7597,25 @@
       const baseHoverTpl = `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<br><span style="color:#666;font-size:0.9em">base grid sample</span><extra></extra>`;
 
       if (vectorMode && vectorLayer) {
-        if (!state.labelsOnly) traces.push(...vectorFillTraces(vectorLayer, aqueousSet, result.temp_c));
-        if (state.showBoundaries) {
+        if (!labelsOnly) traces.push(...vectorFillTraces(vectorLayer, aqueousSet, result.temp_c));
+        if (showBoundaries) {
           const bt = boundaryLineTrace(vectorLayer.boundaries, result.temp_c);
           if (bt) traces.push(bt);
           const st = stabilityLimitTrace(result.display?.stability_limits, result.temp_c);
           if (st) traces.push(st);
         }
-      } else if (!state.labelsOnly) {
+      } else if (!labelsOnly) {
         traces.push({
           type: "heatmap", x, y,
           z: grid.map(r => r.map(v => (v < 0 ? null : v))),
           zmin: -0.5, zmax: Math.max(n - 0.5, 0.5),
           colorscale: buildDiscreteColorscale(names, aqueousSet),
           showscale: false, xgap: 0, ygap: 0,
-          opacity: Math.min(1, Math.max(0.1, Number(state.fillOpacity) || 1)),
+          opacity: fillOpacity,
           hoverinfo: "skip",
         });
-        if (state.showBoundaries) traces.push(boundaryTrace(plotResult));
-      } else if (state.showBoundaries && !vectorMode) {
+      if (showBoundaries) traces.push(boundaryTrace(plotResult));
+      } else if (showBoundaries && !vectorMode) {
         traces.push(boundaryTrace(plotResult));
       }
 
@@ -6649,6 +7802,9 @@
     async function runPngExport() {
       const result = runtime.lastResult;
       if (!result || runtime.exportBusy) return;
+      // Avoid colliding with a history thumbnail capture on the shared export div.
+      for (let i = 0; i < 40 && runtime.thumbBusy; i++) await exportDelay(50);
+      if (runtime.thumbBusy) return;
       const targets = getCheckedExportTargets(result);
       if (!targets.length) return;
 
@@ -6865,19 +8021,8 @@
       const toolbar = document.querySelector(".plot-toolbar");
       if (!toolbar) return;
       const cards = [...toolbar.querySelectorAll("details.disp-card")];
-      // Phones only: one open display submenu at a time (saves vertical space).
-      // Tablets keep multi-open and rely on the panel's own scrollbar instead.
-      const accordion = () => {
-        try { return window.matchMedia("(max-width: 900px)").matches; }
-        catch (_) { return false; }
-      };
       cards.forEach(el => {
         el.addEventListener("toggle", () => {
-          if (el.open && accordion()) {
-            for (const other of cards) {
-              if (other !== el && other.open) other.open = false;
-            }
-          }
           triggerPlotResize();
         });
       });

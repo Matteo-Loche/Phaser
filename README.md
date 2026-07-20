@@ -23,7 +23,7 @@ Key behaviours:
 - **Two diagram modes** — Predominance (SI) and Mineral Stability (EQUI assemblage); each keeps an independent result cache and session state in the browser.
 - **Selectable diagram layers** — compute solid / mineral, aqueous, and/or per-element subset maps independently (`layer_solids`, `layer_aqueous`, `layer_elements`); boundary tracing and packing honour the same toggles.
 - **Per-element aqueous hover** — grid sweep punches the top species per element via PHREEQC `SYS`; Mineral Stability also shows precipitated moles. Hover tooltips are filtered to the active display context.
-- **Browser-side settings** and **result cache** — UI state in `localStorage`, diagram results in IndexedDB (keyed per mode).
+- **Browser-side settings** and **result cache** — UI state in `localStorage`; diagram results in IndexedDB (per mode), with a header **History** menu (thumbnails + restore) for prior computes.
 - **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Job wall-clock timeout** — PHREEQC compute (grid + tracing) is hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min); setup/packing/stats are outside that limit so a stuck pool cannot pin the server forever.
@@ -738,7 +738,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 | `#/stats` | Statistics | No — server usage dashboard (`GET /api/stats`) |
 
 - **Mode switcher** — dropdown beside the logo (`Mode · Predominance ▼`). The active mode is shown on the button and highlighted in the menu; the document title updates per mode.
-- **Compute dispatch** — the header **Compute diagram** button calls the active mode's handler. On **Statistics**, only the button is hidden; **progress and status stay visible** if a job is still running.
+- **Compute dispatch** — the header **Compute** button calls the active mode's handler. On **Statistics**, only the button is hidden; **progress and status stay visible** if a job is still running.
 - **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored under the job’s `mode_id`; switching back restores that mode’s diagram from memory or IndexedDB without clobbering the sibling.
 - **Cache keys** include `mode_id` plus the request body (including `mineral_category_mode` for Mineral Stability). Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
 - **Calculation mode** radios always show Dummy / Real electrolyte frames only. Predominance sends `dummy_titration` / `titration`; Mineral Stability maps the same radios to `assemblage_dummy_titration` / `assemblage_titration`.
@@ -748,7 +748,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  [☰]  PHASER  [Mode ▼]  [Compute] [job slot]   Database [▼] ●            │
+│  [☰]  PHASER  [Mode ▼]  [History] [Compute] [job slot]   Database [▼] ●  │
 ├──────────────┬──────────────────────────────┬───┬───────────────────────┤
 │  Sidebar     │                              │ ║ │  Plot panel           │
 │  (controls)  │   Predominance / Mineral     │ ║ │  (display)            │
@@ -758,7 +758,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 
 | Region | Role |
 |--------|------|
-| **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **Compute diagram** button, **job slot** (queue pill / progress / report), **Database** label + selector + status dot |
+| **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **History** control then standalone **Compute** button, **job slot** (queue pill / progress / report), **Database** label + selector + status dot |
 | **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below). Soft-scroll; darker `--panel-side` fill |
 | **Diagram** | Plotly canvas sized by `fitPlotBox`: up to **1.1:1** when the container is wider than tall, and **1:1.2** when taller than wide (avoids a stretched wide plot while still filling tall space) |
 | **Right plot panel** | Foldable display controls (Display / Labels / Fill / Overlays) + diagram metadata. Same `--panel-side` fill, padding, and soft-scroll as the sidebar; scrollbar sits on the **inner** edge flush with the plot resizer |
@@ -768,8 +768,8 @@ Side columns use `--panel-side` (darker than the header `--panel`, slightly lift
 
 **Responsive behaviour**
 
-- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar (capped height + soft-scroll so open submenus never crop off-screen); the panel resizer is hidden.
-- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 27k runs`). Only **one** display submenu open at a time (accordion); tablets and desktop keep multi-open.
+- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · History+Compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar (capped height + soft-scroll so open submenus never crop off-screen); the panel resizer is hidden.
+- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 27k runs`).
 - **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
 - **≤760px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
 - **≤560px** — display cards stack full-width in the top toolbar.
@@ -823,7 +823,7 @@ Changing units auto-converts species concentrations. Editing chemistry, axes, ph
 
 ### Header: compute and progress
 
-**Compute diagram** enqueues a server job (or loads an identical request from the browser cache). Progress and status live in a shared **job slot** beside the button:
+**Compute** enqueues a server job (or loads an identical request from the browser cache). The **History** control to its left opens saved diagrams for the current mode (see [Result cache and reconnect](#result-cache-and-reconnect)). Progress and status live in a shared **job slot** beside the button:
 
 | Slot mode | What shows |
 |-----------|------------|
@@ -879,7 +879,7 @@ Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overla
 
 **Touch / hover.** Plotly hover labels stick on touch devices until another plot tap; tapping anywhere outside the plot data area (or redrawing the figure) dismisses them via `Plotly.Fx.unhover`.
 
-**Configuration vs display.** The sidebar **Compute layers** checkboxes set what the next job will pack and trace. The plot panel dropdown and element filter read from the cached result (`layer_solids`, `layer_aqueous`, `layer_elements` in the packed JSON). Toggling layers before recomputing shows the **stale** pill but does not change the plot or its display options until **Compute diagram** finishes.
+**Configuration vs display.** The sidebar **Compute layers** checkboxes set what the next job will pack and trace. The plot panel dropdown and element filter read from the cached result (`layer_solids`, `layer_aqueous`, `layer_elements` in the packed JSON). Toggling layers before recomputing shows the **stale** pill but does not change the plot or its display options until **Compute** finishes.
 
 At least one of **Solid** or **Aqueous** predominance must stay enabled; the UI prevents unchecking both.
 
@@ -902,11 +902,12 @@ Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display rem
 
 | Storage | Key / store | Contents |
 |---------|-------------|----------|
-| `localStorage` | `phaseDiagramState.v7` | UI settings (auto-saved on every edit) |
+| `localStorage` | `phaseDiagramState.v8` | UI settings (auto-saved on every edit) |
 | `localStorage` | `phaserLayout.v1` | Sidebar width and plot-panel width |
-| `sessionStorage` | `phaserLastResultKey.v1` | Pointer to the last cached diagram |
+| `sessionStorage` | `phaserLastResultKey.v2` | Pointer to the last cached diagram |
 | `sessionStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`) for reconnect after refresh |
-| IndexedDB | `phaserResultCache.v23` / `results` | Packed diagram JSON |
+| IndexedDB | `phaserResultCache.v23` / `results` | History meta: `modeId`, compute `request`, plot thumbnail (JPEG blob) |
+| IndexedDB | `phaserResultCache.v23` / `resultData` | Packed diagram JSON (loaded only on restore / cache hit) |
 
 Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or eviction (**24 results max**, **12-hour TTL**).
 
@@ -914,7 +915,9 @@ Closing the tab or clearing site data resets settings. Cached diagrams persist u
 
 Identical compute requests (including `mode_id`, `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, and **layer toggles**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
 
-On **cache miss**, the job is enqueued; the result is stored in IndexedDB after download and the server job is **`DELETE`**d to free memory.
+On **cache miss**, the job is enqueued; after download the packed result is stored in `resultData`, a lightweight history record (request + later thumbnail) in `results`, and the server job is **`DELETE`**d to free memory. Plot thumbnails are captured **once** after a successful compute (or cache hit without a thumb), not when opening the History menu.
+
+**History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters and redraws that result as fresh (Compute greys out). Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
 
 If you refresh during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2`. A job that finished while you were away is fetched and rendered automatically (into the mode that started it).
 
