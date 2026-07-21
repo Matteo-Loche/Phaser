@@ -2209,7 +2209,6 @@
     const MODE_HASH_PREFIX = "#/";
     const DEFAULT_MODE_ID = "phase-diagram";
     const DIAGRAM_MODE_IDS = new Set(["phase-diagram", "mineral-stability"]);
-    const RESULT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
     const RESULT_CACHE_MAX = 24;
     const STATS_WINDOW_KEY = "phaserStatsWindow.v2";
     const STATS_WINDOW_LABELS = {
@@ -2763,6 +2762,17 @@
       else if (state.layerSolids && !state.layerAqueous) state.displayMode = "solid";
     }
 
+    /** Main full-system view (all elements): solid/mineral when computed, else aqueous. */
+    function resetMainDisplayForResult(result, request = null) {
+      const cfg = displayLayerConfig(result);
+      const wantSolids = request?.layer_solids != null ? !!request.layer_solids : cfg.solids;
+      const wantAq = request?.layer_aqueous != null ? !!request.layer_aqueous : cfg.aqueous;
+      if (wantSolids) state.displayMode = "solid";
+      else if (wantAq) state.displayMode = "aqueous";
+      const elems = result?.system_elements || systemElements();
+      state.solidSubsetElements = elems.slice();
+    }
+
     function syncSidebarFromState() {
       fillInputs();
       fillSpeciesOptions();
@@ -2816,12 +2826,7 @@
         return;
       }
       if (!result || !rec?.request) {
-        setStatus("Saved diagram is incomplete or expired.", "err");
-        return;
-      }
-      if (Date.now() - rec.createdAt > RESULT_CACHE_TTL_MS) {
-        deleteCachedResult(key).catch(() => {});
-        setStatus("Saved diagram expired.", "warn");
+        setStatus("Saved diagram is incomplete.", "err");
         return;
       }
       const modeId = rec.modeId
@@ -2834,6 +2839,13 @@
       const prevDb = state.dbId;
       const prevElems = systemElements().slice().sort().join(",");
       applyRequestToState(rec.request, modeId);
+      // Point lastResult at the restored diagram before sidebar sync so subset
+      // prune/checkboxes use this system's elements (not the previous plot).
+      runtime.modeResults[modeId] = result;
+      runtime.lastResult = result;
+      runtime.hasResult = true;
+      // Open like a fresh compute: main solid/mineral (or aqueous) with all elements.
+      resetMainDisplayForResult(result, rec.request);
       persist();
       fillDatabaseOptions();
       syncSidebarFromState();
@@ -2856,6 +2868,8 @@
         try { await refreshPhases(); } catch (e) {}
       }
       pinPhaseSelection(jobPhases);
+      // Re-assert full-system selection after catalog/mode work (prune can shrink it).
+      resetMainDisplayForResult(result, rec.request);
       persist();
 
       if (activeModeId !== modeId) {
@@ -6060,10 +6074,6 @@
         req.onerror = () => reject(req.error);
       });
       if (!meta) return null;
-      if (Date.now() - meta.createdAt > RESULT_CACHE_TTL_MS) {
-        deleteCachedResult(key).catch(() => {});
-        return null;
-      }
       // Legacy rows (pre-split) may still carry result on the meta record.
       if (meta.result != null) return meta.result;
       return new Promise((resolve, reject) => {
@@ -6133,12 +6143,8 @@
         req.onsuccess = () => resolve(req.result || []);
         req.onerror = () => reject(req.error);
       });
-      const now = Date.now();
       return records
-        .filter(r => r
-          && r.modeId === modeId
-          && r.request
-          && now - r.createdAt <= RESULT_CACHE_TTL_MS)
+        .filter(r => r && r.modeId === modeId && r.request)
         .sort((a, b) => b.createdAt - a.createdAt);
     }
 
@@ -6149,12 +6155,11 @@
         req.onsuccess = () => resolve(req.result || []);
         req.onerror = () => reject(req.error);
       });
-      const now = Date.now();
-      const stale = records.filter(r => now - r.createdAt > RESULT_CACHE_TTL_MS);
-      const fresh = records.filter(r => now - r.createdAt <= RESULT_CACHE_TTL_MS)
-        .sort((a, b) => b.createdAt - a.createdAt);
-      const overflow = fresh.slice(RESULT_CACHE_MAX);
-      await Promise.all([...stale, ...overflow].map(r => deleteCachedResult(r.key)));
+      const overflow = records
+        .slice()
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(RESULT_CACHE_MAX);
+      await Promise.all(overflow.map(r => deleteCachedResult(r.key)));
     }
 
     function historyMainThumbView(result, request) {
@@ -6325,11 +6330,10 @@
         ? formatDuration((performance.now() - runtime.computeStartedAt) / 1000)
         : null;
       runtime.computeStartedAt = null;
-      const modeLabel = MODES[jobModeId]?.label || jobModeId;
-      // Mobile job slot is narrow: drop the mode label and duration.
-      const report = isMobileHeader()
-        ? `Done · ${formatCount(runs)} runs`
-        : `Done · ${modeLabel} · ${formatCount(runs)} runs${dur ? ` · ${dur}` : ""}`;
+      // Duration first so ellipsis on the narrow job-slot status does not hide it.
+      const report = dur
+        ? `Done · ${dur} · ${formatCount(runs)} runs`
+        : `Done · ${formatCount(runs)} runs`;
       setStatus(report, "ok");
     }
 

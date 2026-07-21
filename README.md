@@ -769,7 +769,7 @@ Side columns use `--panel-side` (darker than the header `--panel`, slightly lift
 **Responsive behaviour**
 
 - **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · History+Compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar (capped height + soft-scroll so open submenus never crop off-screen); the panel resizer is hidden.
-- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 27k runs`).
+- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 8.2s · 27k runs`).
 - **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
 - **≤760px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
 - **≤560px** — display cards stack full-width in the top toolbar.
@@ -829,14 +829,14 @@ Changing units auto-converts species concentrations. Editing chemistry, axes, ph
 |-----------|------------|
 | **queued** | Wide/mid: status line (`Queued — position 2 of 3`). Mobile (≤900px): compact pill (`Queued 2/3` or `Queued…`); progress bar hidden |
 | **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, …) |
-| **idle** | Done / error / cache report in the status line (mobile shortens to e.g. `Done · 27k runs`) |
+| **idle** | Done / error / cache report in the status line (e.g. `Done · 8.2s · 27k runs`) |
 
 While a job runs:
 
 - The logo animates (`.is-computing` on the brand link).
 - A **single unified progress bar** advances through the whole pipeline — one 0–100% fill, not per-phase resets.
 
-**Done** messages on wide screens stay detailed, e.g. `Done · Predominance · 40k runs · 8.2s`. Cache hits show **`Cached`**.
+**Done** messages put duration first so the narrow job-slot ellipsis does not hide it, e.g. `Done · 8.2s · 40k runs`. Cache hits show **`Cached`**.
 
 The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
 
@@ -909,7 +909,7 @@ Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display rem
 | IndexedDB | `phaserResultCache.v23` / `results` | History meta: `modeId`, compute `request`, plot thumbnail (JPEG blob) |
 | IndexedDB | `phaserResultCache.v23` / `resultData` | Packed diagram JSON (loaded only on restore / cache hit) |
 
-Closing the tab or clearing site data resets settings. Cached diagrams persist until TTL or eviction (**24 results max**, **12-hour TTL**).
+Closing the tab or clearing site data resets settings. Cached diagrams and UI settings persist until the browser clears site data (or the user clears History). The result cache keeps at most **24** diagrams (newest kept; oldest evicted).
 
 ### Result cache and reconnect
 
@@ -917,7 +917,7 @@ Identical compute requests (including `mode_id`, `adaptive_boundaries`, `adaptiv
 
 On **cache miss**, the job is enqueued; after download the packed result is stored in `resultData`, a lightweight history record (request + later thumbnail) in `results`, and the server job is **`DELETE`**d to free memory. Plot thumbnails are captured **once** after a successful compute (or cache hit without a thumb), not when opening the History menu.
 
-**History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters and redraws that result as fresh (Compute greys out). Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
+**History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters and redraws that result as fresh (Compute greys out), opening on the main full-system solid/mineral view (or aqueous if solids were not computed) rather than a leftover element subset. Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
 
 If you refresh during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2`. A job that finished while you were away is fetched and rendered automatically (into the mode that started it).
 
