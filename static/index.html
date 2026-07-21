@@ -1626,9 +1626,86 @@
     .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
     .seg button { min-height: var(--tap); padding: 0 0.8rem; background: var(--bg); border: none; cursor: pointer; color: var(--text); }
     .seg button.active { background: var(--accent); color: #fff; }
+
+    /* Second-tab gate: one branded screen, not a second app. */
+    .tab-gate {
+      position: fixed; inset: 0; z-index: 10000;
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.5rem;
+      background: color-mix(in srgb, var(--bg) 92%, #000);
+      color: var(--text);
+    }
+    .tab-gate[hidden] { display: none !important; }
+    .tab-gate-card {
+      display: flex; flex-direction: column; align-items: center; gap: 1.1rem;
+      max-width: 28rem; text-align: center;
+    }
+    .tab-gate-logo {
+      background: #03040A;
+      padding: 0.35rem 0.65rem;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      overflow: hidden;
+      width: min(100%, 17rem);
+    }
+    .tab-gate-logo svg { display: block; width: 100%; height: auto; }
+    .tab-gate-card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.95rem;
+      line-height: 1.45;
+    }
+    .tab-gate-card .btn {
+      min-height: var(--tap);
+      padding: 0.55rem 1.25rem;
+      border: none;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .tab-gate-card .btn:hover { filter: brightness(1.06); }
   </style>
 </head>
 <body>
+  <div id="tabGate" class="tab-gate" hidden role="dialog" aria-modal="true"
+       aria-labelledby="tabGateTitle">
+    <div class="tab-gate-card">
+      <div class="tab-gate-logo" aria-hidden="true">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="76 48 648 122" role="img" aria-label="PHASER">
+          <defs>
+            <mask id="phaserGateLogoTxt">
+              <rect x="0" y="0" width="800" height="200" fill="black"/>
+              <text x="400" y="162"
+                font-family="'Orbitron','Arial Black',monospace"
+                font-size="128" font-weight="900"
+                text-anchor="middle" letter-spacing="4"
+                fill="white" transform="skewX(-12) translate(30,0)">PHASER</text>
+            </mask>
+          </defs>
+          <rect width="800" height="200" fill="#03040A"/>
+          <g mask="url(#phaserGateLogoTxt)">
+            <rect x="0" y="0" width="800" height="200" fill="#03040A"/>
+            <polygon points="0,2   800,2   760,13  0,13"  fill="#F0E6FF"/>
+            <polygon points="0,19  800,19  760,30  0,30"  fill="#BF00FF"/>
+            <polygon points="0,36  800,36  760,47  0,47"  fill="#4B0FFF"/>
+            <polygon points="0,53  800,53  760,64  0,64"  fill="#0066FF"/>
+            <polygon points="0,70  800,70  760,81  0,81"  fill="#00DDFF"/>
+            <polygon points="0,87  800,87  760,98  0,98"  fill="#00FFB2"/>
+            <polygon points="0,104 800,104 760,115 0,115" fill="#39FF14"/>
+            <polygon points="0,121 800,121 760,132 0,132" fill="#FFE600"/>
+            <polygon points="0,138 800,138 760,149 0,149" fill="#FF9900"/>
+            <polygon points="0,155 800,155 760,166 0,166" fill="#FF4D00"/>
+            <polygon points="0,172 800,172 760,183 0,183" fill="#FF0033"/>
+            <polygon points="0,189 800,189 760,200 0,200" fill="#CC0077"/>
+          </g>
+        </svg>
+      </div>
+      <p id="tabGateTitle">PHASER is already open in another tab. Close that tab, or close this one, to continue.</p>
+      <button type="button" class="btn" id="tabTransferBtn">Transfer here</button>
+    </div>
+  </div>
   <div class="app mode-phase-diagram" id="app">
     <header>
       <button class="icon-btn" id="menuBtn" aria-label="Toggle controls">☰</button>
@@ -2206,6 +2283,12 @@
     const RESULT_DATA_STORE = "resultData"; // heavy diagram payloads
     const RESULT_SESSION_KEY = "phaserLastResultKey.v2";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v2";
+    const TAB_LOCK_KEY = "phaserTabLock.v1";
+    const TAB_LOCK_NAME = "phaser-tab";
+    const TAB_CHANNEL_NAME = "phaser-tabs";
+    const TAB_HEARTBEAT_MS = 1000;
+    const TAB_STALE_MS = 3000;
+    const GONE_JOB_MSG = "Job was deleted from the server. Please recompute.";
     const MODE_HASH_PREFIX = "#/";
     const DEFAULT_MODE_ID = "phase-diagram";
     const DIAGRAM_MODE_IDS = new Set(["phase-diagram", "mineral-stability"]);
@@ -2338,6 +2421,15 @@
       historyThumbUrls: [],
       exportChecked: null, // Set of target ids for this session only
       exportResultSysKey: null,
+      tabId: null,
+      isTabLeader: false,
+      tabBackend: null, // "web-locks" | "heartbeat"
+      tabChannel: null,
+      tabHeartbeatTimer: null,
+      tabWatchTimer: null,
+      releaseWebLock: null,
+      bootShellReady: false,
+      bootResumeDone: false,
     };
 
     const MODES = {
@@ -2877,7 +2969,7 @@
       }
       renderModeResult(modeId, result);
       try {
-        sessionStorage.setItem(RESULT_SESSION_KEY, JSON.stringify({ key, modeId }));
+        writeResultSession(key, modeId);
       } catch (e) {}
       setStatus("Restored from history", "ok");
     }
@@ -2992,6 +3084,7 @@
     }
 
     function dispatchCompute() {
+      if (!runtime.isTabLeader) return;
       const mode = getActiveMode();
       if (!mode.hasCompute) return;
       if (isDiagramMode(activeModeId)) return computeDiagram(activeModeId);
@@ -6104,9 +6197,7 @@
         tx.oncomplete = () => resolve();
         tx.onerror = () => reject(tx.error);
       });
-      try {
-        sessionStorage.setItem(RESULT_SESSION_KEY, JSON.stringify({ key, modeId: mid }));
-      } catch (e) {}
+      writeResultSession(key, mid);
       pruneResultCache().catch(() => {});
     }
 
@@ -6272,39 +6363,385 @@
       try { await api(`/api/job/${jobId}`, { method: "DELETE" }); } catch (e) {}
     }
 
-    function saveActiveJob(jobId, cacheKey, modeId, request = null) {
+    /* -------- browser storage (localStorage + session migrate) -------- */
+    function lsGet(key) {
+      try { return localStorage.getItem(key); } catch (e) { return null; }
+    }
+    function lsSet(key, val) {
+      try { localStorage.setItem(key, val); } catch (e) {}
+    }
+    function lsRemove(key) {
+      try { localStorage.removeItem(key); } catch (e) {}
+    }
+    function migrateSessionKeyToLocal(key) {
       try {
-        sessionStorage.setItem(ACTIVE_JOB_KEY, JSON.stringify({
-          jobId,
-          cacheKey,
-          modeId: modeId || activeModeId,
-          request: request || runtime.pendingCacheRequest || null,
-          startedAt: Date.now(),
-        }));
+        if (lsGet(key) != null) {
+          try { sessionStorage.removeItem(key); } catch (e) {}
+          return;
+        }
+        const raw = sessionStorage.getItem(key);
+        if (raw != null) {
+          lsSet(key, raw);
+          sessionStorage.removeItem(key);
+        }
       } catch (e) {}
     }
 
+    function writeResultSession(key, modeId) {
+      lsSet(RESULT_SESSION_KEY, JSON.stringify({
+        key,
+        modeId: modeId || activeModeId || DEFAULT_MODE_ID,
+      }));
+    }
+
+    function saveActiveJob(jobId, cacheKey, modeId, request = null) {
+      lsSet(ACTIVE_JOB_KEY, JSON.stringify({
+        jobId,
+        cacheKey,
+        modeId: modeId || activeModeId,
+        request: request || runtime.pendingCacheRequest || null,
+        startedAt: Date.now(),
+      }));
+    }
+
     function clearActiveJob() {
-      try { sessionStorage.removeItem(ACTIVE_JOB_KEY); } catch (e) {}
+      lsRemove(ACTIVE_JOB_KEY);
     }
 
     function loadActiveJob() {
+      migrateSessionKeyToLocal(ACTIVE_JOB_KEY);
       try {
-        const raw = sessionStorage.getItem(ACTIVE_JOB_KEY);
+        const raw = lsGet(ACTIVE_JOB_KEY);
         return raw ? JSON.parse(raw) : null;
       } catch (e) {
         return null;
       }
     }
 
+    function clearGoneServerJob() {
+      clearActiveJob();
+      runtime.activeJobModeId = null;
+      runtime.pendingCacheRequest = null;
+      setComputeInProgress(false);
+      setLogoComputing(false);
+      JobProgress.fail();
+      setStatus(GONE_JOB_MSG, "err");
+    }
+
+    function isJobGoneError(err) {
+      const msg = err?.message || String(err || "");
+      return /not found|404/i.test(msg);
+    }
+
+    /* -------- single-tab leadership (Web Locks + heartbeat fallback) -------- */
+    function supportsWebLocks() {
+      try {
+        return !!(window.isSecureContext && navigator.locks && typeof navigator.locks.request === "function");
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function newTabId() {
+      try {
+        if (crypto.randomUUID) return crypto.randomUUID();
+      } catch (e) {}
+      return `tab-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    function readTabLock() {
+      try { return JSON.parse(lsGet(TAB_LOCK_KEY) || "null"); } catch (e) { return null; }
+    }
+
+    function writeTabHeartbeat() {
+      lsSet(TAB_LOCK_KEY, JSON.stringify({
+        tabId: runtime.tabId,
+        heartbeatAt: Date.now(),
+      }));
+    }
+
+    function clearTabHeartbeatIfOurs() {
+      const lock = readTabLock();
+      if (lock?.tabId === runtime.tabId) lsRemove(TAB_LOCK_KEY);
+    }
+
+    function broadcastTabMsg(msg) {
+      try {
+        runtime.tabChannel?.postMessage({ ...msg, from: runtime.tabId });
+      } catch (e) {}
+      // storage event fallback for browsers without BroadcastChannel delivery
+      try {
+        lsSet("phaserTabBus.v1", JSON.stringify({ ...msg, from: runtime.tabId, t: Date.now() }));
+      } catch (e) {}
+    }
+
+    function showTabGate() {
+      const gate = $("tabGate");
+      if (gate) gate.hidden = false;
+    }
+
+    function hideTabGate() {
+      const gate = $("tabGate");
+      if (gate) gate.hidden = true;
+    }
+
+    function stopLeaderPollingOnly() {
+      // Yield / lose leadership: stop client poll, keep ACTIVE_JOB for the new leader.
+      clearInterval(runtime.pollTimer);
+      runtime.pollTimer = null;
+      runtime.pollEpoch = (runtime.pollEpoch || 0) + 1;
+      setComputeInProgress(false);
+      setLogoComputing(false);
+      JobProgress.fail();
+    }
+
+    function stopTabHeartbeat() {
+      if (runtime.tabHeartbeatTimer) {
+        clearInterval(runtime.tabHeartbeatTimer);
+        runtime.tabHeartbeatTimer = null;
+      }
+    }
+
+    function stopTabWatch() {
+      if (runtime.tabWatchTimer) {
+        clearInterval(runtime.tabWatchTimer);
+        runtime.tabWatchTimer = null;
+      }
+    }
+
+    function releaseTabLeadership() {
+      // Mark non-leader before releasing the Web Lock so the hold finally-block
+      // does not treat this as a steal.
+      runtime.isTabLeader = false;
+      stopTabHeartbeat();
+      const release = runtime.releaseWebLock;
+      runtime.releaseWebLock = null;
+      if (runtime.tabBackend === "web-locks" && typeof release === "function") {
+        try { release(); } catch (e) {}
+      }
+      clearTabHeartbeatIfOurs();
+      runtime.tabBackend = null;
+    }
+
+    function startHeartbeatLeadership() {
+      writeTabHeartbeat();
+      stopTabHeartbeat();
+      runtime.tabHeartbeatTimer = setInterval(writeTabHeartbeat, TAB_HEARTBEAT_MS);
+      runtime.tabBackend = "heartbeat";
+      runtime.isTabLeader = true;
+    }
+
+    function tryClaimHeartbeatLock() {
+      const lock = readTabLock();
+      const now = Date.now();
+      if (!lock || lock.tabId === runtime.tabId || (now - (lock.heartbeatAt || 0)) > TAB_STALE_MS) {
+        startHeartbeatLeadership();
+        return true;
+      }
+      return false;
+    }
+
+    function holdWebLock(steal) {
+      return new Promise((resolveClaim) => {
+        let settled = false;
+        const opts = steal ? { steal: true } : { ifAvailable: true };
+        navigator.locks.request(TAB_LOCK_NAME, opts, async (lock) => {
+          if (!lock) {
+            if (!settled) { settled = true; resolveClaim(false); }
+            return;
+          }
+          runtime.tabBackend = "web-locks";
+          runtime.isTabLeader = true;
+          // Keep localStorage marker fresh so heartbeat-fallback peers do not steal.
+          writeTabHeartbeat();
+          stopTabHeartbeat();
+          runtime.tabHeartbeatTimer = setInterval(writeTabHeartbeat, TAB_HEARTBEAT_MS);
+          if (!settled) { settled = true; resolveClaim(true); }
+          try {
+            await new Promise((release) => {
+              runtime.releaseWebLock = release;
+            });
+          } catch (e) {
+            /* stolen / aborted */
+          } finally {
+            runtime.releaseWebLock = null;
+            stopTabHeartbeat();
+            clearTabHeartbeatIfOurs();
+            if (runtime.isTabLeader) {
+              // Lock stolen by Transfer here — stop poll and show gate.
+              runtime.isTabLeader = false;
+              runtime.tabBackend = null;
+              stopLeaderPollingOnly();
+              showTabGate();
+              watchForTabLeadership();
+            } else {
+              runtime.tabBackend = null;
+            }
+          }
+        }).catch(() => {
+          if (!settled) { settled = true; resolveClaim(false); }
+        });
+      });
+    }
+
+    async function claimTabLeadership({ steal = false } = {}) {
+      if (!runtime.tabId) runtime.tabId = newTabId();
+      if (supportsWebLocks()) {
+        const ok = await holdWebLock(steal);
+        if (ok) return true;
+        if (steal) {
+          // steal should almost always win; fall through to heartbeat as last resort
+        } else {
+          return false;
+        }
+      }
+      if (steal) {
+        startHeartbeatLeadership();
+        return true;
+      }
+      return tryClaimHeartbeatLock();
+    }
+
+    function watchForTabLeadership() {
+      stopTabWatch();
+      runtime.tabWatchTimer = setInterval(async () => {
+        if (runtime.isTabLeader) return;
+        const got = await claimTabLeadership({ steal: false });
+        if (got) {
+          stopTabWatch();
+          await onBecameTabLeader();
+        }
+      }, TAB_HEARTBEAT_MS);
+    }
+
+    /** Pull display/plot settings from localStorage so Transfer matches the other tab. */
+    function reloadSharedUiStateFromStorage() {
+      const local = loadLocal();
+      if (!local) return;
+      applyState(local);
+      fillInputs();
+      fillUnitOptions();
+      fillSolutionModeOptions();
+      fillKnobsModeOptions();
+      fillMineralCategoryOptions();
+      syncMineralPlotOptionLabels();
+      renderSpecies();
+      syncAxisUI();
+      renderGridMeta();
+      syncDisplayFromPlot();
+      syncLayerElementsControl();
+      syncComputeBtn();
+    }
+
+    async function onBecameTabLeader() {
+      hideTabGate();
+      stopTabWatch();
+      runtime.isTabLeader = true;
+      if (!runtime.bootShellReady) {
+        await loadAppShell();
+      } else {
+        // Shell was loaded under the gate (or earlier) — refresh shared settings
+        // (displayMode, subsets, labels, …) written by the previous leader.
+        reloadSharedUiStateFromStorage();
+      }
+      // Reconnect in-flight job, else restore last diagram (same UI as previous tab).
+      const resumed = await resumeActiveJob();
+      if (!resumed) await restoreSessionResult();
+      // Ensure plot uses the reloaded display options (not this tab's stale memory).
+      if (runtime.lastResult && isDiagramMode(activeModeId)
+          && resultMatchesMode(activeModeId, runtime.lastResult)
+          && axisMatchesResult(runtime.lastResult)) {
+        drawDiagram(runtime.lastResult);
+      }
+      runtime.bootResumeDone = true;
+    }
+
+    async function yieldTabLeadershipToPeer() {
+      // Flush in-memory display/plot options before the peer reloads localStorage.
+      persist();
+      stopLeaderPollingOnly();
+      releaseTabLeadership();
+      showTabGate();
+      watchForTabLeadership();
+    }
+
+    async function transferLeadershipHere() {
+      broadcastTabMsg({ type: "yield" });
+      // Give the peer a moment to stop polling before we steal.
+      await new Promise(r => setTimeout(r, 50));
+      const ok = await claimTabLeadership({ steal: true });
+      if (!ok) {
+        setStatus("Could not take over this tab. Try again.", "err");
+        return;
+      }
+      await onBecameTabLeader();
+    }
+
+    function onTabChannelMessage(msg) {
+      if (!msg || msg.from === runtime.tabId) return;
+      if (msg.type === "yield" && runtime.isTabLeader) {
+        yieldTabLeadershipToPeer();
+      } else if (msg.type === "released" && !runtime.isTabLeader) {
+        // Peer closed — try claim immediately.
+        claimTabLeadership({ steal: false }).then(got => {
+          if (got) onBecameTabLeader();
+        });
+      }
+    }
+
+    function setupTabLeadership() {
+      if (!runtime.tabId) runtime.tabId = newTabId();
+      try {
+        if (typeof BroadcastChannel !== "undefined") {
+          runtime.tabChannel = new BroadcastChannel(TAB_CHANNEL_NAME);
+          runtime.tabChannel.onmessage = (ev) => onTabChannelMessage(ev.data);
+        }
+      } catch (e) {
+        runtime.tabChannel = null;
+      }
+      window.addEventListener("storage", (ev) => {
+        if (ev.key === "phaserTabBus.v1" && ev.newValue) {
+          try { onTabChannelMessage(JSON.parse(ev.newValue)); } catch (e) {}
+        }
+        if (ev.key === TAB_LOCK_KEY && !runtime.isTabLeader && !ev.newValue) {
+          claimTabLeadership({ steal: false }).then(got => {
+            if (got) onBecameTabLeader();
+          });
+        }
+      });
+      window.addEventListener("pagehide", () => {
+        if (!runtime.isTabLeader) return;
+        persist();
+        broadcastTabMsg({ type: "released" });
+        // Clear lock metadata only — never DELETE the server job or ACTIVE_JOB.
+        releaseTabLeadership();
+      });
+      const transferBtn = $("tabTransferBtn");
+      if (transferBtn) {
+        transferBtn.addEventListener("click", () => {
+          transferLeadershipHere().catch(() => {});
+        });
+      }
+    }
+
     async function fetchAndRenderJobResult(jobId, cacheKey, st, modeId) {
+      if (!runtime.isTabLeader) return;
       const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
       const adaptive = isDiagramMode(jobModeId) && !!state.adaptiveBoundaries;
       JobProgress.begin(adaptive);
       setLogoComputing(true);
-      const result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
-        JobProgress.setPhase("download", pct == null ? null : pct / 100);
-      });
+      let result;
+      try {
+        result = await apiJsonWithProgress(`/api/job/${jobId}/result`, pct => {
+          JobProgress.setPhase("download", pct == null ? null : pct / 100);
+        });
+      } catch (e) {
+        if (isJobGoneError(e)) {
+          clearGoneServerJob();
+          return;
+        }
+        throw e;
+      }
       JobProgress.setPhase("cache", 0.5);
       const reqSnap = runtime.pendingCacheRequest;
       try {
@@ -6343,6 +6780,7 @@
     }
 
     async function computeDiagram(modeId) {
+      if (!runtime.isTabLeader) return;
       if (!isDiagramMode(modeId)) return;
       const totals = activeTotals();
       const sel = selectedPhases();
@@ -6495,6 +6933,7 @@
     }
 
     function pollJob(jobId, cacheKey, modeId) {
+      if (!runtime.isTabLeader) return;
       clearInterval(runtime.pollTimer);
       runtime.pollEpoch = (runtime.pollEpoch || 0) + 1;
       const epoch = runtime.pollEpoch;
@@ -6507,9 +6946,10 @@
       runtime.pollTimer = setInterval(async () => {
         // Ignore in-flight ticks from a superseded poll session.
         if (epoch !== runtime.pollEpoch) return;
+        if (!runtime.isTabLeader) return;
         try {
           const st = await api(`/api/job/${jobId}`);
-          if (epoch !== runtime.pollEpoch) return;
+          if (epoch !== runtime.pollEpoch || !runtime.isTabLeader) return;
           if (st.status === "queued") {
             const q = queueStatusText(st) || "Queued…";
             JobProgress.setQueued(q.replace(/…$/, ""), (queueShortText(st) || "Queued").replace(/…$/, ""));
@@ -6548,23 +6988,25 @@
           if (epoch !== runtime.pollEpoch) return;
           clearInterval(runtime.pollTimer);
           runtime.pollEpoch += 1;
+          if (isJobGoneError(e)) {
+            clearGoneServerJob();
+            return;
+          }
           JobProgress.fail();
           setLogoComputing(false);
           runtime.activeJobModeId = null;
           runtime.pendingCacheRequest = null;
           setComputeInProgress(false);
-          if (e.message && /not found|404/i.test(e.message)) {
-            clearActiveJob();
-          }
           setStatus(e.message, "err");
         }
       }, 700);
     }
 
     async function resumeActiveJob() {
+      if (!runtime.isTabLeader) return false;
       const rec = loadActiveJob();
       if (!rec?.jobId) return false;
-      runtime.computeStartedAt = null;  // unknown across reloads → omit runtime
+      runtime.computeStartedAt = null;  // unknown across reconnect → omit duration
       const jobModeId = rec.modeId || DEFAULT_MODE_ID;
       runtime.activeJobModeId = jobModeId;
       if (rec.request) runtime.pendingCacheRequest = rec.request;
@@ -6573,7 +7015,7 @@
         if (st.status === "queued" || st.status === "running") {
           const msg = st.status === "queued"
             ? (queueStatusText(st) || "Resuming queued job…")
-            : "Resuming compute after page reload…";
+            : "Resuming compute after reconnect…";
           if (st.status === "queued") {
             JobProgress.setQueued(
               msg.replace(/…$/, ""),
@@ -6601,10 +7043,15 @@
           setStatus(jobErrorStatusText(st), "err");
         }
       } catch (e) {
-        clearActiveJob();
-        runtime.activeJobModeId = null;
-        runtime.pendingCacheRequest = null;
-        setComputeInProgress(false);
+        if (isJobGoneError(e)) {
+          clearGoneServerJob();
+        } else {
+          clearActiveJob();
+          runtime.activeJobModeId = null;
+          runtime.pendingCacheRequest = null;
+          setComputeInProgress(false);
+          setStatus(e.message || GONE_JOB_MSG, "err");
+        }
       }
       return false;
     }
@@ -7900,7 +8347,8 @@
 
     async function restoreSessionResult() {
       try {
-        const raw = sessionStorage.getItem(RESULT_SESSION_KEY);
+        migrateSessionKeyToLocal(RESULT_SESSION_KEY);
+        const raw = lsGet(RESULT_SESSION_KEY);
         if (!raw) return;
         let key = raw;
         let modeId = "phase-diagram";
@@ -8071,18 +8519,8 @@
       });
     }
 
-    async function init() {
-      bindControls();
-      initSidebarResizer();
-      initPlotResizer();
-      initDispCards();
-      initPlotHoverDismiss();
-      initSoftScroll();
-      fitPlotBox();
-      if (window.ResizeObserver) {
-        const wrap = document.querySelector(".plot-wrap");
-        if (wrap) new ResizeObserver(() => triggerPlotResize()).observe(wrap);
-      }
+    async function loadAppShell() {
+      if (runtime.bootShellReady) return true;
       try {
         runtime.cfg = await api("/api/config");
         const dbList = await api("/api/databases");
@@ -8091,7 +8529,7 @@
       } catch (e) {
         setHealth("API offline", "err");
         setStatus("Cannot reach API: " + e.message, "err");
-        return;
+        return false;
       }
 
       const local = loadLocal();
@@ -8110,8 +8548,40 @@
       const initialMode = parseModeFromHash();
       setActiveMode(initialMode, { updateHash: !!location.hash });
       if (!location.hash) setHashForMode(initialMode);
+      runtime.bootShellReady = true;
+      return true;
+    }
+
+    async function init() {
+      migrateSessionKeyToLocal(ACTIVE_JOB_KEY);
+      migrateSessionKeyToLocal(RESULT_SESSION_KEY);
+      bindControls();
+      initSidebarResizer();
+      initPlotResizer();
+      initDispCards();
+      initPlotHoverDismiss();
+      initSoftScroll();
+      fitPlotBox();
+      if (window.ResizeObserver) {
+        const wrap = document.querySelector(".plot-wrap");
+        if (wrap) new ResizeObserver(() => triggerPlotResize()).observe(wrap);
+      }
+
+      setupTabLeadership();
+      const isLeader = await claimTabLeadership({ steal: false });
+      if (!isLeader) {
+        showTabGate();
+        // Prefetch shell under the gate so Transfer here can resume immediately.
+        await loadAppShell();
+        watchForTabLeadership();
+        return;
+      }
+
+      const ok = await loadAppShell();
+      if (!ok) return;
       const resumed = await resumeActiveJob();
       if (!resumed) await restoreSessionResult();
+      runtime.bootResumeDone = true;
     }
 
     init();

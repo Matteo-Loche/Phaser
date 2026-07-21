@@ -262,6 +262,7 @@ def create_job() -> str:
             "queue_position": len(_pending) + 1,
             "queue_size": len(_pending) + 1,
             "created_at": now,
+            # Touched on status/result reads; not used by the reaper (TTL uses created_at / finished_at).
             "last_seen_at": now,
         }
         _prune_jobs_locked()

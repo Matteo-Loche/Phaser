@@ -24,7 +24,7 @@ Key behaviours:
 - **Selectable diagram layers** — compute solid / mineral, aqueous, and/or per-element subset maps independently (`layer_solids`, `layer_aqueous`, `layer_elements`); boundary tracing and packing honour the same toggles.
 - **Per-element aqueous hover** — grid sweep punches the top species per element via PHREEQC `SYS`; Mineral Stability also shows precipitated moles. Hover tooltips are filtered to the active display context.
 - **Browser-side settings** and **result cache** — UI state in `localStorage`; diagram results in IndexedDB (per mode), with a header **History** menu (thumbnails + restore) for prior computes.
-- **Compute reconnect** — refresh or reopen the tab during a run and polling resumes automatically; finished results are fetched when you return.
+- **Compute reconnect** — close the tab or quit the browser during a run and polling resumes from `localStorage` when you return (same origin); finished results are fetched if still on the server. Only one tab is active at a time (second tab shows a Transfer here gate).
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Job wall-clock timeout** — PHREEQC compute (grid + tracing) is hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min); setup/packing/stats are outside that limit so a stuck pool cannot pin the server forever.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
@@ -585,8 +585,8 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 4. On completion: **`done`** or **`error`**.
 5. Queued jobs expose **`queue_position`** (1-based) and **`queue_size`** so the UI can show *"Queued — position 2 of 3"*.
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
-7. **Page reload during compute:** the UI stores the active `job_id` in `sessionStorage` and resumes polling on load. If the job finished while the tab was away, the result is fetched automatically.
-8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h) and queued jobs that were never started after `JOB_QUEUE_TTL_SEC` (default 2 h). Polls update `last_seen_at` on each job.
+7. **Browser reconnect during compute:** the UI stores the active `job_id` in `localStorage` (`phaserActiveJob.v2`) and resumes polling on load after refresh, tab close, or full browser quit (same origin). If the job finished while you were away and is still within `JOB_RESULT_TTL_SEC`, the result is fetched automatically. If the job was already reaped or the server restarted, the UI shows **Job was deleted from the server. Please recompute.** A second tab shows a branded gate (logo + **Transfer here**); only the leader tab polls or starts compute. Closing the browser does **not** DELETE the server job.
+8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h from `finished_at`) and queued jobs after `JOB_QUEUE_TTL_SEC` (default 2 h from `created_at`). Status/result GETs refresh `last_seen_at` for diagnostics, but the reaper does **not** use it for pruning.
 9. **Wall-clock timeout:** once PHREEQC compute starts (base grid and, when enabled, boundary tracing), a timer (and the reaper as a safety net) hard-aborts after `JOB_WALL_TIMEOUT_SEC` (default 5 min). DB/catalog setup, packing, and stats persistence are **outside** that wall clock. Process pools use the **`spawn`** start method (not `fork`) so workers do not inherit the server listen socket. The pool stays **bound** for the whole shutdown so a mid-join abort can still `terminate_pool`; unbinding first used to leave `_running_count` held and block the FIFO queue after a timeout. Children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. Abort checks run through the grid→category-map→trace gap and on packing ticks (client `DELETE` still cancels packing). The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
 10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
 
@@ -904,8 +904,9 @@ Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display rem
 |---------|-------------|----------|
 | `localStorage` | `phaseDiagramState.v8` | UI settings (auto-saved on every edit) |
 | `localStorage` | `phaserLayout.v1` | Sidebar width and plot-panel width |
-| `sessionStorage` | `phaserLastResultKey.v2` | Pointer to the last cached diagram |
-| `sessionStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`) for reconnect after refresh |
+| `localStorage` | `phaserLastResultKey.v2` | Pointer to the last cached diagram (browser-scoped) |
+| `localStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`, `request`) for reconnect after refresh / browser quit |
+| `localStorage` | `phaserTabLock.v1` | Single-tab ownership marker (Web Locks primary; heartbeat fallback on non-HTTPS LAN) |
 | IndexedDB | `phaserResultCache.v23` / `results` | History meta: `modeId`, compute `request`, plot thumbnail (JPEG blob) |
 | IndexedDB | `phaserResultCache.v23` / `resultData` | Packed diagram JSON (loaded only on restore / cache hit) |
 
@@ -919,9 +920,9 @@ On **cache miss**, the job is enqueued; after download the packed result is stor
 
 **History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters and redraws that result as fresh (Compute greys out), opening on the main full-system solid/mineral view (or aqueous if solids were not computed) rather than a leftover element subset. Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
 
-If you refresh during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2`. A job that finished while you were away is fetched and rendered automatically (into the mode that started it).
+If you refresh, close the tab, or quit the browser during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2` when you reopen the same origin (within server TTLs). A job that finished while you were away is fetched and rendered automatically (into the mode that started it) if it is still in server memory; otherwise the UI asks you to recompute. Opening a **second tab** shows a gate (PHASER logo + message + **Transfer here**); transferring moves poll ownership without killing the server job. Closing the other tab (or a stale lock after a crash) also lets the waiting tab take over.
 
-Starting a **new** compute abandons the previous server job reference (running sweeps continue until completion or TTL cleanup).
+Starting a **new** compute (Compute again on the leader tab) abandons the previous server job via `DELETE`. Tab transfer / browser close does **not** abandon the job.
 
 ### Redox axis (log fO₂ / Eh / pe)
 
