@@ -18,7 +18,7 @@ _SCHEMA_VERSION = 1
 TOP_LIMIT = 15
 
 MODE_LABELS = {
-    "phase-diagram": "Predominance",
+    "phase-diagram": "Saturation",
     "mineral-stability": "Mineral Stability",
 }
 

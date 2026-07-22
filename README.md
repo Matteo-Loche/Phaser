@@ -11,7 +11,7 @@
 
 PHASER is a web service for building **pH–pe / pH–Eh geochemical phase diagrams** from PHREEQC thermodynamic databases. Two diagram products share the same grid and UI shell:
 
-- **Predominance** — SI-based solid and aqueous predominance (which species is thermodynamically preferred at each point).
+- **Saturation** — SI-based solid and aqueous predominance (which species is thermodynamically preferred at each point).
 - **Mineral Stability** — assemblage diagrams under `EQUILIBRIUM_PHASES`: **predominant mineral** (argmax precipitated moles) or **co-stability** (all solids with moles > 0 joined).
 
 Users define a chemical system (total concentrations), select solid phases, and the server evaluates a grid of PHREEQC solutions in parallel. The application ships as a **Docker image** (Linux IPhreeqc and PHREEQC databases bundled) or can be run from source on Linux/WSL.
@@ -20,7 +20,7 @@ Key behaviours:
 
 - **Server-side PHREEQC** with multiprocessed grid sweeps and root finding with a **CPU queue** (one sweep at a time by default).
 - **Trace phase edges** (API: `adaptive_boundaries`) — default mode that evaluates the full selected grid, then locates exact category boundaries by root-finding on mixed cells and builds vector fills whose edges share the same divide geometry as the drawn boundary lines (SI predominance and mineral-stability plugins).
-- **Two diagram modes** — Predominance (SI) and Mineral Stability (EQUI assemblage); each keeps an independent result cache and session state in the browser.
+- **Two diagram modes** — Saturation (SI) and Mineral Stability (EQUI assemblage); each keeps an independent result cache and session state in the browser.
 - **Selectable diagram layers** — compute solid / mineral, aqueous, and/or per-element subset maps independently (`layer_solids`, `layer_aqueous`, `layer_elements`); boundary tracing and packing honour the same toggles.
 - **Per-element aqueous hover** — grid sweep punches the top species per element via PHREEQC `SYS`; Mineral Stability also shows precipitated moles. Hover tooltips are filtered to the active display context.
 - **Browser-side settings** and **result cache** — UI state in `localStorage`; diagram results in IndexedDB (per mode), with a header **History** menu (thumbnails + restore) for prior computes.
@@ -28,9 +28,9 @@ Key behaviours:
 - **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
 - **Job wall-clock timeout** — PHREEQC compute (grid + tracing) is hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min); setup/packing/stats are outside that limit so a stuck pool cannot pin the server forever.
 - **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Server usage statistics** — successful Predominance and Mineral Stability computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats?window=…` and the **Statistics** UI mode (mode rankings, top-15 lists, selectable windows from 24 h to all-time).
+- **Server usage statistics** — successful Saturation and Mineral Stability computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats?window=…` and the **Statistics** UI mode (mode rankings, top-15 lists, selectable windows from 24 h to all-time).
 - **Per-IP API rate limiting** — sliding-window caps on all `/api/*` routes, burst limits on compute and database registration, and **post-burst cooldowns** with escalating block duration for repeat abuse (see [API rate limiting](#api-rate-limiting)).
-- **Plotly UI** — single-page shell with **mode navigation** (Predominance · Mineral Stability · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous/mineral layer families, O₂/H₂ gas-limit configuration, vector display, phase labels (name / formula / both, including `"A + B"` joins), per-element hover species, and browser-side settings/result cache.
+- **Plotly UI** — single-page shell with **mode navigation** (Saturation · Mineral Stability · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous/mineral layer families, O₂/H₂ gas-limit configuration, vector display, phase labels (name / formula / both, including `"A + B"` joins), per-element hover species, and browser-side settings/result cache.
 
 ---
 
@@ -423,8 +423,8 @@ Mineral-stability jobs use **`assemblage_dummy_titration`** / **`assemblage_titr
 
 **Isolation from SI predominance.** Assemblage and predominance share `evaluate_point` / `sweep.py`, but:
 
-- Predominance inputs never list solids in the assemblage; `phase_moles` stays empty.
-- Assemblage `USER_PUNCH` filters `SYS` contributors to `ty$ = "aq"` so precipitated solids do not leak into aqueous rankings. Predominance keeps the original short SYS-by-rank punch (no `ty$` filter).
+- Saturation-mode inputs never list solids in the assemblage; `phase_moles` stays empty.
+- Assemblage `USER_PUNCH` filters `SYS` contributors to `ty$ = "aq"` so precipitated solids do not leak into aqueous rankings. Saturation mode keeps the original short SYS-by-rank punch (no `ty$` filter).
 - Category helpers in `phreeqc/mineral_stability.py` are used only on assemblage paths; SI predominance still uses max-SI packing (`category_solid_subset`).
 
 **Category modes** (`MineralCategoryMode` in `mineral_stability.py`):
@@ -629,7 +629,7 @@ Shared behaviour:
    - `aqueous_subsets` — aqueous species predominance maps
 6. Packs **`hover_species`** — per grid cell, top `HOVER_SPECIES_PER_ELEMENT` (default 8) species **per element**, stored as `[name, element_moles, element]` so the client can filter to any active element subset and truncate for display.
 
-Mineral packs also set **`mineral_category_mode`** (`moles` | `costability`). The Predominance compute path calls `pack_grid_results`; the Mineral Stability path calls `pack_mineral_grid_results` / `pack_traced_mineral_display` via `services/compute.py` when `solution_mode` is an assemblage mode.
+Mineral packs also set **`mineral_category_mode`** (`moles` | `costability`). The Saturation compute path calls `pack_grid_results`; the Mineral Stability path calls `pack_mineral_grid_results` / `pack_traced_mineral_display` via `services/compute.py` when `solution_mode` is an assemblage mode.
 
 **Per-element subsets** (`layer_elements`):
 
@@ -725,7 +725,7 @@ Component-gas edges from `trace_gas_limit_segments` are stored in the trace bund
 
 ## Web UI (`static/index.html`)
 
-Single-page app served at `/`. A fixed **header** is shared across all modes: logo, **mode switcher**, compute control, progress, status line, and **database selector**. Diagram modes — **Predominance** and **Mineral Stability** — share the same three-panel workspace: chemistry and axis settings in the **left sidebar**, the **diagram** in the centre, and **display options** in a resizable panel on the **right**. Results are stored independently per mode so you can switch back without losing the other diagram. **Statistics** is a read-only server usage dashboard (no compute on that page).
+Single-page app served at `/`. A fixed **header** is shared across all modes: logo, **mode switcher**, compute control, progress, status line, and **database selector**. Diagram modes — **Saturation** and **Mineral Stability** — share the same three-panel workspace: chemistry and axis settings in the **left sidebar**, the **diagram** in the centre, and **display options** in a resizable panel on the **right**. Results are stored independently per mode so you can switch back without losing the other diagram. **Statistics** is a read-only server usage dashboard (no compute on that page).
 
 ### Modes and routing
 
@@ -733,15 +733,15 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 
 | Route | Label | Compute |
 |-------|-------|---------|
-| `#/phase-diagram` | Predominance | Yes — `/api/compute` (SI predominance packing) |
+| `#/saturation` | Saturation | Yes — `/api/compute` (SI predominance packing) |
 | `#/mineral-stability` | Mineral Stability | Yes — `/api/compute` (assemblage packing + `mineral_category_mode`) |
 | `#/stats` | Statistics | No — server usage dashboard (`GET /api/stats`) |
 
-- **Mode switcher** — dropdown beside the logo (`Mode · Predominance ▼`). The active mode is shown on the button and highlighted in the menu; the document title updates per mode.
+- **Mode switcher** — dropdown beside the logo (`Mode · Saturation ▼`). The active mode is shown on the button and highlighted in the menu; the document title updates per mode.
 - **Compute dispatch** — the header **Compute** button calls the active mode's handler. On **Statistics**, only the button is hidden; **progress and status stay visible** if a job is still running.
 - **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored under the job’s `mode_id`; switching back restores that mode’s diagram from memory or IndexedDB without clobbering the sibling.
 - **Cache keys** include `mode_id` plus the request body (including `mineral_category_mode` for Mineral Stability). Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
-- **Calculation mode** radios always show Dummy / Real electrolyte frames only. Predominance sends `dummy_titration` / `titration`; Mineral Stability maps the same radios to `assemblage_dummy_titration` / `assemblage_titration`.
+- **Calculation mode** radios always show Dummy / Real electrolyte frames only. Saturation sends `dummy_titration` / `titration`; Mineral Stability maps the same radios to `assemblage_dummy_titration` / `assemblage_titration`.
 - **Plot options (Mineral Stability only)** — exclusive **Predominant mineral** (`moles`) vs **Co-stability** (`costability`) with `?` help; changing it marks the diagram stale until recompute.
 
 ### Layout (diagram modes)
@@ -751,7 +751,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 │  [☰]  PHASER  [Mode ▼]  [History] [Compute] [job slot]   Database [▼] ●  │
 ├──────────────┬──────────────────────────────┬───┬───────────────────────┤
 │  Sidebar     │                              │ ║ │  Plot panel           │
-│  (controls)  │   Predominance / Mineral     │ ║ │  (display)            │
+│  (controls)  │   Saturation / Mineral     │ ║ │  (display)            │
 │              │       Stability (Plotly)     │ ║ │                       │
 └──────────────┴──────────────────────────────┴───┴───────────────────────┘
 ```
@@ -778,14 +778,14 @@ Side columns use `--panel-side` (darker than the header `--panel`, slightly lift
 
 ### Statistics dashboard (`#/stats`)
 
-Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB`, gitignored like other `*.sqlite` files). Recorded **only on successful server computes** for Predominance and Mineral Stability (`mode_id` `phase-diagram` / `mineral-stability`) — browser IndexedDB cache hits are excluded.
+Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB`, gitignored like other `*.sqlite` files). Recorded **only on successful server computes** for Saturation and Mineral Stability (`mode_id` `phase-diagram` / `mineral-stability`) — browser IndexedDB cache hits are excluded.
 
 The dashboard **Period** control selects a trailing window (`24h`, `7d`, `30d` default, `90d`, `1y`, or `all`). KPIs, ranked lists, and activity charts all use that window. Ranked lists are capped at the **top 15** entries.
 
 | Metric | Description |
 |--------|-------------|
 | **Diagram count** | Successful server jobs in the selected window |
-| **Top mode** | Most-used product mode (`Predominance` / `Mineral Stability`) with a Modes bar chart (`top_modes`) |
+| **Top mode** | Most-used product mode (`Saturation` / `Mineral Stability`) with a Modes bar chart (`top_modes`) |
 | **Top databases** | Most-used `db_id` values (≤15) |
 | **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) (≤15) |
 | **Layer configurations** | Solid / aqueous / per-element subset combinations (≤15) |
@@ -1118,7 +1118,7 @@ Central defaults for grid bounds, worker count, concurrency, IPhreeqc library pa
 | Catalog SQLite | `PHASER_CATALOG_DB` | `data/catalog.sqlite` | PHREEQC element/phase/species index |
 | Stats SQLite | `PHASER_STATS_DB` | `data/stats.sqlite` | Per-server compute event log |
 | Grid resolution | — | `GRID_LEVELS = 100` (range `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`, 50–200) | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
-| Default solution mode | — | `SOLUTION_MODE_DEFAULT = dummy_titration` | Predominance modes exposed as `/api/config` `solution_modes`; assemblage pair as `assemblage_solution_modes`. All four remain valid on `POST /api/compute`. |
+| Default solution mode | — | `SOLUTION_MODE_DEFAULT = dummy_titration` | Saturation modes exposed as `/api/config` `solution_modes`; assemblage pair as `assemblage_solution_modes`. All four remain valid on `POST /api/compute`. |
 | Default mineral category | — | `MINERAL_CATEGORY_MODE_DEFAULT = moles` | `moles` or `costability`; exposed as `mineral_category_modes` |
 | Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
 | Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Fallback / local-geometry subdivision in adaptive mode |

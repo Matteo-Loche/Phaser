@@ -592,7 +592,7 @@
     .app.mode-phase-diagram #phaseDiagramMain,
     .app.mode-mineral-stability #phaseDiagramMain { display: flex; }
     .app.mode-stats #statsMain { display: flex; }
-    /* Mineral-only plot options (category mode) — hidden on Predominance. */
+    /* Mineral-only plot options (category mode) — hidden on Saturation. */
     .mineral-only { display: none; }
     .app.mode-mineral-stability .mineral-only { display: block; }
     .app.mode-phase-diagram .mineral-only { display: none !important; }
@@ -1806,12 +1806,12 @@
         <button class="mode-btn" id="modeBtn" type="button"
                 aria-haspopup="menu" aria-expanded="false" aria-controls="modeMenu">
           <span class="mode-prefix">Mode</span>
-          <span id="modeBtnLabel">Predominance</span>
+          <span id="modeBtnLabel">Saturation</span>
           <span class="mode-chev" aria-hidden="true">▼</span>
         </button>
         <div class="mode-menu" id="modeMenu" role="menu" hidden>
           <button type="button" role="menuitem" data-mode="phase-diagram">
-            Predominance
+            Saturation
             <span class="mode-desc">Saturation-index maps</span>
           </button>
           <button type="button" role="menuitem" data-mode="mineral-stability">
@@ -2301,7 +2301,7 @@
             <div id="statsAboutBody" class="stats-about-body">Loading…</div>
           </section>
           <p class="stats-footnote">
-            Counts successful server computes for Predominance and Mineral Stability
+            Counts successful server computes for Saturation and Mineral Stability
             in the selected period (recorded separately by mode). Ranked lists show
             the top 15 entries. Browser cache hits are not included.
             Re-open this page (or change the period) to refresh.
@@ -2340,6 +2340,15 @@
     const MODE_HASH_PREFIX = "#/";
     const DEFAULT_MODE_ID = "phase-diagram";
     const DIAGRAM_MODE_IDS = new Set(["phase-diagram", "mineral-stability"]);
+    // URL hash slug may differ from internal mode_id (stats / cache / CSS).
+    const MODE_HASH_BY_ID = {
+      "phase-diagram": "saturation",
+      "mineral-stability": "mineral-stability",
+      stats: "stats",
+    };
+    const MODE_ID_BY_HASH = Object.fromEntries(
+      Object.entries(MODE_HASH_BY_ID).map(([id, slug]) => [slug, id])
+    );
     const RESULT_CACHE_MAX = 24;
     const STATS_WINDOW_KEY = "phaserStatsWindow.v2";
     const STATS_WINDOW_LABELS = {
@@ -2483,8 +2492,8 @@
     const MODES = {
       "phase-diagram": {
         id: "phase-diagram",
-        label: "Predominance",
-        title: "PHASER — Predominance",
+        label: "Saturation",
+        title: "PHASER — Saturation",
         hasCompute: true,
         computeLabelFull: "Compute",
         computeLabelShort: "Run",
@@ -2558,12 +2567,14 @@
 
     function parseModeFromHash() {
       const raw = (location.hash || "").replace(/^#\/?/, "").trim();
-      const id = raw.split("/")[0] || DEFAULT_MODE_ID;
+      const slug = raw.split("/")[0] || MODE_HASH_BY_ID[DEFAULT_MODE_ID];
+      const id = MODE_ID_BY_HASH[slug] || DEFAULT_MODE_ID;
       return MODES[id] ? id : DEFAULT_MODE_ID;
     }
 
     function setHashForMode(modeId) {
-      const next = `${MODE_HASH_PREFIX}${modeId}`;
+      const slug = MODE_HASH_BY_ID[modeId] || MODE_HASH_BY_ID[DEFAULT_MODE_ID];
+      const next = `${MODE_HASH_PREFIX}${slug}`;
       if (location.hash !== next) location.hash = next;
     }
 
@@ -3409,7 +3420,7 @@
 
       if (!data || !data.total_diagrams) {
         body.innerHTML = `<div class="stats-empty">
-          No server computes in the ${htmlEscape(windowLabel)}. Run a Predominance or
+          No server computes in the ${htmlEscape(windowLabel)}. Run a Saturation or
           Mineral Stability diagram to populate these statistics, or pick a wider period.
           Browser cache hits are not counted.
         </div>`;
@@ -4306,7 +4317,7 @@
       return {
         grid: src.grid || result.grid,
         names: src.phase_names || result.phase_names,
-        label: solidKey === "mineral_subsets" ? "Mineral stability" : "Predominance",
+        label: solidKey === "mineral_subsets" ? "Mineral stability" : "Saturation",
         aqueous: [],
       };
     }
@@ -7896,7 +7907,7 @@
     function hoverCellHtml(phase, speciesHtml, precipHtml = "") {
       const p = phase ? `<b>${phase}</b>` : "—";
       if (!precipHtml && !speciesHtml) return p;
-      // Predominance: keep compact aqueous-only hover (no section headers).
+      // Saturation mode: keep compact aqueous-only hover (no section headers).
       if (!precipHtml) {
         return `${p}<br><span style="color:#cbd5e1;font-size:0.92em">${speciesHtml}</span>`;
       }
