@@ -762,13 +762,13 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 | **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below). Soft-scroll; darker `--panel-side` fill |
 | **Diagram** | Plotly canvas sized by `fitPlotBox`: up to **1.1:1** when the container is wider than tall, and **1:1.2** when taller than wide (avoids a stretched wide plot while still filling tall space) |
 | **Right plot panel** | Foldable display controls (Display / Labels / Fill / Overlays) + diagram metadata. Same `--panel-side` fill, padding, and soft-scroll as the sidebar; scrollbar sits on the **inner** edge flush with the plot resizer |
-| **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets width. Widths persist in `phaserLayout.v1` |
+| **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets. On ≤1280px the display bar sits above the plot — drag the horizontal strip between them to resize bar vs diagram height. Sizes persist in `phaserLayout.v1` |
 
 Side columns use `--panel-side` (darker than the header `--panel`, slightly lifted from the plot workspace `--bg`) and tighter `--panel-pad` so cards sit close to the soft scrollbar without large empty gutters. Soft-scroll thumbs stay invisible until hover or while scrolling (same behaviour on both panels).
 
 **Responsive behaviour**
 
-- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · History+Compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar (capped height + soft-scroll so open submenus never crop off-screen); the panel resizer is hidden.
+- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · History+Compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar with a persistent scrollbar and a **horizontal resizer** between the bar and the plot (drag to grow/shrink the bar; double-click resets).
 - **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 8.2s · 27k runs`).
 - **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
 - **≤760px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
@@ -903,7 +903,7 @@ Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display rem
 | Storage | Key / store | Contents |
 |---------|-------------|----------|
 | `localStorage` | `phaseDiagramState.v8` | UI settings (auto-saved on every edit) |
-| `localStorage` | `phaserLayout.v1` | Sidebar width and plot-panel width |
+| `localStorage` | `phaserLayout.v1` | Sidebar width, plot-panel width, and stacked display-bar height |
 | `localStorage` | `phaserLastResultKey.v2` | Pointer to the last cached diagram (browser-scoped) |
 | `localStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`, `request`) for reconnect after refresh / browser quit |
 | `localStorage` | `phaserTabLock.v1` | Single-tab ownership marker (Web Locks primary; heartbeat fallback on non-HTTPS LAN) |

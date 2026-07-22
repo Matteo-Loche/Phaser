@@ -32,6 +32,8 @@
       --sidebar-w: clamp(320px, 30vw, 420px);
       --header-h: 64px;
       --plot-panel-w: clamp(220px, 18vw, 280px);
+      /* Stacked (≤1280px) toolbar height — drag the horizontal resizer to change. */
+      --plot-toolbar-h: min(38vh, 16rem);
       --logo-anim-speed: 1.6s;
       --tap: 40px;
       --fs-base: clamp(0.85rem, 0.8rem + 0.2vw, 0.95rem);
@@ -1504,37 +1506,82 @@
     }
     #plotDiv { width: 100%; height: 100%; }
 
-    /* Narrow/medium screens: options menu moves on top as a wrapping bar. */
+    /* Narrow/medium screens: options menu moves on top as a wrapping bar.
+       Visual order: toolbar → horizontal resizer → plot (DOM order differs). */
     @media (max-width: 1280px) {
       #phaseDiagramMain { flex-direction: column; }
-      .plot-resizer { display: none; }
       .plot-toolbar {
-        order: -1;
-        width: auto;
+        order: 0;
+        width: 100%;
         max-width: 100%;
+        flex: 0 0 auto;
+        height: var(--plot-toolbar-h);
+        min-height: 4.5rem;
+        max-height: min(72vh, 36rem);
         flex-direction: row;
         flex-wrap: wrap;
-        /* Top-align so a collapsed card doesn't stretch to match an open
-           neighbour on the same wrap line (avoids big empty boxes). */
+        /* Pack content to the start — do NOT stretch rows/cards to fill the
+           bar height (that clipped open cards with no scrollbar). */
         align-items: flex-start;
-        align-self: auto;
+        align-content: flex-start;
+        align-self: stretch;
         gap: 0.45rem;
-    /* Cap height and scroll so open submenus never crop off-screen. */
-        max-height: min(38vh, 16rem);
         overflow-x: hidden;
-        overflow-y: auto;
+        /* Always reserve the gutter so scroll is obvious when content overflows. */
+        overflow-y: scroll;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
         /* LTR so wrapped cards read left→right (desktop column uses RTL only
            to park the scrollbar against the resizer). */
         direction: ltr;
-        border-bottom: 1px solid var(--border);
+        border-bottom: none;
       }
-      /* Equal-width tiles in the wrapping top bar (narrow / tablet). */
-      .plot-toolbar .disp-card {
+      /* Always show a usable scrollbar on the stacked bar (soft-scroll hover
+         is easy to miss on touch / when opening a tall card). */
+      .plot-toolbar.soft-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in srgb, var(--muted) 55%, transparent)
+          color-mix(in srgb, var(--border) 55%, transparent);
+      }
+      .plot-toolbar.soft-scroll::-webkit-scrollbar {
+        width: 10px;
+      }
+      .plot-toolbar.soft-scroll::-webkit-scrollbar-track {
+        background: color-mix(in srgb, var(--border) 40%, transparent);
+        border-radius: 999px;
+      }
+      .plot-toolbar.soft-scroll::-webkit-scrollbar-thumb {
+        background: color-mix(in srgb, var(--muted) 65%, transparent);
+        border-radius: 999px;
+      }
+      .plot-resizer {
+        display: block;
+        order: 1;
+        width: 100%;
+        height: 8px;
+        flex: none;
         align-self: stretch;
+        cursor: row-resize;
+      }
+      .plot-resizer::after {
+        width: 38px;
+        height: 4px;
+      }
+      .plot-wrap {
+        order: 2;
+        flex: 1 1 auto;
+        min-height: 0;
+      }
+      /* Equal-width tiles; height follows content so the bar scrolls instead
+         of clipping open card bodies. */
+      .plot-toolbar .disp-card {
+        align-self: flex-start;
         flex: 1 1 calc((100% - 0.9rem) / 3);
         min-width: min(100%, 11.5rem);
         max-width: 100%;
+        height: auto;
         box-sizing: border-box;
+        overflow: visible;
       }
       .plot-toolbar .disp-card-display {
         flex: 1 1 calc((100% - 0.9rem) / 3);
@@ -1573,19 +1620,24 @@
         min-height: 2.2rem;
       }
     }
-    /* Tablets: keep equal tiles; a bit more vertical room for the bar. */
+    /* Tablets: keep equal tiles; default bar a bit taller (still resizable). */
     @media (min-width: 901px) and (max-width: 1280px) {
+      :root { --plot-toolbar-h: min(42vh, 18rem); }
       .plot-toolbar {
-        max-height: min(42vh, 18rem);
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
         align-items: start;
+        align-content: start;
+        grid-auto-rows: min-content;
       }
       .plot-toolbar .disp-card,
       .plot-toolbar .disp-card-display {
         flex: unset;
         width: auto;
         min-width: 0;
+        align-self: start;
+        height: auto;
+        overflow: visible;
       }
       .plot-toolbar > .meta,
       .plot-toolbar > .pill {
@@ -1593,16 +1645,12 @@
       }
     }
     @media (max-width: 900px) {
-      .plot-toolbar {
-        gap: 0.4rem;
-        max-height: min(28vh, 11.5rem);
-      }
+      :root { --plot-toolbar-h: min(32vh, 13rem); }
+      .plot-toolbar { gap: 0.4rem; }
     }
     @media (max-width: 560px) {
-      .plot-toolbar {
-        gap: 0.35rem;
-        max-height: min(24vh, 10rem);
-      }
+      :root { --plot-toolbar-h: min(30vh, 12rem); }
+      .plot-toolbar { gap: 0.35rem; }
       .plot-toolbar .disp-card {
         flex: 1 1 100%;
       }
@@ -2002,7 +2050,7 @@
           </div>
         </div>
         <div class="plot-resizer" id="plotResizer"
-             title="Drag to resize · double-click to reset" aria-hidden="true"></div>
+             title="Drag to resize panel · double-click to reset" aria-hidden="true"></div>
         <div class="plot-toolbar soft-scroll">
           <span class="pill stale" id="stalePill" style="display:none">stale — recompute</span>
 
@@ -5350,37 +5398,67 @@
       return Math.round(Math.max(160, Math.min(px, Math.max(160, max))));
     }
 
+    function clampPlotToolbarH(px) {
+      // Defaults stay modest; drag may grow the bar further (plot keeps ≥~25vh).
+      const max = Math.min(window.innerHeight * 0.72, 560);
+      return Math.round(Math.max(72, Math.min(px, Math.max(72, max))));
+    }
+
     function initPlotResizer() {
       const app = $("app");
       const main = $("phaseDiagramMain");
       const resizer = $("plotResizer");
+      const toolbar = main?.querySelector(".plot-toolbar");
       if (!resizer || !main) return;
 
       const saved = loadLayout();
-      if (saved.plotPanelW) app.style.setProperty("--plot-panel-w", clampPlotPanelW(saved.plotPanelW) + "px");
+      if (saved.plotPanelW) {
+        app.style.setProperty("--plot-panel-w", clampPlotPanelW(saved.plotPanelW) + "px");
+      }
+      if (saved.plotToolbarH) {
+        app.style.setProperty("--plot-toolbar-h", clampPlotToolbarH(saved.plotToolbarH) + "px");
+      }
 
-      // Panel is on top (stacked) at the same breakpoint where the resizer hides.
+      // ≤1280px: toolbar above plot; resizer is a horizontal strip (row-resize).
       const isStacked = () => window.matchMedia("(max-width: 1280px)").matches;
-      let dragging = false, rafPending = false;
+      let dragging = false;
+      let dragMode = "col"; // "col" | "row"
+      let rafPending = false;
       const scheduleResize = () => {
         if (rafPending) return;
         rafPending = true;
         requestAnimationFrame(() => { rafPending = false; triggerPlotResize(); });
       };
+      const syncResizerChrome = () => {
+        const stacked = isStacked();
+        resizer.title = stacked
+          ? "Drag to resize display bar · double-click to reset"
+          : "Drag to resize panel · double-click to reset";
+        resizer.style.cursor = stacked ? "row-resize" : "col-resize";
+      };
+      syncResizerChrome();
 
       resizer.addEventListener("pointerdown", e => {
-        if (isStacked()) return;
         dragging = true;
+        dragMode = isStacked() ? "row" : "col";
         resizer.setPointerCapture?.(e.pointerId);
-        document.body.style.cursor = "col-resize";
+        document.body.style.cursor = dragMode === "row" ? "row-resize" : "col-resize";
         document.body.style.userSelect = "none";
         e.preventDefault();
       });
       window.addEventListener("pointermove", e => {
         if (!dragging) return;
-        // Panel sits on the right: width = distance from cursor to main's right edge.
-        const w = main.getBoundingClientRect().right - e.clientX;
-        app.style.setProperty("--plot-panel-w", clampPlotPanelW(w) + "px");
+        if (dragMode === "row") {
+          const top = (toolbar || main).getBoundingClientRect().top;
+          app.style.setProperty(
+            "--plot-toolbar-h",
+            clampPlotToolbarH(e.clientY - top) + "px"
+          );
+        } else {
+          // Panel sits on the right: width = distance from cursor to main's right edge.
+          const w = main.getBoundingClientRect().right - e.clientX;
+          app.style.setProperty("--plot-panel-w", clampPlotPanelW(w) + "px");
+        }
         scheduleResize();
       });
       window.addEventListener("pointerup", () => {
@@ -5388,18 +5466,34 @@
         dragging = false;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
-        const w = parseInt(getComputedStyle(app).getPropertyValue("--plot-panel-w"), 10);
-        if (w) saveLayout({ plotPanelW: w });
+        if (dragMode === "row") {
+          const h = parseInt(getComputedStyle(app).getPropertyValue("--plot-toolbar-h"), 10);
+          if (h) saveLayout({ plotToolbarH: h });
+        } else {
+          const w = parseInt(getComputedStyle(app).getPropertyValue("--plot-panel-w"), 10);
+          if (w) saveLayout({ plotPanelW: w });
+        }
         triggerPlotResize();
       });
       resizer.addEventListener("dblclick", () => {
-        app.style.removeProperty("--plot-panel-w");
-        saveLayout({ plotPanelW: null });
+        if (isStacked()) {
+          app.style.removeProperty("--plot-toolbar-h");
+          saveLayout({ plotToolbarH: null });
+        } else {
+          app.style.removeProperty("--plot-panel-w");
+          saveLayout({ plotPanelW: null });
+        }
         triggerPlotResize();
       });
       window.addEventListener("resize", () => {
-        const cur = parseInt(getComputedStyle(app).getPropertyValue("--plot-panel-w"), 10);
-        if (cur && !isStacked()) app.style.setProperty("--plot-panel-w", clampPlotPanelW(cur) + "px");
+        syncResizerChrome();
+        if (isStacked()) {
+          const cur = parseInt(getComputedStyle(app).getPropertyValue("--plot-toolbar-h"), 10);
+          if (cur) app.style.setProperty("--plot-toolbar-h", clampPlotToolbarH(cur) + "px");
+        } else {
+          const cur = parseInt(getComputedStyle(app).getPropertyValue("--plot-panel-w"), 10);
+          if (cur) app.style.setProperty("--plot-panel-w", clampPlotPanelW(cur) + "px");
+        }
       });
     }
 
@@ -8476,6 +8570,13 @@
       cards.forEach(el => {
         el.addEventListener("toggle", () => {
           triggerPlotResize();
+          // Stacked bar: keep the opened card in the scroll viewport.
+          if (el.open && window.matchMedia("(max-width: 1280px)").matches) {
+            requestAnimationFrame(() => {
+              try { el.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+              catch (_) { /* ignore */ }
+            });
+          }
         });
       });
     }
