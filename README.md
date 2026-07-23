@@ -1,3 +1,5 @@
+# PHASER
+
 <p align="center">
   <img src="Icon/phaser_logo_v8.png" alt="PHASER — Phase Diagram Calculator" width="420" />
 </p>
@@ -10,32 +12,100 @@
   <a href="https://doi.org/10.5281/zenodo.21145794"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21145794.svg" alt="DOI" /></a>
 </p>
 
-PHASER is a web service for building **pH–pe / pH–Eh geochemical phase diagrams** from PHREEQC thermodynamic databases. Two diagram products share the same grid and UI shell:
+PHASER is a web app for building **pH–pe / pH–Eh / pH-fO2 geochemical phase diagrams** with PHREEQC. You set a chemical system and solid phases; the server runs a multiprocessed grid of equilibria and draws the map. Run it via **Docker** (databases and IPhreeqc included) or from source on Linux/WSL.
 
-- **Saturation** — SI-based solid and aqueous predominance (which species is thermodynamically preferred at each point).
-- **Mineral Stability** — assemblage diagrams under `EQUILIBRIUM_PHASES`: **predominant mineral** (argmax precipitated moles) or **co-stability** (all solids with moles > 0 joined).
+Two diagram products share the same workspace:
 
-Users define a chemical system (total concentrations), select solid phases, and the server evaluates a grid of PHREEQC solutions in parallel. The application ships as a **Docker image** (Linux IPhreeqc and PHREEQC databases bundled) or can be run from source on Linux/WSL.
+- **Saturation** — which solid or dissolved species is thermodynamically preferred at each point (highest Saturation Index).
+- **Mineral Stability** — which solids form when selected phases are held at equilibrium. **Predominant mineral** colours by the solid with the most precipitated amount; **Co-stability** shows every solid that is present (joined as `A + B` when several coexist).
 
-Key behaviours:
+**Main features**
 
-- **Server-side PHREEQC** with multiprocessed grid sweeps and root finding with a **CPU queue** (one sweep at a time by default).
-- **Trace phase edges** (API: `adaptive_boundaries`) — default mode that evaluates the full selected grid, then locates exact category boundaries by root-finding on mixed cells and builds vector fills whose edges share the same divide geometry as the drawn boundary lines (SI predominance and mineral-stability plugins).
-- **Two diagram modes** — Saturation (SI) and Mineral Stability (EQUI assemblage); each keeps an independent result cache and session state in the browser.
-- **Selectable diagram layers** — compute solid / mineral, aqueous, and/or per-element subset maps independently (`layer_solids`, `layer_aqueous`, `layer_elements`); boundary tracing and packing honour the same toggles.
-- **Per-element aqueous hover** — grid sweep punches the top species per element via PHREEQC `SYS`; Mineral Stability also shows precipitated moles. Hover tooltips are filtered to the active display context.
-- **Browser-side settings** and **result cache** — UI state in `localStorage`; diagram results in IndexedDB (per mode), with a header **History** menu (thumbnails + restore) for prior computes.
-- **Compute reconnect** — close the tab or quit the browser during a run and polling resumes from `localStorage` when you return (same origin); finished results are fetched if still on the server. Only one tab is active at a time (second tab shows a Transfer here gate).
-- **Orphan job cleanup** — a background reaper drops stale queued and finished jobs from server memory when the browser never reconnects.
-- **Job wall-clock timeout** — PHREEQC compute (grid + tracing) is hard-killed after `PHASER_JOB_WALL_TIMEOUT_SEC` (default 5 min); setup/packing/stats are outside that limit so a stuck pool cannot pin the server forever.
-- **Database registry** — databases are selected by `db_id` from a server-managed catalog.
-- **Server usage statistics** — successful Saturation and Mineral Stability computes are logged to SQLite (`data/stats.sqlite`); exposed via `GET /api/stats?window=…` and the **Statistics** UI mode (mode rankings, top-15 lists, selectable windows from 24 h to all-time).
-- **Per-IP API rate limiting** — sliding-window caps on all `/api/*` routes, burst limits on compute and database registration, and **post-burst cooldowns** with escalating block duration for repeat abuse (see [API rate limiting](#api-rate-limiting)).
-- **Plotly UI** — single-page shell with **mode navigation** (Saturation · Mineral Stability · Statistics), three-panel layout for diagrams (controls · plot · display options), **database selector in the header**, unified progress bar, **Eh / pe / log fO₂** redox-axis toggle, selectable solid/aqueous/mineral layer families, O₂/H₂ gas-limit configuration, vector display, phase labels (name / formula / both, including `"A + B"` joins), per-element hover species, and browser-side settings/result cache.
+- **Smooth phase boundaries** (default) — boundaries are refined after the base grid so regions draw as clean fills and lines, not only a coarse heatmap style diagram.
+- **Layers** — solid/mineral and aqueous maps, optional per-element filter views; hover on the diagram lists top aqueous species and precipitated amounts in Mineral Stability at this location.
+- **Rich display options** — labels (name / formula / both), colours per phase, fill opacity, boundary width, axis ticks/fonts, callouts, system badges, and more — tweak the figure without recomputing.
+- **PNG download** — export the plot (or selected layers) at chosen size, aspect, and DPI.
+- **No login — stays in your browser** — diagram history, sidebar settings, layout, and colour choices are stored locally on your machine; nothing of that is kept as a user account on the server. Leave mid-run and the job can resume when you return (same browser/origin).
+- **Database picker** — choose a thermodynamic database from the ones included with Phreeqc or add a new one.
+- **Statistics** — server usage dashboard: see the most used chemical systems, average compute times and more.
+
+
+| Topic | Go to |
+|----------|--------|
+| Architecture / repo map | [Architecture overview](#architecture-overview), [Project layout](#project-layout) |
+| Run a diagram | [Part I — Using PHASER](#part-i-using-phaser) |
+| Screens, controls, browser behaviour | [Part II — Web UI](#part-ii-web-ui) |
+| Chemistry / tracing | [Part III — Chemistry engine](#part-iii-chemistry-engine) |
+| Jobs, packing, diagram JSON | [Part IV — Compute and packing](#part-iv-compute-and-packing) |
+| API, security, config | [Part V — API, security and configuration](#part-v-api-security-and-configuration) |
+| Docker / production | [Part VI — Deployment](#part-vi-deployment) |
+| Roadmap | [Part VII — Future features](#part-vii-future-features) |
+
+## Table of contents
+
+- [Getting started](#getting-started)
+- [Architecture overview](#architecture-overview)
+  - [Layer responsibilities](#layer-responsibilities)
+- [Project layout](#project-layout)
+- [Part I — Using PHASER](#part-i-using-phaser)
+  - [1.1 Diagram modes](#11-diagram-modes)
+  - [1.2 Build a diagram](#12-build-a-diagram)
+  - [1.3 Reading the diagram](#13-reading-the-diagram)
+  - [1.4 Useful settings](#14-useful-settings)
+  - [1.5 Water window and gas lines](#15-water-window-and-gas-lines)
+  - [1.6 Databases](#16-databases)
+- [Part II — Web UI](#part-ii-web-ui)
+  - [2.1 Modes and routing](#21-modes-and-routing)
+  - [2.2 Layout (diagram modes)](#22-layout-diagram-modes)
+  - [2.3 Statistics dashboard (`#/stats`)](#23-statistics-dashboard-stats)
+  - [2.4 Header: database](#24-header-database)
+  - [2.5 Left sidebar](#25-left-sidebar)
+  - [2.6 Header: compute and progress](#26-header-compute-and-progress)
+  - [2.7 Right plot panel](#27-right-plot-panel)
+    - [Display](#display)
+    - [Labels](#labels)
+    - [Fill](#fill)
+    - [Overlays](#overlays)
+    - [Axes](#axes)
+    - [Download](#download)
+  - [2.8 Diagram rendering](#28-diagram-rendering)
+  - [2.9 Settings persistence](#29-settings-persistence)
+  - [2.10 Result cache and reconnect](#210-result-cache-and-reconnect)
+  - [2.11 Redox axis (log fO₂ / Eh / pe)](#211-redox-axis-log-fo-eh-pe)
+- [Part III — Chemistry engine](#part-iii-chemistry-engine)
+  - [3.1 Chemistry pipeline](#31-chemistry-pipeline)
+  - [3.2 Database system](#32-database-system)
+    - [Sources](#sources)
+    - [Registry flow](#registry-flow)
+    - [The PHREEQC catalog (`data/catalog.sqlite`)](#the-phreeqc-catalog-datacatalogsqlite)
+  - [3.3 Single-point evaluation and titration frames](#33-single-point-evaluation-and-titration-frames)
+  - [3.4 Convergence rescue (KNOBS)](#34-convergence-rescue-knobs)
+  - [3.5 Water-band mask and gas-limit chemistry](#35-water-band-mask-and-gas-limit-chemistry)
+  - [3.6 Trace phase edges](#36-trace-phase-edges)
+- [Part IV — Compute and packing](#part-iv-compute-and-packing)
+  - [4.1 End-to-end compute flow](#41-end-to-end-compute-flow)
+  - [4.2 Compute queue and job lifecycle](#42-compute-queue-and-job-lifecycle)
+  - [4.3 Parallel workers (grid sweep and boundary trace)](#43-parallel-workers-grid-sweep-and-boundary-trace)
+  - [4.4 Phase selection, packing, and hover](#44-phase-selection-packing-and-hover)
+  - [4.5 Vector display and gas overlay rendering](#45-vector-display-and-gas-overlay-rendering)
+- [Part V — API, security and configuration](#part-v-api-security-and-configuration)
+  - [5.1 HTTP API](#51-http-api)
+  - [5.2 API security and rate limiting](#52-api-security-and-rate-limiting)
+  - [5.3 Configuration reference](#53-configuration-reference)
+- [Part VI — Deployment](#part-vi-deployment)
+  - [6.1 Docker image and compose](#61-docker-image-and-compose)
+  - [6.2 Cloudflare Tunnel](#62-cloudflare-tunnel)
+  - [6.3 Image publishing (GitHub Actions)](#63-image-publishing-github-actions)
+  - [6.4 Production server](#64-production-server)
+  - [6.5 CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs)
+  - [6.6 Network access (LAN & Tailscale)](#66-network-access-lan-tailscale)
+  - [6.7 Deployment checklist](#67-deployment-checklist)
+- [Part VII — Future features](#part-vii-future-features)
+  - [External / generated thermodynamic databases](#external--generated-thermodynamic-databases)
 
 ---
 
-## Quick start
+## Getting started
 
 ### Docker
 
@@ -48,7 +118,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Open [http://localhost:8765](http://localhost:8765). See [Deployment](#deployment) for VPS setup, runtime tuning, and optional Cloudflare Tunnel / Watchtower profiles.
+Open [http://localhost:8765](http://localhost:8765). See [Part VI — Deployment](#part-vi-deployment) for VPS setup, runtime tuning, and optional Cloudflare Tunnel / Watchtower profiles.
 
 To **build the image from source** instead of pulling (developers / CI only):
 
@@ -74,83 +144,12 @@ Open [http://localhost:8765](http://localhost:8765).
 
 Windows Python cannot load Linux `libiphreeqc.so`. Use **WSL** or **Docker** for compute, or install a matching Windows `IPhreeqc` DLL and set **`PHASER_IPHREEQC_LIB`** to its path (see `.env.example` / `config.py`).
 
----
-
-## Project layout
-
-```
-PHASER/
-├── run_server.py          # CLI entry point (uvicorn)
-├── __version__.py         # App version and optional DOI (SemVer)
-├── config.py              # Paths, limits, defaults (env-overridable)
-├── LICENSE.txt            # AGPL-3.0
-├── api/                   # HTTP layer (FastAPI)
-│   ├── app.py             # Application factory, static files, rate-limit middleware
-│   ├── rate_limit.py      # Per-IP sliding-window limits and post-burst cooldowns
-│   ├── models.py          # Pydantic request bodies
-│   ├── dependencies.py    # DB resolution for routes
-│   └── routes/            # One module per API concern
-│       ├── compute.py     # POST /api/compute, job status / result / DELETE
-│       ├── config_routes.py
-│       ├── databases.py
-│       ├── elements.py
-│       ├── phases.py
-│       ├── stats.py
-│       └── health.py
-├── chemistry/             # Unit conversion; formal charge guesses (dummy medium)
-│   ├── units.py
-│   └── charges.py         # formal_eq_of_total_key() for charge-side guessing
-├── db/                    # PHREEQC database handling
-│   ├── registry.py        # Server-side database catalog (trusted paths)
-│   ├── catalog_store.py   # SQLite PHREEQC catalog (elements/phases/species/collisions)
-│   └── stats_store.py     # SQLite per-server compute usage statistics
-├── phreeqc/               # PHREEQC solver integration
-│   ├── catalog.py         # .dat text parsers + optional SI probe → catalog snapshot
-│   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
-│   ├── knobs.py           # Numerical KNOBS retry ladder (convergence rescue)
-│   ├── input_titration.py # Real electrolyte (Cl⁻/NaOH) pH + O₂(g) titration input
-│   ├── input_dummy_titration.py # Dummy-electrolyte titration (SI predominance)
-│   ├── input_assemblage_dummy.py # Dummy titration + EQUI solids (mineral stability)
-│   ├── input_assemblage_titration.py # Real electrolyte + EQUI solids (mineral stability)
-│   ├── mineral_stability.py # Precipitated-mole categories + root scalars (moles / costability)
-│   ├── mineral_stability_trace.py # Adaptive trace orchestration for mineral modes
-│   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
-│   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
-│   ├── sweep.py           # Multiprocessing grid sweep (killable ProcessPool)
-│   ├── adaptive.py        # Adaptive boundary orchestration (SI predominance)
-│   └── boundary_trace.py  # Root-finding tracer (brentq; predominance + mineral plugins)
-├── diagram/               # Phase diagram assembly
-│   ├── phases.py          # Phase name resolution for a chemical system
-│   ├── packer.py          # Pack grid results; SI + mineral-stability category grids
-│   └── vectors.py         # Vector fills (predominance + mineral-stability traced display)
-├── services/              # Orchestration logic
-│   ├── catalog.py         # Startup / background catalog scans (text parse + SI probe)
-│   ├── compute.py         # FIFO compute queue, reaper, wall-clock timeout
-│   ├── job_control.py     # Cancel tokens, spawn ProcessPool, hard-kill on abort
-│   ├── stats.py           # Per-server usage statistics recording
-│   └── species.py         # Species picker suggestions
-├── Icon/                  # Branding assets (served at /icons/)
-│   ├── phaser_logo.svg        # Animated header logo (in-app)
-│   ├── phaser_logo_v8.png     # Static wordmark (README / docs)
-│   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
-├── static/
-│   └── index.html         # Single-page web UI
-├── scripts/
-│   └── smoke_check.py     # Import/registry smoke test
-├── docker-compose.yml     # Server deployment (pull GHCR; optional local build)
-├── Dockerfile             # Image build (used by GitHub Actions and compose --build)
-├── .github/workflows/
-│   └── docker-publish.yml # Build & push to GHCR on main / tags
-└── data/
-    ├── catalog.sqlite     # Auto-created PHREEQC catalog cache (gitignored)
-    ├── stats.sqlite       # Auto-created per-server usage log (gitignored)
-    └── databases/
-        └── generated/     # User-generated .dat files (+ optional .meta.json)
-```
 
 ---
 
 ## Architecture overview
+
+How the browser, API, services, databases, PHREEQC solver, and diagram packers fit together. Folder map: [Project layout](#project-layout). Product use: [Part I](#part-i-using-phaser).
 
 ```mermaid
 flowchart TB
@@ -225,144 +224,505 @@ flowchart TB
 | **diagram** | Turn per-point SI / precipitated-mole / species data into 2D category grids and traced display layers (vector fills batched per category). |
 | **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
 
+
 ---
 
-## Database system
+## Project layout
+
+Repository tree (main packages and entry points). Layer roles: [Architecture overview](#architecture-overview).
+
+```
+PHASER/
+├── run_server.py          # CLI entry point (uvicorn)
+├── __version__.py         # App version and optional DOI (SemVer)
+├── config.py              # Paths, limits, defaults (env-overridable)
+├── LICENSE.txt            # AGPL-3.0
+├── api/                   # HTTP layer (FastAPI)
+│   ├── app.py             # Application factory, static files, rate-limit middleware
+│   ├── rate_limit.py      # Per-IP sliding-window limits and post-burst cooldowns
+│   ├── models.py          # Pydantic request bodies
+│   ├── dependencies.py    # DB resolution for routes
+│   └── routes/            # One module per API concern
+│       ├── compute.py     # POST /api/compute, job status / result / DELETE
+│       ├── config_routes.py
+│       ├── databases.py
+│       ├── elements.py
+│       ├── phases.py
+│       ├── stats.py
+│       └── health.py
+├── chemistry/             # Unit conversion; formal charge guesses (dummy medium)
+│   ├── units.py
+│   └── charges.py         # formal_eq_of_total_key() for charge-side guessing
+├── db/                    # PHREEQC database handling
+│   ├── registry.py        # Server-side database catalog (trusted paths)
+│   ├── catalog_store.py   # SQLite PHREEQC catalog (elements/phases/species/collisions)
+│   └── stats_store.py     # SQLite per-server compute usage statistics
+├── phreeqc/               # PHREEQC solver integration
+│   ├── catalog.py         # .dat text parsers + optional SI probe → catalog snapshot
+│   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
+│   ├── knobs.py           # Numerical KNOBS retry ladder (convergence rescue)
+│   ├── input_titration.py # Real electrolyte (Cl⁻/NaOH) pH + O₂(g) titration input
+│   ├── input_dummy_titration.py # Dummy-electrolyte titration (SI predominance)
+│   ├── input_assemblage_dummy.py # Dummy titration + EQUI solids (mineral stability)
+│   ├── input_assemblage_titration.py # Real electrolyte + EQUI solids (mineral stability)
+│   ├── mineral_stability.py # Precipitated-mole categories + root scalars (moles / costability)
+│   ├── mineral_stability_trace.py # Adaptive trace orchestration for mineral modes
+│   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
+│   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
+│   ├── sweep.py           # Multiprocessing grid sweep (killable ProcessPool)
+│   ├── adaptive.py        # Adaptive boundary orchestration (SI predominance)
+│   └── boundary_trace.py  # Root-finding tracer (brentq; predominance + mineral plugins)
+├── diagram/               # Phase diagram assembly
+│   ├── phases.py          # Phase name resolution for a chemical system
+│   ├── packer.py          # Pack grid results; SI + mineral-stability category grids
+│   └── vectors.py         # Vector fills (predominance + mineral-stability traced display)
+├── services/              # Orchestration logic
+│   ├── catalog.py         # Startup / background catalog scans (text parse + SI probe)
+│   ├── compute.py         # FIFO compute queue, reaper, wall-clock timeout
+│   ├── job_control.py     # Cancel tokens, spawn ProcessPool, hard-kill on abort
+│   ├── stats.py           # Per-server usage statistics recording
+│   └── species.py         # Species picker suggestions
+├── Icon/                  # Branding assets (served at /icons/)
+│   ├── phaser_logo.svg        # Animated header logo (in-app)
+│   ├── phaser_logo_v8.png     # Static wordmark (README / docs)
+│   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
+├── static/
+│   └── index.html         # Single-page web UI
+├── scripts/
+│   └── smoke_check.py     # Import/registry smoke test
+├── docker-compose.yml     # Server deployment (pull GHCR; optional local build)
+├── Dockerfile             # Image build (used by GitHub Actions and compose --build)
+├── .github/workflows/
+│   └── docker-publish.yml # Build & push to GHCR on main / tags
+└── data/
+    ├── catalog.sqlite     # Auto-created PHREEQC catalog cache (gitignored)
+    ├── stats.sqlite       # Auto-created per-server usage log (gitignored)
+    └── databases/
+        └── generated/     # External .dat drop zone (future ingest; optional .meta.json)
+```
+
+
+## Part I — Using PHASER
+
+Short guide for **running diagrams**: what the modes mean, what to click, and how to fix common plot issues. Screen layout: [Part II — Web UI](#part-ii-web-ui). Chemistry: [Part III](#part-iii-chemistry-engine). Compute/packing: [Part IV](#part-iv-compute-and-packing). API/config: [Part V](#part-v-api-security-and-configuration).
+
+### 1.1 Diagram modes
+
+| Mode | What it answers |
+|------|-----------------|
+| **Saturation** | Which solid or dissolved species is preferred at each (pH, redox) point? |
+| **Mineral Stability** | Which solids form when your selected phases are held at equilibrium? **Predominant mineral** = the solid with the largest precipitated amount; **Co-stability** = every solid that is present (`A + B` when several coexist). |
+| **Statistics** | Server usage only — no diagram compute. |
+
+Saturation and Mineral Stability share the workspace (database, History, O₂/H₂ overlays) but keep **separate** results.
+
+**Dummy vs Real** (sidebar): Dummy uses a simple charge-balance medium (typical for predominance maps); Real uses a chloride electrolyte. Pick what matches your modelling intent; chemistry details are in Part III.
+
+### 1.2 Build a diagram
+
+1. Choose **Saturation** or **Mineral Stability**.
+2. Pick a **database** (green status = ready).
+3. Set the **chemical system** (totals; default mmol/kgw) and **temperature**.
+4. Set **pH** and **redox** ranges. Display can be **Eh**, **pe**, or **log fO₂**. pe↔Eh is display-only; switching to/from log fO₂ needs a new compute.
+5. Select **phases** offered for your system.
+6. Choose **layers** (solid/mineral and/or aqueous; optional per-element views). On Mineral Stability, pick Predominant vs Co-stability.
+7. Under **Configuration**: resolution (50–200, default 100), leave **Trace phase edges** on for smooth boundaries, set **Convergence rescue** if needed.
+8. **Compute** — watch the job slot. Long jobs time out around **5 minutes** by default.
+9. **Inspect** — hover for species (and precipitated amounts in Mineral Stability). Right panel: labels, colours, overlays, PNG export.
+10. **History** — reopen prior diagrams (up to 24 in the browser). Closing the tab mid-job: the run can resume when you return.
+
+### 1.3 Reading the diagram
+
+| What you see | What it usually means | What to try |
+|--------------|----------------------|-------------|
+| **White holes / blank patches** inside the chemistry field | Those grid points did not converge | Raise **Convergence rescue** (Standard → Maximum). Slightly coarser chemistry or a different database can also help. |
+| **White bands at oxidising / reducing extremes** with O₂/H₂ labels | Outside the water-stability window (overlay), not a failed solve | Expected with overlays on; adjust O₂/H₂ limits in Configuration if you want a different window. |
+| **Blocky / pixelated map** | Trace phase edges is off | Turn **Trace phase edges** on and recompute. |
+| **Jagged stairs on thin ribbons or tips** | Grid coarser than the feature | Raise **plot resolution**, or accept a local stepped look where many phases meet in one cell. |
+| **Grey regions in the solid/mineral view** | Dissolved species shown as a muted fallback colour | Switch the display to **Aqueous** to colour them properly. |
+| **Stale** pill / Compute active after an edit | Inputs no longer match the plotted result | Press **Compute** again. |
+| **Cached** in the job slot | Same request served from browser history | Expected — no server run. |
+
+Hover always reflects the **base grid** point under the cursor (species list, precipitated amounts). Smooth edges are a drawing refinement of that grid.
+
+### 1.4 Useful settings
+
+| Control | Why it matters |
+|---------|----------------|
+| **Trace phase edges** | On (default): smooth region fills and boundary lines. Off: fast uniform heatmap only. |
+| **Convergence rescue** | How hard the solver retries hard points before leaving them **white**. Off = fastest / more blanks; Standard = recommended; Maximum = fewest blanks / slowest. |
+| **Plot resolution** | Density of the base grid (and compute cost). Higher helps thin fields and reduces stepped fallback. |
+| **Dummy / Real** | Electrolyte frame for the speciation (see modes above). |
+| **O₂ / H₂ limits** | Where the water-window overlay is drawn (defaults 0.21 and 1.0 atm). |
+| **Predominant vs Co-stability** | Mineral Stability only — one “winner” solid vs all solids present. |
+
+How edges are located numerically: [Trace phase edges](#36-trace-phase-edges) in Part III.
+
+### 1.5 Water window and gas lines
+
+O₂/H₂ (and other gas) lines are **overlays**. They do not change which solid/aqueous category won underneath.
+
+- **Water window** — conventional Pourbaix-style band where neither O₂ nor H₂ is over-pressured relative to your limits (defaults: O₂ 0.21 atm, H₂ 1.0 atm). Toggle and limits are in the UI; lines are drawn analytically (no extra PHREEQC per pixel).
+- **Component gases** (CO₂, CH₄, … when in the system) — over-pressure edges from the gas saturation index; refined on the grid.
+
+Equations, packing, and solver wiring: [Vector display and gas overlay rendering](#45-vector-display-and-gas-overlay-rendering) in Part IV.
+
+### 1.6 Databases
+
+Choose a thermodynamic database from the header list. Today that means **builtin** sets shipped with the install / Docker image (green status = catalog ready).
+
+Catalog scanning and name collisions: [Database system](#32-database-system) in Part III. Loading databases from external generators (e.g. PyGCC) is planned — see [Future features](#part-vii-future-features).
+
+---
+
+## Part II — Web UI
+
+Layout, controls, History/cache, and redox display behaviour.
+
+The browser app lives in `static/index.html` (single page at `/`). Fixed **header** (logo, mode switcher, History, Compute, job slot, database). Diagram modes use a three-panel workspace: **left** chemistry/axes/phases/config, **centre** Plotly diagram, **right** display options. **Statistics** hides the diagram chrome.
+
+### 2.1 Modes and routing
+
+Modes are client-side hash routes inside the same `index.html` shell (no extra backend routes):
+
+| Route | Label | Compute |
+|-------|-------|---------|
+| `#/saturation` | Saturation | Yes — `/api/compute` (SI predominance packing) |
+| `#/mineral-stability` | Mineral Stability | Yes — `/api/compute` (assemblage packing + `mineral_category_mode`) |
+| `#/stats` | Statistics | No — server usage dashboard (`GET /api/stats`) |
+
+- **Mode switcher** — dropdown beside the logo (`Mode · Saturation ▼`). The active mode is shown on the button and highlighted in the menu; the document title updates per mode.
+- **Compute dispatch** — the header **Compute** button calls the active mode's handler. On **Statistics**, only the button is hidden; **progress and status stay visible** if a job is still running.
+- **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored under the job’s `mode_id`; switching back restores that mode’s diagram from memory or IndexedDB without clobbering the sibling.
+- **Cache keys** include `mode_id` plus the request body (including `mineral_category_mode` for Mineral Stability). Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
+- **Calculation mode** radios always show Dummy / Real electrolyte frames only. Saturation sends `dummy_titration` / `titration`; Mineral Stability maps the same radios to `assemblage_dummy_titration` / `assemblage_titration`.
+- **Plot options (Mineral Stability only)** — exclusive **Predominant mineral** (`moles`) vs **Co-stability** (`costability`) with `?` help; changing it marks the diagram stale until recompute.
+
+### 2.2 Layout (diagram modes)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│  [☰]  PHASER  [Mode ▼]  [History] [Compute] [job slot]   Database [▼] ●  │
+├──────────────┬──────────────────────────────┬───┬───────────────────────┤
+│  Sidebar     │                              │ ║ │  Plot panel           │
+│  (controls)  │   Saturation / Mineral     │ ║ │  (display)            │
+│              │       Stability (Plotly)     │ ║ │                       │
+└──────────────┴──────────────────────────────┴───┴───────────────────────┘
+```
+
+| Region | Role |
+|--------|------|
+| **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **History** control then standalone **Compute** button, **job slot** (queue pill / progress / report), **Database** label + selector + status dot |
+| **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below). Soft-scroll; darker `--panel-side` fill |
+| **Diagram** | Plotly canvas sized by `fitPlotBox`: up to **1.1:1** when the container is wider than tall, and **1:1.2** when taller than wide (avoids a stretched wide plot while still filling tall space) |
+| **Right plot panel** | Six foldable cards — **Display**, **Labels**, **Fill**, **Overlays**, **Axes**, **Download** — plus plot meta. Same `--panel-side` fill, padding, and soft-scroll as the sidebar; scrollbar sits on the **inner** edge flush with the plot resizer |
+| **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets. On ≤1280px the display bar sits above the plot — drag the horizontal strip between them to resize bar vs diagram height. Sizes persist in `phaserLayout.v1` |
+
+Side columns use `--panel-side` (darker than the header `--panel`, slightly lifted from the plot workspace `--bg`) and tighter `--panel-pad` so cards sit close to the soft scrollbar without large empty gutters. Soft-scroll thumbs stay invisible until hover or while scrolling (same behaviour on both panels).
+
+**Responsive behaviour**
+
+- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · History+Compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar with a persistent scrollbar and a **horizontal resizer** between the bar and the plot (drag to grow/shrink the bar; double-click resets).
+- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 8.2s · 27k runs`).
+- **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
+- **≤760px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
+- **≤560px** — display cards stack full-width in the top toolbar.
+
+**Statistics mode** hides the sidebar and diagram workspace; only the statistics dashboard is shown. The mode switcher and database control remain in the header. Stats load when you open the page (or change the period); there is no background auto-refresh.
+
+### 2.3 Statistics dashboard (`#/stats`)
+
+Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB`, gitignored like other `*.sqlite` files). Recorded **only on successful server computes** for Saturation and Mineral Stability (`mode_id` `phase-diagram` / `mineral-stability`) — browser IndexedDB cache hits are excluded.
+
+The dashboard **Period** control selects a trailing window (`24h`, `7d`, `30d` default, `90d`, `1y`, or `all`). KPIs, ranked lists, and activity charts all use that window. Ranked lists are capped at the **top 15** entries.
+
+| Metric | Description |
+|--------|-------------|
+| **Diagram count** | Successful server jobs in the selected window |
+| **Top mode** | Most-used product mode (`Saturation` / `Mineral Stability`) with a Modes bar chart (`top_modes`) |
+| **Top databases** | Most-used `db_id` values (≤15) |
+| **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) (≤15) |
+| **Layer configurations** | Solid / aqueous / per-element subset combinations (≤15) |
+| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C · Mg`), ranked by frequency (≤15) |
+| **Avg compute time** | Wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds) |
+| **Avg queue at start** | Mean number of jobs ahead when each job began running, captured at enqueue time (`0` = started immediately) |
+| **Avg wait time** | Mean time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
+| **Adaptive vs uniform** | Breakdown of boundary-tracing mode usage |
+| **Activity** | Compute counts in window-scaled buckets (`activity`, also aliased as `activity_24h`): 5 min (24 h), 30 min (7 d), 2 h (30 d), 6 h (90 d), 12 h (1 y); `all` picks a bucket width from the data span (~250–400 points). Each entry is `{bucket_start, count, avg_wait_ms}`. Companion graph plots average queue wait (seconds) per bucket. |
+
+`GET /api/stats?window=24h|7d|30d|90d|1y|all` (default `30d`). Schema and queries live in `db/stats_store.py`; events are written from `services/compute.py` after each successful job.
+
+### 2.4 Header: database
+
+The active PHREEQC database is chosen from the **header** on desktop:
+
+- **Label** — `Database` (or `DB` on very narrow screens).
+- **Selector** — dropdown of catalog-ready databases (`db_id`). Changing it reloads species suggestions, element counts, and phase lists automatically.
+- **Status dot** — green = catalog ready, red = missing/offline. Hover for details; on mobile, tap to open the drawer to the database card.
+
+Elements no longer need a manual reload button — everything refreshes when the database changes.
+
+### 2.5 Left sidebar
+
+| Card | Contents |
+|------|----------|
+| **Database** | *(narrow screens only)* Same `db_id` selector as the header, plus filename / source / catalog-status meta |
+| **Chemical system** | Element picker with concentrations (general element symbols only, e.g. `C` not `C(4)`), unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
+| **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max — **pe −14 to 20** for Eh/pe (stored as `peMin`/`peMax`), independent **log fO₂** bounds for log fO₂ mode. See [Redox axis](#211-redox-axis-log-fo-eh-pe) |
+| **Phases** | Searchable checklist of catalog solids; select all/none |
+| **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips |
+| **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
+
+Changing units auto-converts species concentrations. Editing chemistry, axes, phases, or layer toggles marks the diagram **stale** until recomputed. Layer toggles in Configuration apply to the **next** compute; display controls in the plot panel always reflect the **currently plotted** result (see below).
+
+### 2.6 Header: compute and progress
+
+**Compute** enqueues a server job (or loads an identical request from the browser cache). The **History** control to its left opens saved diagrams for the current mode (see [Result cache and reconnect](#210-result-cache-and-reconnect)). Progress and status live in a shared **job slot** beside the button:
+
+| Slot mode | What shows |
+|-----------|------------|
+| **queued** | Wide/mid: status line (`Queued — position 2 of 3`). Mobile (≤900px): compact pill (`Queued 2/3` or `Queued…`); progress bar hidden |
+| **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, …) |
+| **idle** | Done / error / cache report in the status line (e.g. `Done · 8.2s · 27k runs`) |
+
+While a job runs:
+
+- The logo animates (`.is-computing` on the brand link).
+- A **single unified progress bar** advances through the whole pipeline — one 0–100% fill, not per-phase resets.
+
+**Done** messages put duration first so the narrow job-slot ellipsis does not hide it, e.g. `Done · 8.2s · 40k runs`. Cache hits show **`Cached`**.
+
+The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
+
+**Unified progress budget** (adaptive mode):
+
+| Step | Bar range |
+|------|-----------|
+| Grid sweep | 0–20% |
+| Trace phase edges | 20–90% |
+| Packing | 90–95% |
+| Download / cache / render | 95–100% |
+
+Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement slice), then the same packing and tail segments.
+
+### 2.7 Right plot panel
+
+Display controls describe the **plotted result**, not pending Configuration toggles. Recompute after changing sidebar **Compute layers** to update what can be shown. The six foldable cards match the UI (**Display** open by default). Soft-scroll matches the left sidebar; on phones (≤900px) opening one card closes the others. Open/closed state is remembered in browser storage.
+
+**Configuration vs display.** Sidebar layer checkboxes set the *next* job. The Display card reads the cached result (`layer_solids`, `layer_aqueous`, `layer_elements`). At least one of Solid or Aqueous must stay enabled for compute. The **stale** pill means inputs no longer match the plot.
+
+#### Display
+
+| Control | Effect |
+|---------|--------|
+| **Layer dropdown** | *Solid predominance* / *Mineral map* (label depends on mode) and/or *Aqueous predominance* — only families that were computed |
+| **Element filter** | Which elements define the active subset map (only when per-element subsets were packed); label switches with display mode |
+
+#### Labels
+
+| Control | Effect |
+|---------|--------|
+| **Format** | Solid/mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability / moles-tie joins (`"A + B"`) format each part the same way. Tip uses max clearance inside the **visible** vector fill when tracing is on |
+| **Size** | Phase annotation font (default **14** px, range 10–20) |
+| **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%; square-curve slider). Threshold `max(4, floor(n_cells × pct/100))` |
+| **Arrow callout…** | On (default): overlapping / crowding labels shift aside with an arrow when the leader is clear. Off: names stay at the region tip |
+
+#### Fill
+
+| Control | Effect |
+|---------|--------|
+| **Opacity** | Region fill transparency (default **100%**, range 10–100%). Boundaries stay opaque |
+| **No fill** | Labels only, no fill colours |
+| **Phase / species colour** | Pick a plotted category (**name (formula)**) and set its colour; redraw without recompute. **Reset** restores the built-in/hash default |
+
+Colours persist in `colorByName` (`phaseDiagramState.v8`). In solid/mineral view, aqueous fallback categories stay light grey; switch to Aqueous to recolour them. Non-convergent / `none` cells are **white**; O₂/H₂ over-pressure regions are white gas fills (see [Water window and gas lines](#15-water-window-and-gas-lines)).
+
+#### Overlays
+
+| Control | Effect |
+|---------|--------|
+| **Hover species** | How many aqueous species in the tooltip (default **4**; 2 / 4 / 6 / 8). Display truncate of packed data (jobs pack up to **8** per element) |
+| **System label** | Top-right badge (e.g. `Fe-C`): show/hide + font size (default **20** px, 15–35). Full system, or active element subset when filters are on |
+| **Initial system [C]** | Bottom-left composition box (always the full input system): show/hide + font size (default **16** px, 15–35) |
+| **Boundaries** | Phase and gas-limit polylines on/off + stroke width (default **1** px, 0.25–2.5). Stability/gas dashes scale with width |
+
+**Touch / hover.** Plotly hover sticks on touch until another plot tap; tap outside the data area (or redraw) dismisses via `Plotly.Fx.unhover`.
+
+#### Axes
+
+Live axis styling only (no recompute; also applied to PNG exports):
+
+| Control | Effect |
+|---------|--------|
+| **Ticks X** / **Ticks Y** | **Standard** (Plotly automatic) or fixed step (`every 0.25` … `30` as Plotly `dtick`); wider steps suit log fO₂ |
+| **Tick font** | 8–28 px (default 15) |
+| **Title font** | Axis title (pH / Eh / …), 10–30 px (default 18); `automargin` avoids overlap |
+| **Axis width** | Frame/axis line thickness, 0.5–4 px (default 1) |
+
+#### Download
+
+PNG export (replaces the Plotly camera icon). Ephemeral — not stored in the browser.
+
+| Control | Effect |
+|---------|--------|
+| **Size** | Matches the on-screen plot box (e.g. `842×842 px`, or scaled at higher DPI) |
+| **Aspect** | Export width÷height (0.85–1.25, step 0.025, default **1:1**); live plot unchanged |
+| **DPI** | 100–400 (step 25, default **300**) → Plotly `toImage` **scale** (`dpi/96`) so fonts/lines grow with the image |
+| **Layers** | Active plot plus every packed solid/mineral and aqueous subset (full-system layers labeled **all**); **All** / **None**; **Download selected** uses current Display / Labels / Fill / Overlays without mutating the live plot |
+
+Filenames include bracketed system, family, subset (or **all**), and DPI (e.g. `phaser_[Fe-C]_solids_all_300dpi.png`).
+
+Below the cards, **plot meta** shows convergence count, active layer, temperature, and adaptive stats when a result is loaded.
+
+### 2.8 Diagram rendering
+
+| Mode | Display | Hover |
+|------|---------|-------|
+| **Adaptive** (default) | Vector polygons + exact boundary lines from `diagram/vectors.py` | Invisible base-grid heatmap with phase name + top aqueous species |
+| **Uniform** | Coloured heatmap | Same hover layer |
+
+Vector polygons are batched by category (largest phase first) so Plotly uses one fill trace per phase; within a trace, null-separated rings paint correctly. Stability limits (converged↔failed) render as distinct dashed lines.
+
+Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display remap on pe-native results (no recompute). **log fO₂** is a separate compute mode — switching to or from log fO₂ marks the diagram stale until recomputed.
+
+### 2.9 Settings persistence
+
+| Storage | Key / store | Contents |
+|---------|-------------|----------|
+| `localStorage` | `phaseDiagramState.v8` | UI settings (auto-saved on every edit) |
+| `localStorage` | `phaserLayout.v1` | Sidebar width, plot-panel width, and stacked display-bar height |
+| `localStorage` | `phaserLastResultKey.v2` | Pointer to the last cached diagram (browser-scoped) |
+| `localStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`, `request`) for reconnect after refresh / browser quit |
+| `localStorage` | `phaserTabLock.v1` | Single-tab ownership marker (Web Locks primary; heartbeat fallback on non-HTTPS LAN) |
+| IndexedDB | `phaserResultCache.v23` / `results` | History meta: `modeId`, compute `request`, plot thumbnail (JPEG blob) |
+| IndexedDB | `phaserResultCache.v23` / `resultData` | Packed diagram JSON (loaded only on restore / cache hit) |
+
+Closing the tab or clearing site data resets settings. Cached diagrams and UI settings persist until the browser clears site data (or the user clears History). The result cache keeps at most **24** diagrams (newest kept; oldest evicted).
+
+### 2.10 Result cache and reconnect
+
+Identical compute requests (including `mode_id`, `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, and **layer toggles**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
+
+On **cache miss**, the job is enqueued; after download the packed result is stored in `resultData`, a lightweight history record (request + later thumbnail) in `results`, and the server job is **`DELETE`**d to free memory. Plot thumbnails are captured **once** after a successful compute (or cache hit without a thumb), not when opening the History menu.
+
+**History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters and redraws that result as fresh (Compute greys out), opening on the main full-system solid/mineral view (or aqueous if solids were not computed) rather than a leftover element subset. Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
+
+If you refresh, close the tab, or quit the browser during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2` when you reopen the same origin (within server TTLs). A job that finished while you were away is fetched and rendered automatically (into the mode that started it) if it is still in server memory; otherwise the UI asks you to recompute. Opening a **second tab** shows a gate (PHASER logo + message + **Transfer here**); transferring moves poll ownership without killing the server job. Closing the other tab (or a stale lock after a crash) also lets the waiting tab take over.
+
+Starting a **new** compute (Compute again on the leader tab) abandons the previous server job via `DELETE`. Tab transfer / browser close does **not** abandon the job.
+
+### 2.11 Redox axis (log fO₂ / Eh / pe)
+
+The vertical axis can be shown as **Eh**, **pe**, or **log fO₂**. **pe** and **Eh** are one family: the grid is swept in **`pe`**, and switching between pe and Eh only remaps the y-axis for display (no recompute). **log fO₂** is a separate **native compute mode**: the grid is swept in `(pH, log fO₂)`, typed min/max are exact axis bounds, and switching to or from log fO₂ requires **recompute**. Default display axis: **Eh**; default pe bounds: **−14 to 20** (`PE_MIN`/`PE_MAX`); default log fO₂ bounds: **−90 to 10** (`LOG_FO2_MIN`/`LOG_FO2_MAX`).
+
+**Conversion relations** (all logs base-10; `T` in °C, `T_K = T + 273.15`) — used for pe-mode PHREEQC pinning and pe↔Eh display:
+
+| Axis | From `pe` | Back to `pe` |
+|------|-----------|--------------|
+| **pe** | `pe` | `pe` |
+| **Eh (V)** | `Eh = pe · (ln10 · R · T_K / F)` | `pe = Eh / (ln10 · R · T_K / F)` |
+| **log fO₂** | `log fO₂ = 4 · (pe + pH − log K_O₂)` | `pe = log fO₂ / 4 − pH + log K_O₂` |
+
+where `R = 8.314462618 J mol⁻¹ K⁻¹`, `F = 96485.33212 C mol⁻¹`, `ln10 ≈ 2.302585`, and
+
+```
+log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20.75 at 25 °C
+```
+
+(`log_k_o2_water()` / `log_f_o2()` in `phreeqc/gas_limits.py`; same relation used for `O2(g)` in equilibration.)
+
+**Compute API.** Send `redox_axis`: `"pe"` (default; Eh UI maps here) or `"log_fo2"`. Use `pe_min`/`pe_max` for pe mode; `log_fo2_min`/`log_fo2_max` for log fO₂ mode. Packed results include `redox_axis` so the client knows whether y is native pe or log fO₂.
+
+**Display behaviour.**
+
+| Switch | Recompute? |
+|--------|------------|
+| pe ↔ Eh | No — linear remap, same pe-native grid |
+| pe/Eh ↔ log fO₂ | Yes — stale until recomputed; no remapping of the other mode's grid |
+
+O₂/H₂ stability limits are horizontal in a log fO₂ plot (constant fugacity). Region label placement stays in grid-index space so pe ↔ Eh does not re-pick labels.
+
+---
+
+## Part III — Chemistry engine
+
+Internals for **geochem modelers**: databases, equilibration frames, water-band policy, and boundary geometry. Jobs and packing: [Part IV](#part-iv-compute-and-packing). API and config: [Part V](#part-v-api-security-and-configuration). Product use: [Part I](#part-i-using-phaser).
+
+### 3.1 Chemistry pipeline
+
+PHASER turns a chemical system and axis bounds into labelled (pH, redox) maps: load a thermodynamic database, evaluate each grid point with PHREEQC, optionally trace phase edges, then pack fills/boundaries for the UI. This part covers **what a point means** (databases, titration frames, convergence rescue, water-band policy, tracing geometry). Phase selection, result packing, and vector/gas display: [Part IV — Compute and packing](#part-iv-compute-and-packing). HTTP surface and env: [Part V — API, security and configuration](#part-v-api-security-and-configuration).
+
+### 3.2 Database system
 
 Users select a database by **`db_id`** from a server-managed catalog. Filesystem paths are resolved on the server only.
 
-### Sources
+#### Sources
 
 1. **builtin** — `.dat` files scanned from `BUILTIN_DB_DIRS` (default: USGS Phreeqc Interactive `database/` on Windows/WSL dev; `/opt/phreeqc/database` in the Docker image via `PHASER_BUILTIN_DB_DIRS`).
-2. **generated** — `.dat` files in `data/databases/generated/`, for output from external tools (e.g. PyGCC).
+2. **generated** — directory `data/databases/generated/` exists for external `.dat` files; product integration is still evolving ([Future features](#part-vii-future-features)).
 
-### Registry flow
+#### Registry flow
 
-1. On startup, `db/registry.py` scans configured directories (and rescans after registration).
+1. On startup, `db/registry.py` scans configured directories.
 2. Each file becomes a `DatabaseRecord` with `id`, `name`, `source`, `filename`.
 3. Optional sidecar metadata: `mydb.meta.json` next to `mydb.dat` (display name, `origin_service`, etc.).
 4. `GET /api/databases` returns client-safe records (**no filesystem paths**).
 5. Compute requests pass `db_id`; the server resolves to a trusted absolute path internally.
 
-### The PHREEQC catalog (`data/catalog.sqlite`)
+#### The PHREEQC catalog (`data/catalog.sqlite`)
 
-Everything the UI needs about a database (elements, phases, species, collisions) is
-precomputed into a per-database SQLite catalog at startup and on registration
-(`phreeqc/catalog.py` scans, `db/catalog_store.py` stores). **Inventories are parsed
-from `.dat` text once at scan time**; compute requests read SQLite only (they do not
-re-parse the `.dat` on every job).
+Per-database cache of what the UI and compute need from a `.dat` file (elements, phases, species, collisions). Built by `phreeqc/catalog.py`, stored by `db/catalog_store.py`. **Inventories come from parsing `.dat` text once at scan time**; later API/compute calls read SQLite only (no per-job re-parse).
 
-**How a scan works**
+**Scan timing.** On startup (`services/catalog.py`), the **default** database is scanned synchronously; the rest run in a background thread. Databases in `PHASER_DISABLED_DB_STEMS` are skipped. A failed scan marks the DB `failed` and hides it from the selector. Re-scan without restart for newly dropped files is part of the planned generated-DB flow ([Future features](#part-vii-future-features)).
 
-1. Parse `SOLUTION_MASTER_SPECIES` → accepted totals + dissolved element symbols
-   (element-resolvable keys only; `Alkalinity` / `Acetate` / `E` dropped).
-2. Parse `SOLUTION_SPECIES` → full aqueous species name set (both sides of each reaction).
-3. Parse `PHASES` → solid/gas names + element composition from reactions.
-4. Derive collisions = phase names ∩ aqueous species names.
-5. Run **one** PHREEQC equilibration to attach best-effort `si_probe` values
-   (not a parse check; probe totals prefer bare element keys and skip H/O/E).
-6. Persist the snapshot under a fingerprint + `SCHEMA_VERSION` (rebuild on file or
-   schema change).
+##### SQLite layout
 
-| Catalog data | Source | Why |
-|--------------|--------|-----|
-| Accepted totals / dissolved elements | **`.dat` `SOLUTION_MASTER_SPECIES` text** (`parse_solution_master_species`) | Complete and independent of probe conditions. Element-resolvable keys (`Fe`, `Fe(+3)`, `C(4)`, …); pseudo-totals like `Alkalinity` / `Acetate` are omitted. The UI chemical-system picker shows **general element symbols only** (`C`, `S`, …) from the dissolved-elements list |
-| Aqueous species (grouped per element) | **`.dat` `SOLUTION_SPECIES` text** (`parse_solution_species_names`) | Complete and **independent of temperature / pH / pe**. `SYS("aq")` only reports species present at the probe condition and silently drops complexes such as LLNL `Fe(OH)3` |
-| Phase names, kind (solid/gas), element composition, **display formula** | **`.dat` `PHASES` block text** (`parse_phases`) | Complete and **independent of temperature / pH / pe**. Formula is the stoichiometric LHS reactant from the dissolution reaction (e.g. Goethite → `FeOOH`), not a PHREEQC probe. `SYS("phases")` is condition-dependent and exposes no element composition |
-| Saturation-index metadata (`si_probe`) | **PHREEQC engine** — one `SYS("phases")` equilibration | Best-effort display metadata only — **not** a parse sanity check. Inventories come from text; the probe may miss redox-mismatched solids |
-| Solid/aqueous name collisions | **Derived** — phase names (text) ∩ aqueous species names (text) | e.g. `FeO`, `CuCO3`, `Fe(OH)3` defined as both a solid and an aqueous complex |
+Path: `PHASER_CATALOG_DB` (default `data/catalog.sqlite`). One logical snapshot per `.dat`, keyed by file **SHA-256** (`db_key`). Freshness = matching size / mtime / sha256 **and** `schema_version == SCHEMA_VERSION` (currently `9` in `phreeqc/catalog.py`; bumping it invalidates all caches).
 
-Notes:
+| Table | Key | Columns / contents |
+|-------|-----|-------------------|
+| `databases` | `db_key` | `db_id`, `path`, `filename`, `source`, fingerprint (`size`, `mtime_ns`, `sha256`), `status` (`ready` / `failed`), `error`, `scanned_at`, `schema_version` |
+| `totals` | `(db_key, total_key)` | Accepted master totals + resolved `element` |
+| `elements` | `(db_key, name, kind)` | Dissolved element symbols for the UI picker (`kind = "dis"`) |
+| `phases` | `(db_key, name)` | `kind` (`solid` / `gas`), display `formula`, optional `si_probe` |
+| `phase_elements` | `(db_key, phase_name, element)` | Stoichiometric elements of each phase (subset eligibility) |
+| `species` | `(db_key, element, name)` | Aqueous species names grouped by element (`kind = "aq"`) |
+| `solid_aqueous_collisions` | `(db_key, phase_name)` | Names that exist as both a phase and an aqueous species |
 
-- The `PHASES` / `SOLUTION_SPECIES` / `SOLUTION_MASTER_SPECIES` parsers are bounded by datablock keywords (so trailing `PITZER`/`SIT`/`EXCHANGE_*` blocks are not mis-read). `SOLUTION_SPECIES` reaction tokens are taken from **both sides** of each `=` line (so complexes written as `3 H2O + Fe+3 = Fe(OH)3 + 3 H+` still yield `Fe(OH)3`). Stoichiometric coefficients may be space-separated or **glued** (`1.000Cu+2`, Thermoddem style).
-- The `PHASES` parser takes the phase name as the first token (drops legacy numbers like `Brucite 19`), and reads composition from the **reaction**, not the label (so suffixes like `Ferrihydrite(2L)` don't inject a spurious element `L`). It accepts both two-line entries and same-line `Name = reaction` definitions used by Thermoddem.
-- **Element-subset eligibility** ("which solids can form given only these elements") is pure set logic on stored compositions (`phase elements ⊆ system elements`) — no per-subset PHREEQC probing. Any subset (singles, pairs, triples, full system) resolves correctly, and scans stay fast even for 50+ element databases.
-- **Solid/aqueous collisions** are stored in SQLite and passed to compute on `GridJobParams.solid_aqueous_collisions`; the precipitated solid is labelled `"<name>(s)"` and the aqueous complex keeps the bare name.
-- Some shipped files are **not** full aqueous catalogs (e.g. `Concrete_PHR.dat` is a PHASES-only INCLUDE$ add-on). They may have empty master/species blocks; the registry still indexes them, but they are not used as ordinary compute databases.
-- On startup, `services/catalog.py` scans the **default** database synchronously (so the app fails clearly if it is unusable) and scans the rest in a background thread, logging pass/cached/fail per database. Databases listed in **`PHASER_DISABLED_DB_STEMS`** are omitted from the selector and skipped by catalog scans.
-- Each catalog entry is fingerprinted (path, size, mtime, sha256) and tagged with a `SCHEMA_VERSION`; changing the file or bumping the schema triggers an **automatic rebuild** on next startup. Databases whose scan **fails** are marked `failed` and hidden from the UI database selector rather than offered and then erroring.
-- Local parser regression checks (gitignored `tests/`) cover SOLUTION_SPECIES parsing, every registry `.dat` catalog scan, and a pygcc-generated PHREEQC fixture. Can be made available on demand.
+##### Text parsers (authoritative inventory)
 
-### Registering a generated database
+Parsers read PHREEQC datablocks from the `.dat` file. Blocks are bounded by keywords so trailing `PITZER` / `SIT` / `EXCHANGE_*` are not mis-read.
 
-```bash
-# 1. Copy the .dat file into the generated directory
-cp custom.dat data/databases/generated/
+| Parser | `.dat` block | Writes | Notes |
+|--------|--------------|--------|-------|
+| `parse_solution_master_species` | `SOLUTION_MASTER_SPECIES` | `totals`, `elements` | Keeps element-resolvable keys (`Fe`, `Fe(+3)`, `C(4)`, …); drops pseudo-totals (`Alkalinity`, `Acetate`, `E`). UI picker shows **general symbols only** (`C`, `S`, …) |
+| `parse_solution_species_names` | `SOLUTION_SPECIES` | `species` | Tokens from **both sides** of each `=` line (so `… = Fe(OH)3 + …` still yields `Fe(OH)3`). Coefficients may be spaced or glued (`1.000Cu+2`) |
+| `parse_phases` | `PHASES` | `phases`, `phase_elements` | Name = first token (drops legacy numbers like `Brucite 19`). Composition and display formula from the **reaction** LHS (e.g. Goethite → `FeOOH`), not the label suffix. Gases: name ends with `(g)`. Supports two-line and same-line `Name = reaction` (Thermoddem) |
+| *(derived)* | — | `solid_aqueous_collisions` | Phase names ∩ aqueous species names (e.g. `Fe(OH)3`). At compute time colliding solids are labelled `"<name>(s)"` |
 
-# 2. Optional: add metadata
-cat > data/databases/generated/custom.meta.json <<'EOF'
-{
-  "name": "My custom thermo DB",
-  "origin_service": "pygcc",
-  "origin_job_id": "job-123"
-}
-EOF
+**Element-subset eligibility** (“which solids can form from these elements?”) is set logic on `phase_elements` (`phase ⊆ system`). No per-subset PHREEQC runs.
 
-# 3. Register (or restart server to rescan)
-curl -X POST http://localhost:8765/api/databases/register \
-  -H "Content-Type: application/json" \
-  -d '{"filename": "custom.dat", "metadata": {"name": "My custom thermo DB"}}'
-```
+PHASES-only add-ons (e.g. `Concrete_PHR.dat`) may have empty master/species blocks; the registry can still list them, but they are not ordinary compute databases.
 
-### Environment variables
+##### SI probe (metadata only)
 
-| Variable | Purpose |
-|----------|---------|
-| `PHASER_DB` | Path used to pick the default registry entry when `PHASER_DEFAULT_DB_ID` is unset (matches by file path; typical on Windows dev with ThermoDem; Docker uses scanned builtin DBs) |
-| `PHASER_DEFAULT_DB_ID` | Force default registry id |
-| `PHASER_REPO_URL` | GitHub repo URL for Statistics About (default `https://github.com/matteo-loche/phaser`) |
-| `PHASER_ISSUES_URL` | Bug-report URL (default `{repo}/issues`) |
-| `PHASER_LICENSE_NAME` | License label in About (default detected from `LICENSE` / `LICENSE.txt`) |
-| `PHASER_LICENSE_URL` | License link in About (default `{repo}/blob/main/<license-file>`) |
-| `PHASER_DOI_URL` | Override baked-in Zenodo DOI from `__version__.py` (forks only) |
-| `PHASER_BUILD_ID` | Optional build/commit id (set automatically in CI Docker builds) |
-| `PHASER_DISABLED_DB_STEMS` | Comma-separated database stems/ids to hide from the UI (default: `iso`, `coldchem`, `frezchem`, `kinec-v2`, `kinec-v3`, `phreeqc-rates`, `pitzer`, `sit` — from `iso.dat`, `ColdChem.dat`, `frezchem.dat`, `Kinec.v2.dat`, `Kinec_v3.dat`, `phreeqc_rates.dat`, `pitzer.dat`, `sit.dat`; empty = show all) |
-| `PHASER_BUILTIN_DB_DIRS` | Extra builtin scan dirs (`os.pathsep`-separated) |
-| `PHASER_GENERATED_DB_DIR` | Override generated database directory |
-| `PHASER_CATALOG_DB` | SQLite catalog cache path (default `data/catalog.sqlite`) |
-| `PHASER_STATS_DB` | Per-server usage statistics SQLite path (default `data/stats.sqlite`) |
-| `PHASER_CATALOG_PROBE_AMOUNT` | Total concentration per element for catalog SYS probes (default `1.0` in `mmol/kgw`) |
-| `PHASER_IPHREEQC_LIB` | Server path to `libiphreeqc.so` / `IPhreeqc.dll` (not a compute API field) |
-| `PHASER_HOST` | Bind address (default `0.0.0.0`) |
-| `PHASER_PORT` | Listen port (default `8765`) |
-| `PHASER_MAX_WORKERS` | Server-side parallel PHREEQC worker processes per grid sweep (default `8`; set via compose `.env`, no rebuild; not a compute API field) |
-| `PHASER_MAX_CONCURRENT_JOBS` | Max simultaneous grid sweeps (default `1`) |
-| `PHASER_ADAPTIVE_REFINE_FACTOR` | Fallback / local-geometry subdivision in adaptive mode (default `5`) |
-| `PHASER_MAX_ADAPTIVE_POINTS` | Max total PHREEQC evaluations in adaptive mode (default `120000`) |
-| `PHASER_O2_LIMIT_ATM` | O₂ water-stability limit in atm (default `0.21`); per-job override `o2_limit_atm` |
-| `PHASER_H2_LIMIT_ATM` | H₂ water-stability limit in atm (default `1.0`); per-job override `h2_limit_atm` |
-| `PHASER_COMPONENT_GAS_LIMIT_ATM` | Reference pressure for component-gas over-pressure boundaries (default `1.0`) |
-| `PHASER_KNOBS_MODE` | Default **Convergence rescue** depth for jobs: `standard` (recommended), `default` (UI: *Off* — no extra retries), or `maximum`. Legacy aliases: `off`→`default`, `ladder`→`maximum`. Overridable per job via compute `knobs_mode` |
-| `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | Skip base-sweep PHREEQC outside the O₂/H₂ water band (`true` default) |
-| `PHASER_SWEEP_WATER_MARGIN_CELLS` | Extra base-cell margin beyond the analytic water clip before masking (`1.0` default) |
-| `PHASER_JOB_RESULT_TTL_SEC` | Drop finished job results from server memory after this (default `3600`) |
-| `PHASER_JOB_QUEUE_TTL_SEC` | Drop queued jobs never picked up after this (default `7200`) |
-| `PHASER_JOB_REAPER_INTERVAL_SEC` | Background reaper wake interval in seconds (default `60`) |
-| `PHASER_JOB_WALL_TIMEOUT_SEC` | Hard-kill PHREEQC compute (grid + tracing) after this many seconds from compute start (default `300`). Setup, packing, and stats are excluded. |
-| `PHASER_CPU_LIMIT` | Docker Compose only — max CPUs for the container cgroup (default `8` in `.env.example`) |
-| `PHASER_MEMORY_LIMIT` | Docker Compose only — max RAM for the container (default `8G`) |
-| `PHASER_DATA_DIR` | Docker Compose only — host path mounted to `data/databases/generated` |
-| `CLOUDFLARE_TUNNEL_TOKEN` | Docker Compose `tunnel` profile — Cloudflare tunnel token (never commit) |
-| `WATCHTOWER_INTERVAL` | Docker Compose `watchtower` profile — image check interval in seconds (default `3600`) |
-| `PHASER_RATE_LIMIT` | Enable per-client API rate limits (`1` default; `0` disables) |
-| `PHASER_RATE_LIMIT_WINDOW_SEC` | Sliding-window length in seconds (default `60`) |
-| `PHASER_RATE_LIMIT_API_PER_MIN` | All `/api/*` except `/api/health` (default `600`; `0` = off) |
-| `PHASER_RATE_LIMIT_COMPUTE_PER_MIN` | Burst cap on `POST /api/compute` (default `12`; `0` = off) |
-| `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | After compute burst cap, block that IP (default `600` = 10 min) |
-| `PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN` | Burst cap on `POST /api/databases/register` (default `6`) |
-| `PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC` | Cooldown after register burst (default `300`) |
-| `PHASER_RATE_LIMIT_PHASES_PER_MIN` | Cap on `POST /api/phases` (default `60`) |
-| `PHASER_RATE_LIMIT_COOLDOWN_ESCALATE` | Double cooldown on each repeat offense (`1` default) |
-| `PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC` | Max cooldown duration (default `3600`) |
-| `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC` | Reset strike count after this quiet period (default `86400`) |
+After text parse, the scanner runs **one** converging IPhreeqc equilibration (`converging_phases_probe`) and attaches a best-effort **`si_probe`** on each text phase name via `SYS("phases")`. Totals prefer bare element keys; H/O/E skipped. Amount retries: scales of `PHASER_CATALOG_PROBE_AMOUNT` (default `1.0` mmol/kgw).
 
-See [API rate limiting](#api-rate-limiting) for how buckets, cooldowns, and client IP detection interact.
+| Probe **does** | Probe **does not** |
+|----------------|--------------------|
+| Fill `phases.si_probe` for display / sorting hints | Decide which phases, species, or totals exist |
+| | Drive subset eligibility (`phase_elements` does) |
+| | Guarantee an SI for every phase (missing → `nan`) |
+| | Validate that the `.dat` parse was correct |
+
+Text parse is used instead of `SYS("aq")` / `SYS("phases")` for inventories because those lists are **condition-dependent** and can omit species/phases (e.g. LLNL `Fe(OH)3` as aqueous).
+
+Env overrides for databases: [Configuration reference](#53-configuration-reference).
 
 ---
 
-## PHREEQC solver (`phreeqc/`)
+### 3.3 Single-point evaluation and titration frames
 
-### Single-point evaluation (`engine.py`)
 
 Each grid point `(pH, pe)` is evaluated through **`format_grid_input`**, which dispatches on **`solution_mode`**:
 
@@ -373,7 +733,7 @@ Each grid point `(pH, pe)` is evaluated through **`format_grid_input`**, which d
 | `assemblage_dummy_titration` | Mineral stability — dummy electrolyte + selected solids in `EQUILIBRIUM_PHASES` |
 | `assemblage_titration` | Mineral stability — Cl⁻/NaOH + selected solids in `EQUILIBRIUM_PHASES` |
 
-The sweep coordinate is **`pe`** when `redox_axis` is `pe` (Eh display maps to pe for compute), or **`log fO₂`** when `redox_axis` is `log_fo2` (see [Redox axis](#redox-axis-log-fo₂--eh--pe)).
+The sweep coordinate is **`pe`** when `redox_axis` is `pe` (Eh display maps to pe for compute), or **`log fO₂`** when `redox_axis` is `log_fo2` (see [Redox axis](#211-redox-axis-log-fo-eh-pe)).
 
 #### Titration-style modes (dummy + real electrolyte titration)
 
@@ -385,7 +745,7 @@ The sweep coordinate is **`pe`** when `redox_axis` is `pe` (Eh display maps to p
 log10(fO₂) = 4 · (pe + pH − log K_O₂)        # O2(g) + 4H+ + 4e- = 2H2O
 ```
 
-with `log K_O₂` from `gas_limits.log_k_o2_water()`. Redox is therefore imposed as an oxygen fugacity reservoir — the same thermodynamic definition used for O₂/H₂ water-stability overlays and the `log fO₂` diagram axis (see [Gas management](#gas-management-water-stability--component-gases) and [Redox axis](#redox-axis-log-fo₂--eh--pe)).
+with `log K_O₂` from `gas_limits.log_k_o2_water()`. Redox is therefore imposed as an oxygen fugacity reservoir — the same thermodynamic definition used for O₂/H₂ water-stability overlays and the `log fO₂` diagram axis (see [Water window and gas lines](#15-water-window-and-gas-lines) and [Redox axis](#211-redox-axis-log-fo-eh-pe)).
 
 **Output row.** Both modes produce one `SELECTED_OUTPUT` row per reaction step; `evaluate_point` uses the **last** row (equilibrated state at target pH and O₂ fugacity).
 
@@ -460,19 +820,48 @@ Entry point: `run_adaptive_mineral_stability_sweep(..., category_mode=...)`. O�
 
 SI predominance continues to use `pack_grid_results` / `pack_traced_display` (`layers.solid_subsets`, `diagram_kind="predominance"`).
 
-#### Convergence rescue / KNOBS ladder (`knobs.py`)
+---
 
-Some pH–redox points are hard for the chemical solver to converge. **Convergence rescue** (Configuration; API `knobs_mode`) sets how much effort is spent **retrying** those points before they are left blank (white) on the diagram. The UI options are plain-language; API/env ids stay stable:
+### 3.4 Convergence rescue (KNOBS)
 
-| UI label | API / env id | What happens | Typical use |
-|----------|--------------|--------------|-------------|
-| **Off (fastest)** | `default` | One attempt per point | Fastest; more blank cells |
-| **Standard (recommended)** | `standard` | If a point fails, retry once with more careful solver settings | Default; good speed vs reliability |
-| **Maximum** | `maximum` | Keep retrying with progressively more careful settings | Slowest; fewest blanks |
+Some pH–redox points are hard for the chemical solver to converge. **Convergence rescue** (UI Configuration; compute field / env `knobs_mode` / `PHASER_KNOBS_MODE`) chooses how many **KNOBS profiles** `evaluate_point` tries before leaving the cell blank (white). Implementation: `phreeqc/knobs.py` + the ladder loop in `phreeqc/engine.py`.
 
-Internally those retries escalate PHREEQC **KNOBS** path controls only (`default` → `damped` → `robust` profiles: iterations, step sizes, diagonal scale, numerical derivatives). **`convergence_tolerance` is never loosened.** Server default is `KNOBS_MODE_DEFAULT` / env `PHASER_KNOBS_MODE` (`standard`). Legacy env aliases: `off`→`default`, `ladder`→`maximum`. Successful rescues store **`knobs_level`** on `GridPointResult` (0 / 1 / 2 for the three profiles). Boundary tracing inherits the same depth because `PointEvaluator` calls `evaluate_point`. Selected output is read only on the success path (never after a swallowed exception — stale-output hazard).
+| UI label | API / env id | Profiles tried (in order) |
+|----------|--------------|---------------------------|
+| **Off (fastest)** | `default` | `default` only |
+| **Standard (recommended)** | `standard` | `default` → `damped` |
+| **Maximum** | `maximum` | `default` → `damped` → `robust` |
 
-#### Water-band sweep mask (`gas_limits.py` + `sweep.py`, server defaults)
+Server default is `standard`. Legacy env aliases: `off` / `none` / `fast` → `default`; `ladder` / `full` / `max` → `maximum`.
+
+Each attempt prefixes the grid input with a PHREEQC **`KNOBS` … `END`** block from `KNOBS_PROFILES`, then runs the body (`run_single_profile`). **`-convergence_tolerance` stays `1e-8` on every profile** — rescue never loosens the tolerance; it only changes path controls (iterations, step sizes, diagonal scaling, numerical derivatives):
+
+| Profile | `-iterations` | `-step_size` | `-pe_step_size` | `-diagonal_scale` | `-numerical_derivatives` |
+|---------|---------------|--------------|-----------------|-------------------|--------------------------|
+| `default` | 100 | 100 | 10 | false | false |
+| `damped` | 400 | 10 | 5 | true | false |
+| `robust` | 1200 | 2 | 2 | true | true |
+
+Example of what is sent for the `damped` profile (other profiles differ only in the numeric flags above):
+
+```
+KNOBS
+    -iterations            400
+    -convergence_tolerance 1e-8
+    -step_size             10
+    -pe_step_size          5
+    -diagonal_scale        true
+    -numerical_derivatives false
+END
+```
+
+**Dummy charge flip** (independent of KNOBS depth): for `dummy_titration` / `assemblage_dummy_titration`, each of `default` and `damped` is tried with `flip_charge=False` then `True` (swap `Bgc`/`Bga` charge carrier). The expensive `robust` profile is tried **once** without flip. Real-electrolyte modes have no flip loop.
+
+On success, `GridPointResult.knobs_level` is the profile index (`0` / `1` / `2` for `default` / `damped` / `robust`). Boundary tracing uses the same depth because `PointEvaluator` calls `evaluate_point`. Selected output is read only on the success path (never after a swallowed exception — stale-output hazard).
+
+---
+
+### 3.5 Water-band mask and gas-limit chemistry
 
 In titration-style modes (`dummy_titration`, `titration`, and their assemblage counterparts), the base grid sweep can skip PHREEQC for points outside the analytic O₂/H₂ window (`SWEEP_SKIP_OUTSIDE_WATER = true` by default). Points with `pe + pH` above the O₂ line or below the H₂ line (plus **`SWEEP_WATER_MARGIN_CELLS`** margin in cell units) receive **synthetic** `GridPointResult` rows: `converged=True`, `synthetic_label` such as `O2(g) > 0.21 atm`, and matching `gas_domain` — no PHREEQC call.
 
@@ -480,20 +869,11 @@ Synthetic categories flow through packing and adaptive tracing; numeric boundary
 
 Expected savings: roughly 30–40% fewer base-sweep PHREEQC runs on typical pe–pH frames when the water band covers a minority of the plot.
 
-### Parallel grid sweep (`sweep.py`)
+---
 
-A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs**.
+### 3.6 Trace phase edges
 
-- `ProcessPoolExecutor` spawns worker processes (`PHASER_MAX_WORKERS`, server-configured).
-- Each worker initializes its own IPhreeqc instance and receives **`GridJobParams` once** via the pool initializer (`grid_job_params_from_dict`); per-point tasks carry only `(pH, pe)` (avoids pickling the full job descriptor on every point).
-- Boundary tracing uses the same pattern: workers receive `trace_params`, axis arrays, and tolerances once in `_trace_worker_init`; per-chunk jobs carry only `cells` and corner seed data.
-- `pool.map` uses **`SWEEP_MAP_CHUNKSIZE`** (default `200`, env `PHASER_SWEEP_MAP_CHUNKSIZE`) so several points share one IPC message. This is separate from boundary-trace chunking (see below).
-- `pool.map` evaluates all `(pH, pe)` pairs, preserving order.
-- Progress callback updates job status for the UI poll loop.
-
-### Adaptive boundary tracing (`adaptive.py` + `boundary_trace.py`)
-
-The optional **Trace phase edges** mode (`adaptive_boundaries`) evaluates the full user-selected grid, then traces phase boundaries on mixed cells so the diagram renders as smooth vector geometry without evaluating every fine-grid node.
+UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHASER evaluates the full user-selected grid, then traces phase boundaries on mixed cells so the diagram renders as smooth vector geometry without evaluating every fine-grid node.
 
 **SI predominance** uses `run_adaptive_boundary_sweep` (`trace_mode="predominance"`). **Mineral stability** uses `run_adaptive_mineral_stability_sweep` with `trace_mode` `mineral_moles` or `mineral_costability` (see [Mineral stability](#mineral-stability-assemblage-modes)). Both share the same cell geometry, ProcessPool, crossing cache, and fallback machinery in `boundary_trace.py`.
 
@@ -505,7 +885,7 @@ The optional **Trace phase edges** mode (`adaptive_boundaries`) evaluates the fu
 
    <img src="docs/schemes/trace-base-cell.png" width="520" alt="Base cell: square between four evaluated grid corners; flagged when corner phase labels disagree; mixed edges get brentq later" />
 
-4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with **`_chunk_cells`** batching: ~`workers × TRACE_CHUNK_MULTIPLIER` jobs). Mixed cells are **Morton-sorted** into **contiguous** worker chunks so boundary chains and per-worker point/crossing caches stay local; progress is counted as chunks complete, independent of submission order. For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
+4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (separate ProcessPool after the base sweep; Morton-ordered `_chunk_cells` — see [Parallel workers](#43-parallel-workers-grid-sweep-and-boundary-trace)). For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
    - **2-category cells (chord)** — two corner labels, two edge zeros. `brentq` on each mixed edge finds the zero of a continuous pair scalar; the boundary is the **straight chord** between those zeros (fills = both half-planes of that chord). Example: long Hausmannite | Mn²⁺ edge, or Pyrolusite | Manganite. Pair scalars:
      - SI predominance solid↔solid: `SI_A − SI_B`
      - mineral moles solid↔solid: precipitated-mole difference
@@ -567,37 +947,74 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 | `mineral_category_mode` | `"moles"` or `"costability"` on mineral-stability sweeps |
 | `n_brentq_mol` | Root finds using precipitated-mole scalars (mineral modes) |
 
-Limits (`config.py`):
+**Trace-related defaults** (full env list: [Configuration reference](#53-configuration-reference)):
 
 | Constant | Default | Purpose |
 |----------|---------|---------|
-| `PH_MIN`, `PH_MAX` | 2.0, 12.0 | Default pH axis bounds when the client omits them |
-| `PE_MIN`, `PE_MAX` | −14.0, 20.0 | Default redox (pe) axis bounds for pe/Eh compute mode |
-| `LOG_FO2_MIN`, `LOG_FO2_MAX` | −90.0, 10.0 | Default log fO₂ bounds for `redox_axis=log_fo2` |
-| `GRID_LEVELS` | 100 | Default resolution for both pH and pe/Eh axes |
-| `MIN_GRID_LEVELS` | 50 | Minimum allowed `ph_levels` / `pe_levels` |
-| `MAX_GRID_LEVELS` | 200 | Maximum allowed `ph_levels` / `pe_levels` |
-| `MAX_GRID_POINTS` | 40,000 | Hard cap on `ph_levels × pe_levels` for the **base** grid |
-| `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI and API default for adaptive mode |
-| `ADAPTIVE_REFINE_FACTOR` | 5 | Fallback sub-grid + fine-node factor for traced local geometry (env `PHASER_ADAPTIVE_REFINE_FACTOR`) |
-| `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evaluations in adaptive mode (env `PHASER_MAX_ADAPTIVE_POINTS`) |
-| `BOUNDARY_TRACE_TOLERANCE` | 1e-3 | Phase-boundary root finding (`brentq` / 2D roots; env `PHASER_BOUNDARY_TRACE_TOLERANCE`) |
-| `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed stability edges (looser; env `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE`) |
-| `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N species per element during tracing (env `PHASER_TRACE_TOP_AQ_SPECIES`) |
-| `TOP_AQ_SPECIES_PER_ELEMENT` | 64 | Top-N species per element in the base grid sweep (env `PHASER_TOP_AQ_SPECIES`) |
-| `HOVER_SPECIES_PER_ELEMENT` | 8 | Species kept per element in packed hover data (env `PHASER_HOVER_SPECIES_PER_ELEMENT`) |
-| `TRACE_CHUNK_MULTIPLIER` | 16 | Worker pool chunking multiplier (env `PHASER_TRACE_CHUNK_MULTIPLIER`) |
-| `TRACE_MIN_CELLS_PER_CHUNK` | 4 | Minimum mixed cells per trace chunk (env `PHASER_TRACE_MIN_CELLS_PER_CHUNK`) |
-| `SWEEP_MAP_CHUNKSIZE` | 200 | `ProcessPoolExecutor.map` chunksize for base grid sweep (env `PHASER_SWEEP_MAP_CHUNKSIZE`) |
-| `MAX_PHASES_PER_JOB` | 200 | Max phases per compute request |
-| `MAX_WORKERS` | 8 | Worker processes per sweep (`PHASER_MAX_WORKERS`; server authority) |
-| `MAX_CONCURRENT_JOBS` | 1 | Max simultaneous sweeps server-wide |
-| `JOB_RESULT_TTL_SEC` | 3600 | Drop finished jobs from memory after this (env `PHASER_JOB_RESULT_TTL_SEC`) |
-| `JOB_QUEUE_TTL_SEC` | 7200 | Drop abandoned queued jobs after this (env `PHASER_JOB_QUEUE_TTL_SEC`) |
-| `JOB_REAPER_INTERVAL_SEC` | 60 | Reaper thread interval (env `PHASER_JOB_REAPER_INTERVAL_SEC`) |
-| `JOB_WALL_TIMEOUT_SEC` | 300 | Hard-kill PHREEQC compute after this (env `PHASER_JOB_WALL_TIMEOUT_SEC`); measured from `compute_started_at` while `wall_timeout_armed` |
+| `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI/API default for Trace phase edges |
+| `ADAPTIVE_REFINE_FACTOR` | 5 | Fallback sub-grid / local geometry (`PHASER_ADAPTIVE_REFINE_FACTOR`) |
+| `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evals in adaptive mode |
+| `BOUNDARY_TRACE_TOLERANCE` | 1e-3 | Phase-boundary `brentq` / 2D roots |
+| `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed edges (looser) |
+| `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N during tracing |
+| `TRACE_CHUNK_MULTIPLIER` / `TRACE_MIN_CELLS_PER_CHUNK` | 16 / 4 | Worker chunking for mixed cells |
 
-### Compute queue (`services/compute.py`)
+Worker count, packing, and wall-clock timeout: [Part IV — Compute and packing](#part-iv-compute-and-packing).
+
+---
+
+## Part IV — Compute and packing
+
+How a diagram job runs on the server: enqueue → PHREEQC sweep (and optional edge tracing) → pack layers / hover → vector display for adaptive mode. Covers the FIFO queue, workers, timeouts, and the JSON the UI renders. System map and tree: [Architecture overview](#architecture-overview), [Project layout](#project-layout). Chemistry of a point: [Part III](#part-iii-chemistry-engine). CPU sizing in production: [Part VI — Deployment](#part-vi-deployment).
+
+### 4.1 End-to-end compute flow
+
+```mermaid
+sequenceDiagram
+    participant UI as Browser
+    participant API as Compute API
+    participant Job as Compute service
+    participant Reg as DB registry
+    participant Sw as PHREEQC sweep
+    participant Ad as Adaptive trace
+    participant Tr as Boundary tracer
+    participant Pack as Diagram packer
+    participant Vec as Vector display
+
+    UI->>API: POST /api/compute
+    API->>Job: enqueue job
+    API-->>UI: job_id and queue_position
+    Job->>Reg: resolve db_id to path
+    alt adaptive predominance
+        Job->>Ad: run_adaptive_boundary_sweep
+        Ad->>Tr: root-find boundaries
+        Job->>Pack: pack_grid_results
+        Job->>Vec: pack_traced_display
+    else adaptive mineral stability
+        Job->>Ad: run_adaptive_mineral_stability_sweep
+        Ad->>Tr: root-find boundaries
+        Job->>Pack: pack_mineral_grid_results
+        Job->>Vec: pack_traced_mineral_display
+    else uniform
+        Job->>Sw: run_grid_sweep
+        Job->>Pack: pack_grid_results or pack_mineral_grid_results
+    end
+    Pack-->>Job: layered grids (+ vector display if adaptive)
+    loop Poll while running or after page reload
+        UI->>API: GET job status
+        API-->>UI: progress and phase
+    end
+    UI->>API: GET job result
+    API-->>UI: diagram JSON
+    UI->>UI: IndexedDB cache and Plotly render
+    UI->>API: DELETE job
+```
+
+Details below: [queue](#42-compute-queue-and-job-lifecycle), [parallel workers](#43-parallel-workers-grid-sweep-and-boundary-trace), [packing](#44-phase-selection-packing-and-hover), [vector display](#45-vector-display-and-gas-overlay-rendering).
+
+---
+
+### 4.2 Compute queue and job lifecycle
 
 When several users (or tabs) submit computes at once, extra jobs wait in a **FIFO queue** until a compute slot is free.
 
@@ -617,11 +1034,44 @@ Job statuses: `queued` → `running` → `done` | `error` (including `error_code
 
 ---
 
-## Phase diagram building (`diagram/`)
+### 4.3 Parallel workers (grid sweep and boundary trace)
+
+Both the base grid and (when **Trace phase edges** is on) boundary tracing use a **`ProcessPoolExecutor`** sized by `PHASER_MAX_WORKERS`, bound through `managed_process_pool` so abort/timeout can hard-kill children. They are **separate pools for separate job phases** (sweep finishes, then a new pool runs the trace) — not one shared pool across both stages. Geometry of what gets traced: [Trace phase edges](#36-trace-phase-edges).
+
+#### Base grid (`sweep.py`)
+
+A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs** (minus any synthetic outside-water points).
+
+- Pool initializer `_worker_init`: each child loads IPhreeqc and receives **`GridJobParams` once** (`grid_job_params_from_dict`).
+- Work units are chunks of `(pH, pe)` points (`_worker_eval_chunk`), size **`SWEEP_MAP_CHUNKSIZE`** (default `200`, env `PHASER_SWEEP_MAP_CHUNKSIZE`), submitted via `pool_map_abortable` so wall-timeout abort cannot hang inside a blocking `map`.
+- Progress counts completed points for the UI poll loop.
+
+#### Boundary trace (`boundary_trace.py`)
+
+After the base grid is labelled, only **mixed cells** (disagreeing corner signatures) are traced.
+
+- Pool initializer `_trace_worker_init`: each child gets IPhreeqc plus `trace_params`, base axis arrays, `brentq` tolerances, refine factor, and `trace_mode` (predominance / mineral moles / costability).
+- Mixed cells are **Morton-sorted** (Z-order) and split by `_chunk_cells` into about **`workers × TRACE_CHUNK_MULTIPLIER`** contiguous chunks (floor `TRACE_MIN_CELLS_PER_CHUNK`), so neighboring boundary cells stay on the same worker and reuse its point/crossing caches.
+- Each future runs `_trace_worker_job` with only that chunk’s cell indices and corner seed data (not the full grid).
+- Futures are collected with `iter_futures_abortable`; progress is **chunks completed**. Results are merged in Morton-chunk order for a deterministic bundle.
+
+| | Grid sweep | Boundary trace |
+|--|------------|----------------|
+| Unit of work | `(pH, pe)` points | Mixed base cells |
+| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`) |
+| Heavy payload in init | `GridJobParams` | `trace_params` + axes + tolerances + mode |
+| Per-task payload | Point coordinates | Cell indices + corner seeds |
+| Progress | Points done | Chunks done |
+
+Production CPU / worker sizing: [6.5 CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs).
+
+---
+
+### 4.4 Phase selection, packing, and hover
 
 The `diagram` package exports packers via lazy `__getattr__` so spawned ProcessPool workers can import `diagram.packer` without pulling `vectors` → `gas_limits` → `boundary_trace` into a circular import.
 
-### Phase selection (`phases.py`)
+#### Phase selection (`phases.py`)
 
 Before compute:
 
@@ -629,7 +1079,7 @@ Before compute:
 2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog. Each phase also includes a **`formula`** field parsed from the PHASES reaction for display (the UI toggles mineral name / formula / both client-side without repacking; join labels format each part the same way).
 3. User-selected phases (or auto-discovered set) become the `phases` tuple passed to PHREEQC.
 
-### Result packing (`packer.py`)
+#### Result packing (`packer.py`)
 
 After the sweep, each grid point has SI values and aqueous dominance data (assemblage points also carry `phase_moles`). Two pack entry points keep SI predominance and mineral stability separate:
 
@@ -640,7 +1090,7 @@ After the sweep, each grid point has SI values and aqueous dominance data (assem
 
 Shared behaviour:
 
-1. Builds axis arrays in the native compute coordinate (`pe` or `log fO₂`; see [Redox axis](#redox-axis-log-fo₂--eh--pe)). Packed results echo `redox_axis`.
+1. Builds axis arrays in the native compute coordinate (`pe` or `log fO₂`; see [Redox axis](#211-redox-axis-log-fo-eh-pe)). Packed results echo `redox_axis`.
 2. For each **element subset** enabled by the layer toggles, assigns a category per point:
    - **Solid predominance** (`layer_solids` + SI pack) — highest SI ≥ 0 among eligible phases in that subset; otherwise dominant aqueous species in the subset.
    - **Mineral stability** (`layer_solids` + mineral pack) — `moles` (argmax precipitated moles) or `costability` (all moles > ε joined); otherwise dominant aqueous species in the subset.
@@ -667,7 +1117,7 @@ The packed JSON records which toggles were used: `layer_solids`, `layer_aqueous`
 
 The UI (`static/index.html`) renders these layers as colored regions with Plotly. In adaptive mode, **display** polygons come from `diagram/vectors.py` instead; the packed grids remain for hover only.
 
-### Hover tooltips
+#### Hover tooltips
 
 Hover uses an invisible heatmap over the base grid. At each point the tooltip shows the active category plus aqueous species ranked for the **current display context**:
 
@@ -681,7 +1131,9 @@ Species molalities in hover are PHREEQC's per-element moles (`stoichiometry × s
 
 **Mineral Stability** packs an extra **`hover_precip`** grid: every solid with precipitated moles > 0 at that point (`[label, moles]`, moles descending). The tooltip lists those solids under *Precipitated* and the aqueous ranking under *Aqueous*.
 
-### Vector display (`vectors.py`)
+---
+
+### 4.5 Vector display and gas overlay rendering
 
 When boundary tracing is active, each plottable layer is converted into fill polygons and boundary polylines that are meant to **coincide on the same edges**:
 
@@ -697,17 +1149,9 @@ Shared geometry:
 
 Chemistry rings are clipped to the analytic O₂/H₂ water band in titration-style modes; gas outside regions use closed half-plane polygons.
 
----
+User-facing behaviour: [Water window and gas lines](#15-water-window-and-gas-lines). Chemistry of the water band: [Water-band mask and gas-limit chemistry](#35-water-band-mask-and-gas-limit-chemistry).
 
-## Gas management (water stability & component gases)
-
-PHASER draws two kinds of gas boundaries (`phreeqc/gas_limits.py`). Both are reported as overlay regions/lines on the diagram and never alter the chemistry categories underneath.
-
-O₂/H₂ water-stability overlays apply for all current solution modes — predominance and assemblage (`water_stability_limits_enabled`); the UI O₂/H₂ limit fields always apply.
-
-### Water-stability limits (O₂ / H₂)
-
-Pourbaix diagrams conventionally show the **water stability window**: the region where neither O₂ nor H₂ is supersaturated relative to the liquid. PHASER evaluates these limits as **analytic** functions of `(pH, pe, T)` — no extra PHREEQC runs:
+**Analytic water-stability limits (O₂ / H₂)** — functions of `(pH, pe, T)`; no extra PHREEQC runs:
 
 ```
 log10(fO₂) =  4 · (pe + pH − log K_O₂)        # O2(g) + 4H+ + 4e- = 2H2O
@@ -715,30 +1159,11 @@ log10(fH₂) = -2 · (pe + pH)                   # 2H+ + 2e- = H2(g),  log K ≈
 log K_O₂   = 20.75 + 0.0018 · (T − 25)        # ≈20.75 at 25 °C, linear dT approximation
 ```
 
-A point lies **outside** the water window when its O₂ or H₂ fugacity exceeds a configured limit:
+A point lies outside the water window when its O₂ or H₂ fugacity exceeds a configured limit (defaults `0.21` / `1.0` atm). Each limit line has slope `−1` in `(pH, pe)` space (constant `pe + pH`).
 
-| Region | Condition | Default limit | Config / API |
-|--------|-----------|---------------|--------------|
-| O₂ over-pressure (oxidising) | `log10(fO₂) > log10(o2_limit_atm)` | `0.21` atm (atmospheric pO₂) | `O2_FUGACITY_LIMIT_ATM`, `PHASER_O2_LIMIT_ATM`, request `o2_limit_atm` |
-| H₂ over-pressure (reducing) | `log10(fH₂) > log10(h2_limit_atm)` | `1.0` atm | `H2_FUGACITY_LIMIT_ATM`, `PHASER_H2_LIMIT_ATM`, request `h2_limit_atm` |
+**Component gases** (CO₂, CH₄, …): PHREEQC SI is treated as log fugacity; over-pressure where `SI(gas) − log10(P_ref) > 0` (default `P_ref = 1.0` atm). Edges are refined numerically along the grid (`trace_gas_limit_segments`).
 
-Each limit line has slope `−1` in `(pH, pe)` space (constant `pe + pH`). Segments are clipped to the plot box (`water_gas_boundary_segments`). Labels reflect the active limits, e.g. `O2(g) > 0.21 atm`, `H2(g) > 1 atm` (`water_gas_outside_labels`). Per grid point, `water_gas_domain_labels` records whether the cell lies inside the window or in an O₂/H₂ over-pressure region (`GridPointResult.gas_domain`).
-
-In titration-style modes (`dummy_titration` and `titration`), the equilibration constraint on **`O2(g)`** uses the same `log10(fO₂)` relation, so the plotted O₂ boundary and the imposed redox state share one thermodynamic definition.
-
-### Component-gas limits (CO₂, CH₄, …)
-
-For real gases that are part of the chemical system, the saturation index from PHREEQC **is** the log fugacity. A component gas is "over-pressure" where
-
-```
-SI(gas) − log10(P_ref) > 0                    # component_gas_scalar()
-```
-
-with `P_ref = COMPONENT_GAS_FUGACITY_LIMIT_ATM` (default `1.0` atm, env `PHASER_COMPONENT_GAS_LIMIT_ATM`). These boundaries are **not** analytic — the zero crossing is refined along base-grid cell edges with the same `scipy.optimize.brentq` root-finder used for phase boundaries (`trace_gas_limit_segments`), reusing SI values already punched in `SELECTED_OUTPUT`. Component trace gases are selected per request (`gas_phases`, or `include_common_gases`).
-
-### Rendering
-
-In `diagram/vectors.py` the gas limits become real overlay geometry:
+In `diagram/vectors.py` the gas limits become overlay geometry:
 
 - O₂/H₂ regions are clipped half-planes (Sutherland–Hodgman against the plot box and the chemistry fills). Chemistry fills and boundary segments are clipped to the `pe + pH` water window so they do not bleed past the gas cut. Analytic O₂/H₂ lines are appended in `_pack_one_layer`.
 
@@ -746,241 +1171,11 @@ Component-gas edges from `trace_gas_limit_segments` are stored in the trace bund
 
 ---
 
-## Web UI (`static/index.html`)
+## Part V — API, security and configuration
 
-Single-page app served at `/`. A fixed **header** is shared across all modes: logo, **mode switcher**, compute control, progress, status line, and **database selector**. Diagram modes — **Saturation** and **Mineral Stability** — share the same three-panel workspace: chemistry and axis settings in the **left sidebar**, the **diagram** in the centre, and **display options** in a resizable panel on the **right**. Results are stored independently per mode so you can switch back without losing the other diagram. **Statistics** is a read-only server usage dashboard (no compute on that page).
+HTTP catalogue, abuse protection, and the env / `config.py` reference. Compute and packing: [Part IV](#part-iv-compute-and-packing). Chemistry: [Part III](#part-iii-chemistry-engine).
 
-### Modes and routing
-
-Modes are client-side hash routes inside the same `index.html` shell (no extra backend routes):
-
-| Route | Label | Compute |
-|-------|-------|---------|
-| `#/saturation` | Saturation | Yes — `/api/compute` (SI predominance packing) |
-| `#/mineral-stability` | Mineral Stability | Yes — `/api/compute` (assemblage packing + `mineral_category_mode`) |
-| `#/stats` | Statistics | No — server usage dashboard (`GET /api/stats`) |
-
-- **Mode switcher** — dropdown beside the logo (`Mode · Saturation ▼`). The active mode is shown on the button and highlighted in the menu; the document title updates per mode.
-- **Compute dispatch** — the header **Compute** button calls the active mode's handler. On **Statistics**, only the button is hidden; **progress and status stay visible** if a job is still running.
-- **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored under the job’s `mode_id`; switching back restores that mode’s diagram from memory or IndexedDB without clobbering the sibling.
-- **Cache keys** include `mode_id` plus the request body (including `mineral_category_mode` for Mineral Stability). Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
-- **Calculation mode** radios always show Dummy / Real electrolyte frames only. Saturation sends `dummy_titration` / `titration`; Mineral Stability maps the same radios to `assemblage_dummy_titration` / `assemblage_titration`.
-- **Plot options (Mineral Stability only)** — exclusive **Predominant mineral** (`moles`) vs **Co-stability** (`costability`) with `?` help; changing it marks the diagram stale until recompute.
-
-### Layout (diagram modes)
-
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  [☰]  PHASER  [Mode ▼]  [History] [Compute] [job slot]   Database [▼] ●  │
-├──────────────┬──────────────────────────────┬───┬───────────────────────┤
-│  Sidebar     │                              │ ║ │  Plot panel           │
-│  (controls)  │   Saturation / Mineral     │ ║ │  (display)            │
-│              │       Stability (Plotly)     │ ║ │                       │
-└──────────────┴──────────────────────────────┴───┴───────────────────────┘
-```
-
-| Region | Role |
-|--------|------|
-| **Header** | Animated PHASER logo (rainbow scan while computing), **mode switcher**, **History** control then standalone **Compute** button, **job slot** (queue pill / progress / report), **Database** label + selector + status dot |
-| **Left sidebar** | Chemical system, axes, phases, configuration — collapsible cards (database card on narrow screens only; see below). Soft-scroll; darker `--panel-side` fill |
-| **Diagram** | Plotly canvas sized by `fitPlotBox`: up to **1.1:1** when the container is wider than tall, and **1:1.2** when taller than wide (avoids a stretched wide plot while still filling tall space) |
-| **Right plot panel** | Foldable display controls (Display / Labels / Fill / Overlays) + diagram metadata. Same `--panel-side` fill, padding, and soft-scroll as the sidebar; scrollbar sits on the **inner** edge flush with the plot resizer |
-| **Resizers** | Drag the divider between sidebar and diagram, or between diagram and plot panel; double-click resets. On ≤1280px the display bar sits above the plot — drag the horizontal strip between them to resize bar vs diagram height. Sizes persist in `phaserLayout.v1` |
-
-Side columns use `--panel-side` (darker than the header `--panel`, slightly lifted from the plot workspace `--bg`) and tighter `--panel-pad` so cards sit close to the soft scrollbar without large empty gutters. Soft-scroll thumbs stay invisible until hover or while scrolling (same behaviour on both panels).
-
-**Responsive behaviour**
-
-- **≤1280px** — header becomes a **two-row grid**: row 1 = menu · logo · History+Compute · job slot · database; row 2 = mode switcher. The right plot panel moves **above** the diagram as a wrapping toolbar with a persistent scrollbar and a **horizontal resizer** between the bar and the plot (drag to grow/shrink the bar; double-click resets).
-- **≤900px** — sidebar becomes a slide-out drawer (☰ menu). The database selector moves into the drawer's **Database** card; the header keeps the **Database** / **DB** label and status dot (tap the dot to open the drawer on that card). Job slot moves onto the **mode row** (mode left, queue/progress/report right). Compact queue/report copy (`Queued 2/3`, `Done · 8.2s · 27k runs`).
-- **≥901px** — database selector stays in the header; the sidebar **Database** card is hidden (redundant).
-- **≤760px** — compute button label shortens to **Run**; **Database** label shortens to **DB**; progress bar compacts.
-- **≤560px** — display cards stack full-width in the top toolbar.
-
-**Statistics mode** hides the sidebar and diagram workspace; only the statistics dashboard is shown. The mode switcher and database control remain in the header. Stats load when you open the page (or change the period); there is no background auto-refresh.
-
-### Statistics dashboard (`#/stats`)
-
-Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB`, gitignored like other `*.sqlite` files). Recorded **only on successful server computes** for Saturation and Mineral Stability (`mode_id` `phase-diagram` / `mineral-stability`) — browser IndexedDB cache hits are excluded.
-
-The dashboard **Period** control selects a trailing window (`24h`, `7d`, `30d` default, `90d`, `1y`, or `all`). KPIs, ranked lists, and activity charts all use that window. Ranked lists are capped at the **top 15** entries.
-
-| Metric | Description |
-|--------|-------------|
-| **Diagram count** | Successful server jobs in the selected window |
-| **Top mode** | Most-used product mode (`Saturation` / `Mineral Stability`) with a Modes bar chart (`top_modes`) |
-| **Top databases** | Most-used `db_id` values (≤15) |
-| **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) (≤15) |
-| **Layer configurations** | Solid / aqueous / per-element subset combinations (≤15) |
-| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C · Mg`), ranked by frequency (≤15) |
-| **Avg compute time** | Wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds) |
-| **Avg queue at start** | Mean number of jobs ahead when each job began running, captured at enqueue time (`0` = started immediately) |
-| **Avg wait time** | Mean time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
-| **Adaptive vs uniform** | Breakdown of boundary-tracing mode usage |
-| **Activity** | Compute counts in window-scaled buckets (`activity`, also aliased as `activity_24h`): 5 min (24 h), 30 min (7 d), 2 h (30 d), 6 h (90 d), 12 h (1 y); `all` picks a bucket width from the data span (~250–400 points). Each entry is `{bucket_start, count, avg_wait_ms}`. Companion graph plots average queue wait (seconds) per bucket. |
-
-`GET /api/stats?window=24h|7d|30d|90d|1y|all` (default `30d`). Schema and queries live in `db/stats_store.py`; events are written from `services/compute.py` after each successful job.
-
-### Header: database
-
-The active PHREEQC database is chosen from the **header** on desktop:
-
-- **Label** — `Database` (or `DB` on very narrow screens).
-- **Selector** — dropdown of catalog-ready databases (`db_id`). Changing it reloads species suggestions, element counts, and phase lists automatically.
-- **Status dot** — green = catalog ready, red = missing/offline. Hover for details; on mobile, tap to open the drawer to the database card.
-
-Elements no longer need a manual reload button — everything refreshes when the database changes.
-
-### Left sidebar
-
-| Card | Contents |
-|------|----------|
-| **Database** | *(narrow screens only)* Same `db_id` selector as the header, plus filename / source / catalog-status meta |
-| **Chemical system** | Element picker with concentrations (general element symbols only, e.g. `C` not `C(4)`), unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
-| **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max — **pe −14 to 20** for Eh/pe (stored as `peMin`/`peMax`), independent **log fO₂** bounds for log fO₂ mode. See [Redox axis](#redox-axis-log-fo₂--eh--pe) |
-| **Phases** | Searchable checklist of catalog solids; select all/none |
-| **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips |
-| **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
-
-Changing units auto-converts species concentrations. Editing chemistry, axes, phases, or layer toggles marks the diagram **stale** until recomputed. Layer toggles in Configuration apply to the **next** compute; display controls in the plot panel always reflect the **currently plotted** result (see below).
-
-### Header: compute and progress
-
-**Compute** enqueues a server job (or loads an identical request from the browser cache). The **History** control to its left opens saved diagrams for the current mode (see [Result cache and reconnect](#result-cache-and-reconnect)). Progress and status live in a shared **job slot** beside the button:
-
-| Slot mode | What shows |
-|-----------|------------|
-| **queued** | Wide/mid: status line (`Queued — position 2 of 3`). Mobile (≤900px): compact pill (`Queued 2/3` or `Queued…`); progress bar hidden |
-| **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, …) |
-| **idle** | Done / error / cache report in the status line (e.g. `Done · 8.2s · 27k runs`) |
-
-While a job runs:
-
-- The logo animates (`.is-computing` on the brand link).
-- A **single unified progress bar** advances through the whole pipeline — one 0–100% fill, not per-phase resets.
-
-**Done** messages put duration first so the narrow job-slot ellipsis does not hide it, e.g. `Done · 8.2s · 40k runs`. Cache hits show **`Cached`**.
-
-The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
-
-**Unified progress budget** (adaptive mode):
-
-| Step | Bar range |
-|------|-----------|
-| Grid sweep | 0–20% |
-| Trace phase edges | 20–90% |
-| Packing | 90–95% |
-| Download / cache / render | 95–100% |
-
-Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement slice), then the same packing and tail segments.
-
-### Right plot panel
-
-Display controls describe the **plotted result**, not pending Configuration toggles. Recompute after changing layer options to update them.
-
-Foldable cards (**Display** open by default, then **Labels**, **Fill**, **Overlays**, **Axes**, **Download**) share soft-scroll with the left sidebar. On phones (≤900px) opening one card closes the others; wider layouts allow several open at once and scroll the panel when content exceeds the available height. Each card's open/closed state (both panels) is remembered in browser storage.
-
-| Control | Effect |
-|---------|--------|
-| **Display** | *Solid predominance* / *Mineral map* (label depends on diagram mode) and/or *Aqueous predominance* — only families that were actually computed appear in the dropdown |
-| **Element filter** | Checkboxes for which elements define the active subset map (shown only when per-element subsets were computed; label switches between *Solid elements* / *Aqueous elements* with display mode) |
-| **Phase labels** | Solid / mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability and moles-tie joins (`"A + B"`) format each part with the same mode. Tip uses max clearance inside the **visible** vector fill when tracing is on (base-grid clearance otherwise) |
-| **Label size** | Phase annotation font size in px (default **14**, range 10–20; − / value / +) |
-| **Fill opacity** | Region fill transparency (default **100%**, range 10–100%). Vector fills and uniform heatmaps; boundary polylines stay opaque |
-| **Fill colour** | Select a currently plotted mineral, phase, ion, aqueous species, or co-stability join (listed as **name (formula)**) and choose its colour with the browser-native colour picker. Changes redraw immediately without recompute; **Reset** restores the built-in/hash default |
-| **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%). Slider uses a square curve for finer control near 0%. Threshold is `max(4, floor(n_cells × pct/100))` |
-| **Arrow callout for conflict or small regions** | When on (default), labels that overlap, would cover another tip, or hide their own small patch (≥ ~92% of the visible bbox) shift aside with an arrow when the leader is clear; otherwise they shift without an arrow. When off, all names stay at the region tip (overlap allowed) |
-| **Hover species** | How many aqueous species to list in the plot hover tooltip (default **4**; choices 2 / 4 / 6 / 8). Display-only truncate of packed `hover_species`; new jobs pack up to **8** per element |
-| **System label** | Top-right chemical-system badge (e.g. `Fe-C`): show/hide toggle plus − / value / + font size (default **20** px, range 15–35). Full input system, or the active element subset when per-element filters are on |
-| **Initial system [C]** | Bottom-left box listing overall initial input species and concentrations (e.g. `Fe = 1 mmol/kgw`; display units from the job): on by default; − / value / + font size (default **16** px, range 15–35). Always the full input system (not the element subset filter) |
-| **Boundary width** | Phase-boundary stroke thickness in px (default **1**, range 0.25–2.5, step 0.25). Stability/gas-limit dashes scale with it; show/hide via **Boundaries** |
-| **No fill** | Region labels without fill colours |
-| **Boundaries** | Phase and gas-limit boundary polylines |
-| **Axes** | Live styling of the plot axes (redraw only, no recompute; also applied to PNG exports). **Ticks X** / **Ticks Y** independent tick-spacing dropdowns — **Standard** (Plotly automatic) or a fixed step (`every 0.25 / 0.5 / 1 / 2 / 4 / 5 / 10 / 20 / 30`, applied as Plotly `dtick`); the wider steps suit log fO₂ ranges. **Tick font** (px, 8–28, default 15), **Title font** (axis pH / Eh title, px, 10–30, default 18), and **Axis width** (frame/axis line thickness, px, 0.5–4 step 0.5, default 1). Axis titles use `automargin` so labels never overlap when fonts grow |
-| **Download** | PNG export (replaces the Plotly camera icon). **Size** matches the on-screen plot box (shown as e.g. `842×842 px`, or `842×842 → 2631×2631 px` at higher DPI) so layout matches what you see. **Aspect** − / value / + in steps of **0.025** (range **0.85–1.25**, default **1:1**); live plot unchanged. **DPI** − / value / + in steps of **25** (range **100–400**, default **300**) maps to Plotly `toImage` **scale** (`dpi/96`), which enlarges fonts and lines with the image — unlike bumping width/height alone, which would shrink labels relatively. **Layers** checklist: the active plot plus every packed solid/mineral and aqueous subset (full-system layers labeled **all** instead of listing every element); **All** / **None**; **Download selected** uses current Display / Labels / Fill / Overlays without mutating the live plot. Filenames include the bracketed initial system, family, subset (or **all**), and DPI (e.g. `phaser_[Fe-C]_solids_all_300dpi.png`). PNGs are ephemeral (not kept in browser storage) |
-| **Plot meta** | Convergence count, active layer, temperature, adaptive stats |
-
-**Touch / hover.** Plotly hover labels stick on touch devices until another plot tap; tapping anywhere outside the plot data area (or redrawing the figure) dismisses them via `Plotly.Fx.unhover`.
-
-**Configuration vs display.** The sidebar **Compute layers** checkboxes set what the next job will pack and trace. The plot panel dropdown and element filter read from the cached result (`layer_solids`, `layer_aqueous`, `layer_elements` in the packed JSON). Toggling layers before recomputing shows the **stale** pill but does not change the plot or its display options until **Compute** finishes.
-
-At least one of **Solid** or **Aqueous** predominance must stay enabled; the UI prevents unchecking both.
-
-Phase/species **colours** persist browser-side in `colorByName` (`phaseDiagramState.v8` in localStorage), so overrides survive refreshes, cached-result restores, and recomputes that contain the same category name. New names start from a built-in mineral colour or stable hash-based palette colour. In solid/mineral view, aqueous fallback categories remain forced light grey for readability; switch to Aqueous predominance to recolour aqueous categories directly.
-
-Non-convergent / `none` cells render **white**; aqueous species use light grey in solid/mineral view (co-stability joins are solids and use phase colours). O₂/H₂ over-pressure regions render as white gas-domain fills with labelled boundaries (see [Gas management](#gas-management-water-stability--component-gases)).
-
-### Diagram rendering
-
-| Mode | Display | Hover |
-|------|---------|-------|
-| **Adaptive** (default) | Vector polygons + exact boundary lines from `diagram/vectors.py` | Invisible base-grid heatmap with phase name + top aqueous species |
-| **Uniform** | Coloured heatmap | Same hover layer |
-
-Vector polygons are batched by category (largest phase first) so Plotly uses one fill trace per phase; within a trace, null-separated rings paint correctly. Stability limits (converged↔failed) render as distinct dashed lines.
-
-Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display remap on pe-native results (no recompute). **log fO₂** is a separate compute mode — switching to or from log fO₂ marks the diagram stale until recomputed.
-
-### Settings persistence
-
-| Storage | Key / store | Contents |
-|---------|-------------|----------|
-| `localStorage` | `phaseDiagramState.v8` | UI settings (auto-saved on every edit) |
-| `localStorage` | `phaserLayout.v1` | Sidebar width, plot-panel width, and stacked display-bar height |
-| `localStorage` | `phaserLastResultKey.v2` | Pointer to the last cached diagram (browser-scoped) |
-| `localStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`, `request`) for reconnect after refresh / browser quit |
-| `localStorage` | `phaserTabLock.v1` | Single-tab ownership marker (Web Locks primary; heartbeat fallback on non-HTTPS LAN) |
-| IndexedDB | `phaserResultCache.v23` / `results` | History meta: `modeId`, compute `request`, plot thumbnail (JPEG blob) |
-| IndexedDB | `phaserResultCache.v23` / `resultData` | Packed diagram JSON (loaded only on restore / cache hit) |
-
-Closing the tab or clearing site data resets settings. Cached diagrams and UI settings persist until the browser clears site data (or the user clears History). The result cache keeps at most **24** diagrams (newest kept; oldest evicted).
-
-### Result cache and reconnect
-
-Identical compute requests (including `mode_id`, `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, and **layer toggles**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
-
-On **cache miss**, the job is enqueued; after download the packed result is stored in `resultData`, a lightweight history record (request + later thumbnail) in `results`, and the server job is **`DELETE`**d to free memory. Plot thumbnails are captured **once** after a successful compute (or cache hit without a thumb), not when opening the History menu.
-
-**History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters and redraws that result as fresh (Compute greys out), opening on the main full-system solid/mineral view (or aqueous if solids were not computed) rather than a leftover element subset. Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
-
-If you refresh, close the tab, or quit the browser during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2` when you reopen the same origin (within server TTLs). A job that finished while you were away is fetched and rendered automatically (into the mode that started it) if it is still in server memory; otherwise the UI asks you to recompute. Opening a **second tab** shows a gate (PHASER logo + message + **Transfer here**); transferring moves poll ownership without killing the server job. Closing the other tab (or a stale lock after a crash) also lets the waiting tab take over.
-
-Starting a **new** compute (Compute again on the leader tab) abandons the previous server job via `DELETE`. Tab transfer / browser close does **not** abandon the job.
-
-### Redox axis (log fO₂ / Eh / pe)
-
-The vertical axis can be shown as **Eh**, **pe**, or **log fO₂**. **pe** and **Eh** are one family: the grid is swept in **`pe`**, and switching between pe and Eh only remaps the y-axis for display (no recompute). **log fO₂** is a separate **native compute mode**: the grid is swept in `(pH, log fO₂)`, typed min/max are exact axis bounds, and switching to or from log fO₂ requires **recompute**. Default display axis: **Eh**; default pe bounds: **−14 to 20** (`PE_MIN`/`PE_MAX`); default log fO₂ bounds: **−90 to 10** (`LOG_FO2_MIN`/`LOG_FO2_MAX`).
-
-**Conversion relations** (all logs base-10; `T` in °C, `T_K = T + 273.15`) — used for pe-mode PHREEQC pinning and pe↔Eh display:
-
-| Axis | From `pe` | Back to `pe` |
-|------|-----------|--------------|
-| **pe** | `pe` | `pe` |
-| **Eh (V)** | `Eh = pe · (ln10 · R · T_K / F)` | `pe = Eh / (ln10 · R · T_K / F)` |
-| **log fO₂** | `log fO₂ = 4 · (pe + pH − log K_O₂)` | `pe = log fO₂ / 4 − pH + log K_O₂` |
-
-where `R = 8.314462618 J mol⁻¹ K⁻¹`, `F = 96485.33212 C mol⁻¹`, `ln10 ≈ 2.302585`, and
-
-```
-log K_O₂ = 20.75 + 0.0018 · (T − 25)      # O2(g) + 4H+ + 4e- = 2H2O, ≈20.75 at 25 °C
-```
-
-(`log_k_o2_water()` / `log_f_o2()` in `phreeqc/gas_limits.py`; same relation used for `O2(g)` in equilibration.)
-
-**Compute API.** Send `redox_axis`: `"pe"` (default; Eh UI maps here) or `"log_fo2"`. Use `pe_min`/`pe_max` for pe mode; `log_fo2_min`/`log_fo2_max` for log fO₂ mode. Packed results include `redox_axis` so the client knows whether y is native pe or log fO₂.
-
-**Display behaviour.**
-
-| Switch | Recompute? |
-|--------|------------|
-| pe ↔ Eh | No — linear remap, same pe-native grid |
-| pe/Eh ↔ log fO₂ | Yes — stale until recomputed; no remapping of the other mode's grid |
-
-O₂/H₂ stability limits are horizontal in a log fO₂ plot (constant fugacity). Region label placement stays in grid-index space so pe ↔ Eh does not re-pick labels.
-
----
-
-## HTTP API
+### 5.1 HTTP API
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -989,7 +1184,7 @@ O₂/H₂ stability limits are horizontal in a log fO₂ plot (constant fugacity
 | `GET` | `/api/config` | Defaults, worker/queue limits, `rate_limits`, `about`, default `db_id`, database list, plus `solution_modes` / `assemblage_solution_modes` / `mineral_category_modes` (and their defaults) |
 | `GET` | `/api/databases` | List available databases |
 | `GET` | `/api/databases/{db_id}` | Database details |
-| `POST` | `/api/databases/register` | Register generated database metadata (`.dat` must already be on server) |
+| `POST` | `/api/databases/register` | Provisional — notify the server of a generated `.dat` already on disk ([Future features](#part-vii-future-features)); not the intended long-term UX |
 | `GET` | `/api/elements?db_id=` | Elements in a database |
 | `POST` | `/api/phases` | Discover phases for a chemical system |
 | `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}` |
@@ -1000,7 +1195,43 @@ O₂/H₂ stability limits are horizontal in a log fO₂ plot (constant fugacity
 
 FastAPI also serves **`/docs`**, **`/redoc`**, and **`/openapi.json`** by default (API discovery; not rate-limited).
 
-### API rate limiting
+
+---
+
+#### Compute request (`POST /api/compute`)
+
+Key fields in the JSON body:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C": 1.0}` |
+| `ph_levels`, `pe_levels` | `GRID_LEVELS` | Grid resolution (both axes; clamped to `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`) |
+| `ph_min`, `ph_max`, `pe_min`, `pe_max` | config defaults | Axis bounds |
+| `phases` | auto-discover | Selected solid phase names |
+| `system_elements` | from totals | Explicit element list for layers |
+| `db_id` | server default | Database from registry |
+| `adaptive_boundaries` | `true` | Enable adaptive boundary tracing |
+| `solution_mode` | `dummy_titration` | `dummy_titration`, `titration`, `assemblage_dummy_titration`, or `assemblage_titration` — see [Single-point evaluation](#33-single-point-evaluation-and-titration-frames) and [Mineral stability](#mineral-stability-assemblage-modes) |
+| `mineral_category_mode` | `moles` | `moles` or `costability` — used when `solution_mode` is an assemblage mode; ignored for SI predominance |
+| `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
+| `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
+| `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); see [Water window and gas lines](#15-water-window-and-gas-lines) |
+| `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
+| `layer_solids` | `true` | Pack and trace solid maps (`solid_subsets` for SI predominance, `mineral_subsets` for assemblage) |
+| `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
+| `layer_elements` | `false` | When `true`, one map per element subset (ignored when the system has only one element); when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
+
+Parallel worker count and the IPhreeqc library path are configured on the server (`PHASER_MAX_WORKERS`, `PHASER_IPHREEQC_LIB`); see [Configuration reference](#53-configuration-reference).
+
+Grid bounds and results use **`pe`** as the redox coordinate. **`solution_mode`** selects the titration frame and whether solids may precipitate (assemblage modes); see [Single-point evaluation](#33-single-point-evaluation-and-titration-frames). Packed SI-predominance results echo `solution_mode` and `diagram_kind="predominance"`. Assemblage packs (via `pack_mineral_grid_results`) also set `diagram_kind="assemblage"` and `mineral_category_mode`.
+
+Per-IP rate limits, cooldowns, and client-IP detection: see **API security and rate limiting** below. Job pipeline sequence: [End-to-end compute flow](#41-end-to-end-compute-flow) in Part IV.
+
+---
+
+### 5.2 API security and rate limiting
+
+Abuse protection and public-host hardening (no built-in login). Endpoint catalogue and compute payloads: [HTTP API](#51-http-api).
 
 PHASER has **no built-in user authentication**. On a public host, abuse protection is layered:
 
@@ -1057,149 +1288,70 @@ Over-limit responses are **HTTP 429** with JSON `{"detail": "…"}` and a **`Ret
 | `cooldown_max_sec` | Escalation cap |
 | `violation_reset_sec` | Quiet period before strike count resets |
 
----
-
-### Compute request (`POST /api/compute`)
-
-Key fields in the JSON body:
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C": 1.0}` |
-| `ph_levels`, `pe_levels` | `GRID_LEVELS` | Grid resolution (both axes; clamped to `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`) |
-| `ph_min`, `ph_max`, `pe_min`, `pe_max` | config defaults | Axis bounds |
-| `phases` | auto-discover | Selected solid phase names |
-| `system_elements` | from totals | Explicit element list for layers |
-| `db_id` | server default | Database from registry |
-| `adaptive_boundaries` | `true` | Enable adaptive boundary tracing |
-| `solution_mode` | `dummy_titration` | `dummy_titration`, `titration`, `assemblage_dummy_titration`, or `assemblage_titration` — see [Single-point evaluation](#single-point-evaluation-enginepy) and [Mineral stability](#mineral-stability-assemblage-modes) |
-| `mineral_category_mode` | `moles` | `moles` or `costability` — used when `solution_mode` is an assemblage mode; ignored for SI predominance |
-| `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
-| `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
-| `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); see [Gas management](#gas-management-water-stability--component-gases) |
-| `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
-| `layer_solids` | `true` | Pack and trace solid maps (`solid_subsets` for SI predominance, `mineral_subsets` for assemblage) |
-| `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
-| `layer_elements` | `false` | When `true`, one map per element subset (ignored when the system has only one element); when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
-
-Parallel worker count and the IPhreeqc library path are configured on the server (`PHASER_MAX_WORKERS`, `PHASER_IPHREEQC_LIB`); see [Configuration](#configuration-configpy).
-
-Grid bounds and results use **`pe`** as the redox coordinate. **`solution_mode`** selects the titration frame and whether solids may precipitate (assemblage modes); see [Single-point evaluation](#single-point-evaluation-enginepy). Packed SI-predominance results echo `solution_mode` and `diagram_kind="predominance"`. Assemblage packs (via `pack_mineral_grid_results`) also set `diagram_kind="assemblage"` and `mineral_category_mode`.
-
-### Compute flow
-
-```mermaid
-sequenceDiagram
-    participant UI as Browser
-    participant API as Compute API
-    participant Job as Compute service
-    participant Reg as DB registry
-    participant Sw as PHREEQC sweep
-    participant Ad as Adaptive trace
-    participant Tr as Boundary tracer
-    participant Pack as Diagram packer
-    participant Vec as Vector display
-
-    UI->>API: POST /api/compute
-    API->>Job: enqueue job
-    API-->>UI: job_id and queue_position
-    Job->>Reg: resolve db_id to path
-    alt adaptive predominance
-        Job->>Ad: run_adaptive_boundary_sweep
-        Ad->>Tr: root-find boundaries
-        Job->>Pack: pack_grid_results
-        Job->>Vec: pack_traced_display
-    else adaptive mineral stability
-        Job->>Ad: run_adaptive_mineral_stability_sweep
-        Ad->>Tr: root-find boundaries
-        Job->>Pack: pack_mineral_grid_results
-        Job->>Vec: pack_traced_mineral_display
-    else uniform
-        Job->>Sw: run_grid_sweep
-        Job->>Pack: pack_grid_results or pack_mineral_grid_results
-    end
-    Pack-->>Job: layered grids (+ vector display if adaptive)
-    loop Poll while running or after page reload
-        UI->>API: GET job status
-        API-->>UI: progress and phase
-    end
-    UI->>API: GET job result
-    API-->>UI: diagram JSON
-    UI->>UI: IndexedDB cache and Plotly render
-    UI->>API: DELETE job
-```
 
 ---
 
-## Configuration (`config.py`)
+### 5.3 Configuration reference
 
-Central defaults for grid bounds, worker count, concurrency, IPhreeqc library path, and database directories.
+Single source of truth for tunables: `config.py` plus `.env` / process environment. Rate-limit **behaviour** is documented in [5.2](#52-api-security-and-rate-limiting); only the env knobs are listed here. Trace geometry defaults are summarized under [Trace phase edges](#36-trace-phase-edges).
 
-| Setting | Env override | Default | Notes |
-|---------|--------------|---------|-------|
-| Host / port | `PHASER_HOST`, `PHASER_PORT` | `0.0.0.0:8765` | Used by `run_server.py` and Docker |
-| Catalog SQLite | `PHASER_CATALOG_DB` | `data/catalog.sqlite` | PHREEQC element/phase/species index |
-| Stats SQLite | `PHASER_STATS_DB` | `data/stats.sqlite` | Per-server compute event log |
-| Grid resolution | — | `GRID_LEVELS = 100` (range `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`, 50–200) | Default for both axes (`ph_levels` and `pe_levels` in API requests) |
-| Default solution mode | — | `SOLUTION_MODE_DEFAULT = dummy_titration` | Saturation modes exposed as `/api/config` `solution_modes`; assemblage pair as `assemblage_solution_modes`. All four remain valid on `POST /api/compute`. |
-| Default mineral category | — | `MINERAL_CATEGORY_MODE_DEFAULT = moles` | `moles` or `costability`; exposed as `mineral_category_modes` |
-| Max base grid points | — | `MAX_GRID_POINTS = 40000` | Cap on `ph_levels × pe_levels` (e.g. 200×200) |
-| Adaptive refine factor | `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Fallback / local-geometry subdivision in adaptive mode |
-| Max adaptive evaluations | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft cap on total PHREEQC runs in adaptive mode |
-| Boundary trace tolerance | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-3` | Phase-boundary root finding along cell edges |
-| Stability trace tolerance | `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed edge root finding |
-| Trace top-N species | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH species slots during tracing |
-| Grid top-N species | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH species slots in base grid sweep |
-| Hover species per element | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `8` | Species kept per element in packed hover JSON |
-| KNOBS rescue depth | `PHASER_KNOBS_MODE` | `standard` | Convergence rescue depth: `default` (UI Off), `standard`, `maximum`; per-job override `knobs_mode` |
-| Sweep map chunksize | `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Points per IPC batch in base grid `pool.map` |
-| Max workers per sweep | `PHASER_MAX_WORKERS` | `8` | ProcessPool size for grid/trace work (server-side; exposed read-only in `/api/config`) |
-| Max concurrent sweeps | `PHASER_MAX_CONCURRENT_JOBS` | `1` | FIFO queue when exceeded |
-| Job result TTL | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished jobs from server memory |
-| Job queue TTL | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
-| Job wall timeout | `PHASER_JOB_WALL_TIMEOUT_SEC` | `300` | Hard-kill PHREEQC compute only (from `compute_started_at`) |
-| Job reaper interval | `PHASER_JOB_REAPER_INTERVAL_SEC` | `60` | Background cleanup wake interval |
-| API rate limits | `PHASER_RATE_LIMIT_*` | see [API rate limiting](#api-rate-limiting) | Per-IP caps; enabled by default |
-| O₂ stability limit | `PHASER_O2_LIMIT_ATM` | `0.21` | `O2_FUGACITY_LIMIT_ATM` — titration water window (atm); per-job `o2_limit_atm` |
-| H₂ stability limit | `PHASER_H2_LIMIT_ATM` | `1.0` | `H2_FUGACITY_LIMIT_ATM` — titration water window (atm); per-job `h2_limit_atm` |
-| Component-gas limit | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | `COMPONENT_GAS_FUGACITY_LIMIT_ATM` — reference pressure for CO₂/CH₄/… boundaries |
-| Default units | — | `mmol/kgw` | UI and API default |
-| Default species conc. | — | `1.0` | Per species in UI |
-
-See also the database environment variables in the table above.
-
----
-
-## PyGCC integration
-
-PHASER can consume databases produced by external tools:
-
-1. PyGCC (or another service) generates a `.dat` file.
-2. The file is copied into `data/databases/generated/` or registered via `POST /api/databases/register`.
-3. PHASER exposes it through `/api/databases` like any builtin database.
-
----
-
-## Development notes
-
-- **Package name** = folder name (`PHASER`). `run_server.py` adds the parent directory to `sys.path` so `import PHASER` works when run from inside the folder.
-- **WSL + Windows**: run the server in WSL; edit files on the Windows side; paths in `config.py` use `/mnt/c/...` when running under Linux.
-- **Networking**: with WSL2 **mirrored networking** (`networkingMode=mirrored` in `%UserProfile%\.wslconfig`), the app is reachable on your LAN at the machine's IP (e.g. `http://192.168.x.x:8765`). You may need a Windows Firewall inbound rule for TCP port 8765.
-- **Multi-user**: each browser session is isolated (local settings + IndexedDB cache). Compute jobs are independent but share the server queue and CPU pool. Orphaned jobs are reclaimed by the reaper after the configured TTLs.
-- **Smoke check** (imports + registry):
-  ```bash
-  python scripts/smoke_check.py
-  ```
-- **Mineral-stability local tests** (gitignored `tests/`): unit coverage in `test_mineral_stability_engine.py`, `test_mineral_stability_trace.py`, `test_mineral_stability_pack.py`; optional full-grid stress in `test_mineral_stability_fe_c_s_grid.py`; paired moles/costability preplots via `diag_mineral_stability_preplot.py` (`PHASER_DIAG_LEVELS` clamped to ≥ 50).
-- **Boundary-trace schemes** (gitignored `tests/`): regenerate README PNGs with `python tests/render_trace_schemes.py` (writes `docs/schemes/*.png`); full GitHub-dark README preview via `python tests/preview_readme.py` → open `tests/readme_preview.html`. Geometric Y helpers: `test_y_junction_rewrite.py`.
+| Name | Default | Purpose |
+|------|---------|---------|
+| `PHASER_HOST` / `PHASER_PORT` | `0.0.0.0` / `8765` | Bind address |
+| `PHASER_IPHREEQC_LIB` | (platform path) | `libiphreeqc.so` / `IPhreeqc.dll` |
+| `PHASER_DB` | (dev path) | Pick default registry entry by file path when `PHASER_DEFAULT_DB_ID` unset |
+| `PHASER_DEFAULT_DB_ID` | — | Force default `db_id` |
+| `PHASER_BUILTIN_DB_DIRS` | (scan defaults) | Extra builtin `.dat` dirs (`os.pathsep`-separated) |
+| `PHASER_GENERATED_DB_DIR` | `data/databases/generated` | Generated database directory |
+| `PHASER_DISABLED_DB_STEMS` | `iso,coldchem,…` | Hide stems from the selector (see `.env.example`) |
+| `PHASER_CATALOG_DB` | `data/catalog.sqlite` | Catalog cache |
+| `PHASER_STATS_DB` | `data/stats.sqlite` | Usage log |
+| `PHASER_CATALOG_PROBE_AMOUNT` | `1.0` mmol/kgw | Catalog SI probe totals |
+| `GRID_LEVELS` / min / max | 100 / 50 / 200 | Default and clamp for `ph_levels` = `pe_levels` |
+| `MAX_GRID_POINTS` | 40000 | Cap on `ph_levels × pe_levels` |
+| `PH_MIN`/`PH_MAX`, `PE_MIN`/`PE_MAX`, `LOG_FO2_MIN`/`LOG_FO2_MAX` | 2–12, −14–20, −90–10 | Default axis bounds |
+| `SOLUTION_MODE_DEFAULT` | `dummy_titration` | Default Saturation frame |
+| `MINERAL_CATEGORY_MODE_DEFAULT` | `moles` | Default Mineral Stability category mode |
+| `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode` |
+| `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides |
+| `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | Component-gas reference pressure |
+| `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | `true` | Skip PHREEQC outside water band |
+| `PHASER_SWEEP_WATER_MARGIN_CELLS` | `1.0` | Extra cells beyond analytic clip |
+| `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Adaptive fallback / local geometry |
+| `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft adaptive PHREEQC budget |
+| `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-3` | Phase-boundary roots |
+| `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed roots |
+| `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH slots while tracing |
+| `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH slots on base sweep |
+| `PHASER_HOVER_SPECIES_PER_ELEMENT` | `8` | Species packed for hover |
+| `PHASER_TRACE_CHUNK_MULTIPLIER` / `PHASER_TRACE_MIN_CELLS_PER_CHUNK` | `16` / `4` | Trace worker chunking |
+| `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Base-grid `pool.map` chunksize |
+| `PHASER_MAX_WORKERS` | `8` | ProcessPool size per sweep |
+| `PHASER_MAX_CONCURRENT_JOBS` | `1` | Simultaneous sweeps (FIFO beyond) |
+| `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished job results |
+| `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
+| `PHASER_JOB_WALL_TIMEOUT_SEC` | `300` | Hard-kill PHREEQC compute |
+| `PHASER_JOB_REAPER_INTERVAL_SEC` | `60` | Reaper wake interval |
+| `PHASER_RATE_LIMIT` | `1` | Master switch (`0` disables) |
+| `PHASER_RATE_LIMIT_*` | (see 5.2) | Per-bucket caps and cooldowns |
+| `PHASER_CPU_LIMIT` / `PHASER_MEMORY_LIMIT` | `8` / `8G` | Docker Compose cgroup limits |
+| `PHASER_DATA_DIR` | `./data/databases/generated` | Docker host mount for generated DBs |
+| `CLOUDFLARE_TUNNEL_TOKEN` | — | Compose `tunnel` profile |
+| `WATCHTOWER_INTERVAL` | `3600` | Compose `watchtower` profile |
+| `PHASER_REPO_URL` / `PHASER_ISSUES_URL` / license / DOI / `PHASER_BUILD_ID` | (repo defaults) | Statistics About panel |
+| Default units / species conc. | `mmol/kgw` / `1.0` | UI and API defaults |
 
 ---
 
-## Docker
+## Part VI — Deployment
+
+Production Docker, tunnels, CPU sizing, and checklist. For a local trial, [Getting started](#getting-started) is enough.
+
+### 6.1 Docker image and compose
 
 The **`Dockerfile`** builds a Linux image with IPhreeqc (USGS source tarball) and PHREEQC databases. **GitHub Actions** pushes it to GHCR; servers run it via **`docker-compose.yml`**.
 
-### Server (default)
+#### Server (default)
 
 ```bash
 cp .env.example .env
@@ -1207,7 +1359,7 @@ docker compose pull
 docker compose up -d
 ```
 
-Generated databases persist on the host at `PHASER_DATA_DIR` (default `./data/databases/generated`). Runtime tuning is via `.env` — no image rebuild. See [Deployment](#deployment).
+Optional host mount `PHASER_DATA_DIR` → `data/databases/generated` (for future external thermo DBs). Runtime tuning is via `.env` — no image rebuild.
 
 Smoke check inside the running container:
 
@@ -1221,17 +1373,15 @@ Stop:
 docker compose down
 ```
 
-### Build from source (developers)
-
+#### Build from source (developers)
 ```bash
 docker compose up --build -d
 ```
 
 Uses the same `docker-compose.yml`; Compose builds locally and tags `ghcr.io/matteo-loche/phaser:latest`.
 
----
 
-## Cloudflare Tunnel
+### 6.2 Cloudflare Tunnel
 
 For a temporary public test URL from your local machine:
 
@@ -1257,17 +1407,12 @@ For Docker Compose with a named Cloudflare tunnel:
 
 The tunnel container connects to the internal Compose service (`phaser:8765`), so no router port forwarding is required.
 
-**Public exposure:** PHASER applies **per-IP rate limits** automatically (see [API rate limiting](#api-rate-limiting)). For a fully open URL, combine tunnel + limits + low `PHASER_MAX_CONCURRENT_JOBS`. Optional hardening: Cloudflare **rate rules** on `/api/*`, or **Zero Trust Access** on the hostname when you want a login wall.
+**Public exposure:** PHASER applies **per-IP rate limits** automatically (see [5.2](#52-api-security-and-rate-limiting)). For a fully open URL, combine tunnel + limits + low `PHASER_MAX_CONCURRENT_JOBS`. Optional hardening: Cloudflare **rate rules** on `/api/*`, or **Zero Trust Access** on the hostname when you want a login wall.
 
 Never commit the real tunnel token.
 
----
 
-## Deployment
-
-PHASER ships as a **Docker image** on GHCR. One compose file — **`docker-compose.yml`** — covers server deployment (and optional local build).
-
-### Image publishing (GitHub Actions)
+### 6.3 Image publishing (GitHub Actions)
 
 The workflow `.github/workflows/docker-publish.yml` builds and pushes to **GHCR** on every push to **`main`** and on version tags (`v1.2.3`):
 
@@ -1280,19 +1425,19 @@ Pushes to **`main`** and tags matching **`v*`** trigger a build; other branches 
 
 Application version (and optional DOI) are defined in **`__version__.py`** and exposed via `GET /api/config` under `about`.
 
-### Production server
+### 6.4 Production server
 
 On a VPS, NAS, or home server:
 
 ```bash
 cp .env.example .env
-# Optional: PHASER_DATA_DIR=/path/to/persistent/generated/databases
+# Optional later: PHASER_DATA_DIR=... for external thermo DBs ([Future features](#part-vii-future-features))
 
 docker compose pull
 docker compose up -d
 ```
 
-Generated databases persist via `PHASER_DATA_DIR` (host path) → container `data/databases/generated`. Built-in PHREEQC databases ship inside the image.
+Built-in PHREEQC databases ship inside the image. An optional `PHASER_DATA_DIR` host mount maps to `data/databases/generated` for future external-DB ingest.
 
 **Runtime tuning (no image rebuild)** — edit `.env` beside `docker-compose.yml` (see `.env.example` for the full template):
 
@@ -1318,9 +1463,9 @@ Generated databases persist via `PHASER_DATA_DIR` (host path) → container `dat
 | `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC` | App | Strike reset after quiet period (default `86400`) |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Compose profile | Tunnel token (`tunnel` profile) |
 | `WATCHTOWER_INTERVAL` | Compose profile | Auto-update poll interval (`watchtower` profile) |
-| `PHASER_DATA_DIR` | Compose volume | Host path for generated `.dat` files |
+| `PHASER_DATA_DIR` | Compose volume | Optional host path for external `.dat` files ([Future features](#part-vii-future-features)) |
 
-### CPU, workers, and concurrent jobs
+### 6.5 CPU, workers, and concurrent jobs
 
 | Variable | Role |
 |----------|------|
@@ -1348,9 +1493,9 @@ docker compose --profile watchtower up -d
 
 Watchtower **restarts** PHASER only when `:latest` on GHCR is newer than the running image; otherwise each check is a lightweight pull/metadata comparison. Default interval: **3600 s** (`WATCHTOWER_INTERVAL` in `.env`).
 
-See also [Docker](#docker) and [Cloudflare Tunnel](#cloudflare-tunnel).
+See also [Docker](#docker) and [Cloudflare Tunnel](#62-cloudflare-tunnel).
 
-### Network access (LAN & Tailscale)
+### 6.6 Network access (LAN & Tailscale)
 
 PHASER already listens on **`0.0.0.0:8765`** inside the container (`PHASER_HOST` default). Docker publishes **`8765:8765`** on the host, so no compose change is required for LAN or Tailscale testing.
 
@@ -1359,7 +1504,7 @@ PHASER already listens on **`0.0.0.0:8765`** inside the container (`PHASER_HOST`
 | **This machine** | `http://localhost:8765` | Default |
 | **Local network (LAN)** | `http://<host-LAN-IP>:8765` | Same Wi‑Fi / subnet (e.g. phone or laptop) |
 | **Tailscale** | `http://<host-tailscale-IP>:8765` | Any device on your tailnet (e.g. `100.x.x.x`) |
-| **Public internet** | Cloudflare Tunnel profile | See [Cloudflare Tunnel](#cloudflare-tunnel) |
+| **Public internet** | Cloudflare Tunnel profile | See [Cloudflare Tunnel](#62-cloudflare-tunnel) |
 
 **LAN (Windows + Docker Desktop)**
 
@@ -1376,12 +1521,36 @@ PHASER already listens on **`0.0.0.0:8765`** inside the container (`PHASER_HOST`
 
 Tailscale and LAN work **alongside** localhost — no extra PHASER config. For HTTPS or a stable hostname on the tailnet, use [Tailscale Serve](https://tailscale.com/kb/1312/serve) in front of `http://localhost:8765` (optional; not part of this compose file).
 
-### Deployment checklist
+### 6.7 Deployment checklist
 
-1. Mount persistent storage for `data/databases/generated` (`PHASER_DATA_DIR`).
-2. Catalog and stats SQLite files are created on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` for persistence across container recreation.
-3. Tune **`PHASER_CPU_LIMIT`**, **`PHASER_MAX_CONCURRENT_JOBS`**, and **`PHASER_MAX_WORKERS`** together (see [CPU, workers, and concurrent jobs](#cpu-workers-and-concurrent-jobs) above); set **`PHASER_MEMORY_LIMIT`** for available RAM (defaults: 8 CPUs, 8 workers, 1 concurrent job, 8 GB).
-4. On shared hosts, keep **`PHASER_MAX_CONCURRENT_JOBS=1`** unless you have headroom for parallel sweeps.
-5. Review **`PHASER_RATE_LIMIT_*`** before exposing publicly (defaults: 12 compute burst → 10 min cooldown; see [API rate limiting](#api-rate-limiting)).
-6. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use [Cloudflare Tunnel](#cloudflare-tunnel).
-7. A PyGCC service can drop `.dat` files into the volume or call `POST /api/databases/register` (subject to register rate limits).
+1. Catalog and stats SQLite files are created on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` for persistence across container recreation.
+2. Tune **`PHASER_CPU_LIMIT`**, **`PHASER_MAX_CONCURRENT_JOBS`**, and **`PHASER_MAX_WORKERS`** together (see [CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs) above); set **`PHASER_MEMORY_LIMIT`** for available RAM (defaults: 8 CPUs, 8 workers, 1 concurrent job, 8 GB).
+3. On shared hosts, keep **`PHASER_MAX_CONCURRENT_JOBS=1`** unless you have headroom for parallel sweeps.
+4. Review **`PHASER_RATE_LIMIT_*`** before exposing publicly (defaults: 12 compute burst → 10 min cooldown; see [5.2](#52-api-security-and-rate-limiting)).
+5. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use [Cloudflare Tunnel](#62-cloudflare-tunnel).
+6. Optional: mount `PHASER_DATA_DIR` → `data/databases/generated` if you will use external thermo DBs later ([Future features](#part-vii-future-features)).
+
+---
+
+## Part VII — Future features
+
+Planned product work that is only partially present in the current code. Details may change.
+
+### External / generated thermodynamic databases
+
+**Goal.** Let PHASER use `.dat` files produced by external thermodynamic generators (e.g. **PyGCC**) the same way as builtin databases: appear in the header selector, catalog-scanned, selectable for compute — without a hand-rolled ops workflow.
+
+**What already exists (provisional).**
+
+- Directory `data/databases/generated/` (Docker: `PHASER_DATA_DIR`) and registry `source=generated`.
+- Optional sidecar `*.meta.json` next to a `.dat`.
+- `POST /api/databases/register` can notify the server that a file is present and trigger a catalog scan. This route is **not** the intended end-user or service UX; rate limits for `db_register` exist only because the endpoint is exposed today.
+
+**What the final shape should look like (direction, not a promise of API).**
+
+- An upstream tool (or a thin integration) writes a `.dat` into the generated volume (or an equivalent trusted path).
+- PHASER discovers or is notified of the new file and **rebuilds that database’s catalog without requiring a full server restart**.
+- The UI lists the new `db_id` once the catalog is `ready`, same as builtins.
+- Operators should not need to `curl` register or bounce the container for routine ingest.
+
+Until that lands, treat generated-DB ingest as experimental scaffolding, not a documented production procedure.
