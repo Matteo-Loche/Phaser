@@ -2326,6 +2326,8 @@
       "#d35400","#2980b9","#8e44ad","#f1c40f","#7f8c8d","#c0392b",
     ];
     const LS_KEY = "phaseDiagramState.v8";
+    const QUEUE_FULL_MSG = "Server queue is full. Compute is temporarily unavailable.";
+    const QUEUE_FULL_POLL_MS = 2000;
     const RESULT_DB = "phaserResultCache.v23";
     const RESULT_STORE = "results";       // lightweight history meta + thumb
     const RESULT_DATA_STORE = "resultData"; // heavy diagram payloads
@@ -2461,6 +2463,8 @@
       modeResults: {},
       activeJobModeId: null,
       pollTimer: null,
+      queueFull: false,
+      queueFullPollTimer: null,
       phaseSeq: 0,
       phaseDebounce: null,
       hasResult: false,
@@ -3071,12 +3075,15 @@
       if (wrap) wrap.hidden = false;
       const fresh = runtime.hasResult && !runtime.isStale;
       const busy = !!runtime.computeInProgress;
-      btn.disabled = busy || fresh;
-      btn.title = busy
-        ? "Computing…"
-        : fresh
-          ? "Diagram is up to date — change settings to recompute"
-          : "";
+      const queueFull = !!runtime.queueFull;
+      btn.disabled = busy || fresh || queueFull;
+      btn.title = queueFull
+        ? QUEUE_FULL_MSG
+        : busy
+          ? "Computing…"
+          : fresh
+            ? "Diagram is up to date — change settings to recompute"
+            : "";
       if (hist) {
         hist.disabled = busy;
         hist.title = busy ? "Computing…" : "History — saved diagrams for this mode";
@@ -3144,6 +3151,7 @@
 
     function dispatchCompute() {
       if (!runtime.isTabLeader) return;
+      if (runtime.queueFull) return;
       const mode = getActiveMode();
       if (!mode.hasCompute) return;
       if (isDiagramMode(activeModeId)) return computeDiagram(activeModeId);
@@ -4606,7 +4614,13 @@
     async function api(path, opts = {}) {
       const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+      if (!res.ok) {
+        const err = new Error(data.detail || data.error || res.statusText);
+        err.status = res.status;
+        err.error_code = data.error_code || null;
+        err.data = data;
+        throw err;
+      }
       return data;
     }
     async function apiJsonWithProgress(path, onProgress) {
@@ -6880,12 +6894,45 @@
     }
 
     /* ---------------- compute ---------------- */
+    function stopQueueFullPoll() {
+      clearInterval(runtime.queueFullPollTimer);
+      runtime.queueFullPollTimer = null;
+    }
+
+    function clearQueueFullState() {
+      runtime.queueFull = false;
+      stopQueueFullPoll();
+      syncComputeBtn();
+    }
+
+    function enterQueueFullState() {
+      runtime.queueFull = true;
+      syncComputeBtn();
+      setStatus(QUEUE_FULL_MSG, "warn");
+      startQueueFullPoll();
+    }
+
+    function startQueueFullPoll() {
+      if (runtime.queueFullPollTimer) return;
+      runtime.queueFullPollTimer = setInterval(async () => {
+        if (!runtime.queueFull) {
+          stopQueueFullPoll();
+          return;
+        }
+        try {
+          const q = await api("/api/queue");
+          if (!q.full) clearQueueFullState();
+        } catch (_) { /* keep polling while marked full */ }
+      }, QUEUE_FULL_POLL_MS);
+    }
+
     function setLogoComputing(on) {
       $("phaserBrand")?.classList.toggle("is-computing", !!on);
     }
 
     async function computeDiagram(modeId) {
       if (!runtime.isTabLeader) return;
+      if (runtime.queueFull) return;
       if (!isDiagramMode(modeId)) return;
       const totals = activeTotals();
       const sel = selectedPhases();
@@ -6960,6 +7007,19 @@
         } catch (cacheErr) {
           /* Cache failures should not block computation. */
         }
+        try {
+          const q = await api("/api/queue");
+          if (q.full) {
+            enterQueueFullState();
+            runtime.activeJobModeId = null;
+            runtime.pendingCacheRequest = null;
+            setComputeInProgress(false);
+            setLogoComputing(false);
+            return;
+          }
+        } catch (_) {
+          /* Admission probe failure should not block compute; POST is the backstop. */
+        }
         setStatus("Starting job…");
         setLogoComputing(true, "Starting job…");
         runtime.computeStartedAt = performance.now();
@@ -6978,6 +7038,15 @@
         }
         pollJob(start.job_id, cacheKey, modeId);
       } catch (e) {
+        if (e && e.error_code === "queue_full") {
+          enterQueueFullState();
+          JobProgress.fail();
+          setLogoComputing(false);
+          runtime.activeJobModeId = null;
+          runtime.pendingCacheRequest = null;
+          setComputeInProgress(false);
+          return;
+        }
         setStatus(e.message, "err");
         JobProgress.fail();
         setLogoComputing(false);

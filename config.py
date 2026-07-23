@@ -278,6 +278,12 @@ MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200
 MAX_WORKERS = int(os.environ.get("PHASER_MAX_WORKERS", "8"))
 MAX_CONCURRENT_JOBS = int(os.environ.get("PHASER_MAX_CONCURRENT_JOBS", "1"))
+# Cap on running + queued compute jobs; further POSTs return 503 queue_full.
+MAX_QUEUE = int(os.environ.get("PHASER_MAX_QUEUE", "20"))
+# Minimum seconds between compute attempts from the same client IP.
+COMPUTE_MIN_INTERVAL_SEC = float(
+    os.environ.get("PHASER_COMPUTE_MIN_INTERVAL_SEC", "10")
+)
 
 # When enabled, compute evaluates the full selected grid first, then traces
 # phase boundaries on mixed cells via root-finding (see boundary_trace.py).
@@ -408,22 +414,25 @@ def _env_bool(name: str, default: bool) -> bool:
 RATE_LIMIT_ENABLED = _env_bool("PHASER_RATE_LIMIT", True)
 RATE_LIMIT_WINDOW_SEC = int(os.environ.get("PHASER_RATE_LIMIT_WINDOW_SEC", "60"))
 RATE_LIMIT_API_PER_MIN = int(os.environ.get("PHASER_RATE_LIMIT_API_PER_MIN", "600"))
-RATE_LIMIT_COMPUTE_PER_MIN = int(os.environ.get("PHASER_RATE_LIMIT_COMPUTE_PER_MIN", "12"))
+# Compute: 4 POSTs / 60 s, then escalating cooldown.
+RATE_LIMIT_COMPUTE_PER_MIN = int(os.environ.get("PHASER_RATE_LIMIT_COMPUTE_PER_MIN", "4"))
 RATE_LIMIT_DB_REGISTER_PER_MIN = int(
     os.environ.get("PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN", "6")
 )
 RATE_LIMIT_PHASES_PER_MIN = int(os.environ.get("PHASER_RATE_LIMIT_PHASES_PER_MIN", "60"))
 # After tripping a route burst cap, block that client on the route for this duration.
 RATE_LIMIT_COMPUTE_COOLDOWN_SEC = int(
-    os.environ.get("PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC", "600")
+    os.environ.get("PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC", "7200")
 )
 RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC = int(
     os.environ.get("PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC", "300")
 )
 RATE_LIMIT_COOLDOWN_ESCALATE = _env_bool("PHASER_RATE_LIMIT_COOLDOWN_ESCALATE", True)
-RATE_LIMIT_COOLDOWN_MAX_SEC = int(os.environ.get("PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC", "3600"))
+RATE_LIMIT_COOLDOWN_MAX_SEC = int(
+    os.environ.get("PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC", "604800")
+)
 RATE_LIMIT_VIOLATION_RESET_SEC = int(
-    os.environ.get("PHASER_RATE_LIMIT_VIOLATION_RESET_SEC", "86400")
+    os.environ.get("PHASER_RATE_LIMIT_VIOLATION_RESET_SEC", "2592000")
 )
 
 # Default total concentration for catalog SYS probes (units = DEFAULT_UNITS).

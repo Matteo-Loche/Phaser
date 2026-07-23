@@ -70,6 +70,8 @@ def get_config():
         "max_grid_points": config.MAX_GRID_POINTS,
         "max_workers": config.MAX_WORKERS,
         "max_concurrent_jobs": config.MAX_CONCURRENT_JOBS,
+        "max_queue": config.MAX_QUEUE,
+        "compute_min_interval_sec": config.COMPUTE_MIN_INTERVAL_SEC,
         "default_solution_mode": config.SOLUTION_MODE_DEFAULT,
         "solution_modes": [
             {"id": mode_id, **config.SOLUTION_MODE_META[mode_id]}

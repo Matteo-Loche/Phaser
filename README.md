@@ -33,13 +33,13 @@ Two diagram products share the same workspace:
 | Topic | Go to |
 |----------|--------|
 | Architecture / repo map | [Architecture overview](#architecture-overview), [Project layout](#project-layout) |
-| Run a diagram | [Part I — Using PHASER](#part-i-using-phaser) |
-| Screens, controls, browser behaviour | [Part II — Web UI](#part-ii-web-ui) |
-| Chemistry / tracing | [Part III — Chemistry engine](#part-iii-chemistry-engine) |
-| Jobs, packing, diagram JSON | [Part IV — Compute and packing](#part-iv-compute-and-packing) |
-| API, security, config | [Part V — API, security and configuration](#part-v-api-security-and-configuration) |
-| Docker / production | [Part VI — Deployment](#part-vi-deployment) |
-| Roadmap | [Part VII — Future features](#part-vii-future-features) |
+| Run a diagram | [Part I: Using PHASER](#part-i-using-phaser) |
+| Screens, controls, browser behaviour | [Part II: Web UI](#part-ii-web-ui) |
+| Chemistry / tracing | [Part III: Chemistry engine](#part-iii-chemistry-engine) |
+| Jobs, packing, diagram JSON | [Part IV: Compute and packing](#part-iv-compute-and-packing) |
+| API, security, config | [Part V: API, security and configuration](#part-v-api-security-and-configuration) |
+| Docker / production | [Part VI: Deployment](#part-vi-deployment) |
+| Roadmap | [Part VII: Future features](#part-vii-future-features) |
 
 ## Table of contents
 
@@ -47,14 +47,14 @@ Two diagram products share the same workspace:
 - [Architecture overview](#architecture-overview)
   - [Layer responsibilities](#layer-responsibilities)
 - [Project layout](#project-layout)
-- [Part I — Using PHASER](#part-i-using-phaser)
+- [Part I: Using PHASER](#part-i-using-phaser)
   - [1.1 Diagram modes](#11-diagram-modes)
   - [1.2 Build a diagram](#12-build-a-diagram)
   - [1.3 Reading the diagram](#13-reading-the-diagram)
   - [1.4 Useful settings](#14-useful-settings)
   - [1.5 Water window and gas lines](#15-water-window-and-gas-lines)
   - [1.6 Databases](#16-databases)
-- [Part II — Web UI](#part-ii-web-ui)
+- [Part II: Web UI](#part-ii-web-ui)
   - [2.1 Modes and routing](#21-modes-and-routing)
   - [2.2 Layout (diagram modes)](#22-layout-diagram-modes)
   - [2.3 Statistics dashboard (`#/stats`)](#23-statistics-dashboard-stats)
@@ -72,7 +72,7 @@ Two diagram products share the same workspace:
   - [2.9 Settings persistence](#29-settings-persistence)
   - [2.10 Result cache and reconnect](#210-result-cache-and-reconnect)
   - [2.11 Redox axis (log fO₂ / Eh / pe)](#211-redox-axis-log-fo-eh-pe)
-- [Part III — Chemistry engine](#part-iii-chemistry-engine)
+- [Part III: Chemistry engine](#part-iii-chemistry-engine)
   - [3.1 Chemistry pipeline](#31-chemistry-pipeline)
   - [3.2 Database system](#32-database-system)
     - [Sources](#sources)
@@ -82,17 +82,17 @@ Two diagram products share the same workspace:
   - [3.4 Convergence rescue (KNOBS)](#34-convergence-rescue-knobs)
   - [3.5 Water-band mask and gas-limit chemistry](#35-water-band-mask-and-gas-limit-chemistry)
   - [3.6 Trace phase edges](#36-trace-phase-edges)
-- [Part IV — Compute and packing](#part-iv-compute-and-packing)
+- [Part IV: Compute and packing](#part-iv-compute-and-packing)
   - [4.1 End-to-end compute flow](#41-end-to-end-compute-flow)
   - [4.2 Compute queue and job lifecycle](#42-compute-queue-and-job-lifecycle)
   - [4.3 Parallel workers (grid sweep and boundary trace)](#43-parallel-workers-grid-sweep-and-boundary-trace)
   - [4.4 Phase selection, packing, and hover](#44-phase-selection-packing-and-hover)
   - [4.5 Vector display and gas overlay rendering](#45-vector-display-and-gas-overlay-rendering)
-- [Part V — API, security and configuration](#part-v-api-security-and-configuration)
+- [Part V: API, security and configuration](#part-v-api-security-and-configuration)
   - [5.1 HTTP API](#51-http-api)
   - [5.2 API security and rate limiting](#52-api-security-and-rate-limiting)
   - [5.3 Configuration reference](#53-configuration-reference)
-- [Part VI — Deployment](#part-vi-deployment)
+- [Part VI: Deployment](#part-vi-deployment)
   - [6.1 Docker image and compose](#61-docker-image-and-compose)
   - [6.2 Cloudflare Tunnel](#62-cloudflare-tunnel)
   - [6.3 Image publishing (GitHub Actions)](#63-image-publishing-github-actions)
@@ -100,7 +100,7 @@ Two diagram products share the same workspace:
   - [6.5 CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs)
   - [6.6 Network access (LAN & Tailscale)](#66-network-access-lan-tailscale)
   - [6.7 Deployment checklist](#67-deployment-checklist)
-- [Part VII — Future features](#part-vii-future-features)
+- [Part VII: Future features](#part-vii-future-features)
   - [External / generated thermodynamic databases](#external--generated-thermodynamic-databases)
 
 ---
@@ -243,7 +243,7 @@ PHASER/
 │   ├── models.py          # Pydantic request bodies
 │   ├── dependencies.py    # DB resolution for routes
 │   └── routes/            # One module per API concern
-│       ├── compute.py     # POST /api/compute, job status / result / DELETE
+│       ├── compute.py     # GET /api/queue, POST /api/compute, job status / result / DELETE
 │       ├── config_routes.py
 │       ├── databases.py
 │       ├── elements.py
@@ -302,7 +302,7 @@ PHASER/
 ```
 
 
-## Part I — Using PHASER
+## Part I: Using PHASER
 
 Short guide for **running diagrams**: what the modes mean, what to click, and how to fix common plot issues. Screen layout: [Part II — Web UI](#part-ii-web-ui). Chemistry: [Part III](#part-iii-chemistry-engine). Compute/packing: [Part IV](#part-iv-compute-and-packing). API/config: [Part V](#part-v-api-security-and-configuration).
 
@@ -375,7 +375,7 @@ Catalog scanning and name collisions: [Database system](#32-database-system) in 
 
 ---
 
-## Part II — Web UI
+## Part II: Web UI
 
 Layout, controls, History/cache, and redox display behaviour.
 
@@ -644,7 +644,7 @@ O₂/H₂ stability limits are horizontal in a log fO₂ plot (constant fugacity
 
 ---
 
-## Part III — Chemistry engine
+## Part III: Chemistry engine
 
 Internals for **geochem modelers**: databases, equilibration frames, water-band policy, and boundary geometry. Jobs and packing: [Part IV](#part-iv-compute-and-packing). API and config: [Part V](#part-v-api-security-and-configuration). Product use: [Part I](#part-i-using-phaser).
 
@@ -963,7 +963,7 @@ Worker count, packing, and wall-clock timeout: [Part IV — Compute and packing]
 
 ---
 
-## Part IV — Compute and packing
+## Part IV: Compute and packing
 
 How a diagram job runs on the server: enqueue → PHREEQC sweep (and optional edge tracing) → pack layers / hover → vector display for adaptive mode. Covers the FIFO queue, workers, timeouts, and the JSON the UI renders. System map and tree: [Architecture overview](#architecture-overview), [Project layout](#project-layout). Chemistry of a point: [Part III](#part-iii-chemistry-engine). CPU sizing in production: [Part VI — Deployment](#part-vi-deployment).
 
@@ -1016,9 +1016,9 @@ Details below: [queue](#42-compute-queue-and-job-lifecycle), [parallel workers](
 
 ### 4.2 Compute queue and job lifecycle
 
-When several users (or tabs) submit computes at once, extra jobs wait in a **FIFO queue** until a compute slot is free.
+When several users (or tabs) submit computes at once, extra jobs wait in a **FIFO queue** until a compute slot is free. Admission stops when `running + queued` reaches **`PHASER_MAX_QUEUE`** (default 20); see [5.2](#52-api-security-and-rate-limiting).
 
-1. `POST /api/compute` creates a job with status **`queued`**.
+1. `POST /api/compute` creates a job with status **`queued`** (or **503** `queue_full` if admission is full).
 2. A dispatcher starts the job when `running_count < MAX_CONCURRENT_JOBS`.
 3. Status becomes **`running`** while the sweep executes; progress is polled via `GET /api/job/{id}`.
    - Job payload includes **`progress`** (0–1) and **`phase`** (`grid`, `boundaries`, `packing`, or `compute` for uniform mode).
@@ -1171,7 +1171,7 @@ Component-gas edges from `trace_gas_limit_segments` are stored in the trace bund
 
 ---
 
-## Part V — API, security and configuration
+## Part V: API, security and configuration
 
 HTTP catalogue, abuse protection, and the env / `config.py` reference. Compute and packing: [Part IV](#part-iv-compute-and-packing). Chemistry: [Part III](#part-iii-chemistry-engine).
 
@@ -1181,13 +1181,14 @@ HTTP catalogue, abuse protection, and the env / `config.py` reference. Compute a
 |--------|------|-------------|
 | `GET` | `/` | Web UI |
 | `GET` | `/api/health` | Liveness check (**exempt** from rate limits) |
-| `GET` | `/api/config` | Defaults, worker/queue limits, `rate_limits`, `about`, default `db_id`, database list, plus `solution_modes` / `assemblage_solution_modes` / `mineral_category_modes` (and their defaults) |
+| `GET` | `/api/config` | Defaults, worker/queue limits (`max_queue`, `compute_min_interval_sec`), `rate_limits`, `about`, default `db_id`, database list, plus `solution_modes` / `assemblage_solution_modes` / `mineral_category_modes` (and their defaults) |
 | `GET` | `/api/databases` | List available databases |
 | `GET` | `/api/databases/{db_id}` | Database details |
 | `POST` | `/api/databases/register` | Provisional — notify the server of a generated `.dat` already on disk ([Future features](#part-vii-future-features)); not the intended long-term UX |
 | `GET` | `/api/elements?db_id=` | Elements in a database |
 | `POST` | `/api/phases` | Discover phases for a chemical system |
-| `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}` |
+| `GET` | `/api/queue` | Admission snapshot → `{running, queued, depth, max_queue, full}` (**`api` bucket only** — polling does not burn compute tokens) |
+| `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}`; **503** `{detail, error_code: "queue_full"}` when `running + queued >= max_queue` |
 | `GET` | `/api/job/{job_id}` | Job status (`queued` \| `running` \| `done` \| `error`), `progress`, `phase`, queue position |
 | `GET` | `/api/stats` | Per-server compute usage summary; query `window=24h`, `7d`, `30d` (default), `90d`, `1y`, or `all`. Includes diagram counts, `top_modes`, top-15 DBs/grids/layers/systems, timing, queue, and `activity` |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
@@ -1236,33 +1237,48 @@ Abuse protection and public-host hardening (no built-in login). Endpoint catalog
 PHASER has **no built-in user authentication**. On a public host, abuse protection is layered:
 
 1. **In-app per-IP limits** (enabled by default; tunable via `.env`)
-2. **`PHASER_MAX_CONCURRENT_JOBS`** — caps simultaneous PHREEQC sweeps
+2. **`PHASER_COMPUTE_MIN_INTERVAL_SEC`** — minimum gap between compute attempts from the same IP (short 429; does **not** start the long cooldown ladder)
+3. **`PHASER_MAX_QUEUE`** — reject new jobs when `running + queued` is full (**503** `error_code: queue_full`; the rate-limit middleware has already spent a compute token)
+4. **`PHASER_MAX_CONCURRENT_JOBS`** — caps simultaneous PHREEQC sweeps
+
+The web UI checks **`GET /api/queue`** before Compute. When `full` is true it disables the button, shows a friendly warn (“Server queue is full…”), and polls **`/api/queue` only while full**. Legit UI users should not see a raw HTTP 503; that status is the API / race backstop.
 
 #### Buckets
 
 | Bucket | Routes | Default | Env variable(s) | On burst exceeded |
 |--------|--------|---------|-------------------|-------------------|
 | **`api`** | All `/api/*` except `/api/health` | 600 / 60 s | `PHASER_RATE_LIMIT_API_PER_MIN`, `PHASER_RATE_LIMIT_WINDOW_SEC` | Short `Retry-After` (sliding window) |
-| **`compute`** | `POST /api/compute` | 12 / 60 s | `PHASER_RATE_LIMIT_COMPUTE_PER_MIN`, `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | **Cooldown** — no compute for **10 min** |
+| **`compute`** | `POST /api/compute` | **4 / 60 s** | `PHASER_RATE_LIMIT_COMPUTE_PER_MIN`, `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | **Cooldown** — no compute for **2 h** (then escalates) |
 | **`db_register`** | `POST /api/databases/register` | 6 / 60 s | `PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN`, `PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC` | **Cooldown** — **5 min** |
 | **`phases`** | `POST /api/phases` | 60 / 60 s | `PHASER_RATE_LIMIT_PHASES_PER_MIN` | Short `Retry-After` only |
 
 Set any `*_PER_MIN` to **`0`** to disable that bucket. Set **`PHASER_RATE_LIMIT=0`** to disable all limits. Cooldown behaviour: `PHASER_RATE_LIMIT_COOLDOWN_ESCALATE`, `PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC`, `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC`.
 
-Each request is checked against **every bucket that applies**. A compute job counts toward both **`api`** and **`compute`**. Job status polling (`GET /api/job/*`, ~86 req/min at 700 ms) counts only toward **`api`** — the default `600` cap leaves headroom for several active tabs.
+Each request is checked against **every bucket that applies**. A compute job counts toward both **`api`** and **`compute`**. Job status polling (`GET /api/job/*`, ~86 req/min at 700 ms) and capacity polling (`GET /api/queue`) count only toward **`api`** — the default `600` cap leaves headroom for several active tabs.
+
+#### Min interval (compute)
+
+Independent of the burst window: if the same IP POSTs `/api/compute` again within **`PHASER_COMPUTE_MIN_INTERVAL_SEC`** (default **10** s), the middleware returns **HTTP 429** with a short `Retry-After` and a burst-style message. This does **not** increment the long cooldown strike ladder.
+
+#### Queue admission
+
+| Knob | Default | Behaviour |
+|------|---------|-----------|
+| `PHASER_MAX_QUEUE` | **20** | When `running + queued >= max_queue`, `POST /api/compute` returns **503** with `{"detail": "Server compute queue is full.", "error_code": "queue_full"}` (no wait-time estimate). No job is created. |
+| `GET /api/queue` | — | `{running, queued, depth, max_queue, full}` for UI admission checks |
 
 #### Cooldown and escalation
 
 When a client exceeds the **compute** or **register** burst cap, that IP enters a **route cooldown** (not just a 60 s window wait). During cooldown, all requests on that route return **HTTP 429** with a longer `Retry-After`.
 
-| Offense (within 24 h) | Compute cooldown (default) |
-|-----------------------|----------------------------|
-| 1st | 10 min |
-| 2nd | 20 min |
-| 3rd | 40 min |
-| … | doubles until **1 h** cap |
+| Offense (within reset window) | Compute cooldown (default) |
+|-------------------------------|------------------------------------|
+| 1st | **2 h** |
+| 2nd | **4 h** |
+| 3rd | **8 h** |
+| … | doubles until **7 d** cap |
 
-Strike count resets after **`PHASER_RATE_LIMIT_VIOLATION_RESET_SEC`** (default 24 h) without another offense. Set **`PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC=0`** (and register cooldown `0`) to disable cooldowns (burst-only mode).
+Strike count resets after **`PHASER_RATE_LIMIT_VIOLATION_RESET_SEC`** (default **30 d**) without another offense. Set **`PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC=0`** (and register cooldown `0`) to disable cooldowns (burst-only mode).
 
 #### Client IP
 
@@ -1270,9 +1286,9 @@ Behind **Cloudflare Tunnel**, limits use **`CF-Connecting-IP`**, then **`X-Forwa
 
 #### Responses and `/api/config`
 
-Over-limit responses are **HTTP 429** with JSON `{"detail": "…"}` and a **`Retry-After`** header (seconds).
+Over-limit responses are **HTTP 429** with JSON `{"detail": "…"}` and a **`Retry-After`** header (seconds). Queue-full responses are **HTTP 503** with `error_code: "queue_full"`.
 
-`GET /api/config` → `rate_limits` object:
+`GET /api/config` exposes `max_queue`, `compute_min_interval_sec`, and a `rate_limits` object:
 
 | Field | Meaning |
 |-------|---------|
@@ -1328,6 +1344,8 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Base-grid `pool.map` chunksize |
 | `PHASER_MAX_WORKERS` | `8` | ProcessPool size per sweep |
 | `PHASER_MAX_CONCURRENT_JOBS` | `1` | Simultaneous sweeps (FIFO beyond) |
+| `PHASER_MAX_QUEUE` | `20` | Cap on `running + queued`; further compute POSTs → 503 `queue_full` |
+| `PHASER_COMPUTE_MIN_INTERVAL_SEC` | `10` | Min seconds between compute attempts per IP (short 429) |
 | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished job results |
 | `PHASER_JOB_QUEUE_TTL_SEC` | `7200` | Drop abandoned queued jobs |
 | `PHASER_JOB_WALL_TIMEOUT_SEC` | `300` | Hard-kill PHREEQC compute |
@@ -1343,7 +1361,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 
 ---
 
-## Part VI — Deployment
+## Part VI: Deployment
 
 Production Docker, tunnels, CPU sizing, and checklist. For a local trial, [Getting started](#getting-started) is enough.
 
@@ -1447,20 +1465,22 @@ Built-in PHREEQC databases ship inside the image. An optional `PHASER_DATA_DIR` 
 | `PHASER_MEMORY_LIMIT` | Docker cgroup | Max RAM for the container |
 | `PHASER_MAX_WORKERS` | App | PHREEQC worker processes per sweep |
 | `PHASER_MAX_CONCURRENT_JOBS` | App | Simultaneous diagram jobs |
+| `PHASER_MAX_QUEUE` | App | Max `running + queued` (default `20`) |
+| `PHASER_COMPUTE_MIN_INTERVAL_SEC` | App | Min gap between compute POSTs per IP (default `10`) |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | App | Adaptive fallback / local-geometry subdivision |
 | `PHASER_MAX_ADAPTIVE_POINTS` | App | Soft cap on adaptive PHREEQC evals |
 | `PHASER_JOB_*_TTL_SEC` | App | Job memory / queue retention |
 | `PHASER_RATE_LIMIT` | App | `1` = on, `0` = off |
 | `PHASER_RATE_LIMIT_WINDOW_SEC` | App | Rate-limit window (default `60` s) |
 | `PHASER_RATE_LIMIT_API_PER_MIN` | App | All `/api/*` except health (default `600`) |
-| `PHASER_RATE_LIMIT_COMPUTE_PER_MIN` | App | Compute burst (default `12`) |
-| `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | App | Post-burst compute block (default `600`) |
+| `PHASER_RATE_LIMIT_COMPUTE_PER_MIN` | App | Compute burst (default `4`) |
+| `PHASER_RATE_LIMIT_COMPUTE_COOLDOWN_SEC` | App | Post-burst compute block (default `7200` = 2 h) |
 | `PHASER_RATE_LIMIT_DB_REGISTER_PER_MIN` | App | Register burst (default `6`) |
 | `PHASER_RATE_LIMIT_DB_REGISTER_COOLDOWN_SEC` | App | Post-burst register block (default `300`) |
 | `PHASER_RATE_LIMIT_PHASES_PER_MIN` | App | Phases cap (default `60`) |
 | `PHASER_RATE_LIMIT_COOLDOWN_ESCALATE` | App | Double cooldown on repeat offense |
-| `PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC` | App | Max cooldown (default `3600`) |
-| `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC` | App | Strike reset after quiet period (default `86400`) |
+| `PHASER_RATE_LIMIT_COOLDOWN_MAX_SEC` | App | Max cooldown (default `604800` = 7 d) |
+| `PHASER_RATE_LIMIT_VIOLATION_RESET_SEC` | App | Strike reset after quiet period (default `2592000` = 30 d) |
 | `CLOUDFLARE_TUNNEL_TOKEN` | Compose profile | Tunnel token (`tunnel` profile) |
 | `WATCHTOWER_INTERVAL` | Compose profile | Auto-update poll interval (`watchtower` profile) |
 | `PHASER_DATA_DIR` | Compose volume | Optional host path for external `.dat` files ([Future features](#part-vii-future-features)) |
@@ -1472,6 +1492,7 @@ Built-in PHREEQC databases ship inside the image. An optional `PHASER_DATA_DIR` 
 | `PHASER_CPU_LIMIT` | Docker cgroup CPU cap for the container |
 | `PHASER_MAX_WORKERS` | PHREEQC worker processes **per sweep** (each holds an IPhreeqc instance) |
 | `PHASER_MAX_CONCURRENT_JOBS` | How many sweeps may run at once; extra jobs wait in the FIFO queue |
+| `PHASER_MAX_QUEUE` | Cap on `running + queued`; further POSTs are rejected (`queue_full`) |
 
 With **`PHASER_MAX_CONCURRENT_JOBS=1`** (default), a common starting point is **`PHASER_CPU_LIMIT` = `PHASER_MAX_WORKERS`** so one job can use the full pool.
 
@@ -1526,13 +1547,13 @@ Tailscale and LAN work **alongside** localhost — no extra PHASER config. For H
 1. Catalog and stats SQLite files are created on first run (`PHASER_CATALOG_DB`, `PHASER_STATS_DB`); mount `data/` for persistence across container recreation.
 2. Tune **`PHASER_CPU_LIMIT`**, **`PHASER_MAX_CONCURRENT_JOBS`**, and **`PHASER_MAX_WORKERS`** together (see [CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs) above); set **`PHASER_MEMORY_LIMIT`** for available RAM (defaults: 8 CPUs, 8 workers, 1 concurrent job, 8 GB).
 3. On shared hosts, keep **`PHASER_MAX_CONCURRENT_JOBS=1`** unless you have headroom for parallel sweeps.
-4. Review **`PHASER_RATE_LIMIT_*`** before exposing publicly (defaults: 12 compute burst → 10 min cooldown; see [5.2](#52-api-security-and-rate-limiting)).
+4. Review **`PHASER_RATE_LIMIT_*`**, **`PHASER_MAX_QUEUE`**, and **`PHASER_COMPUTE_MIN_INTERVAL_SEC`** before exposing publicly (defaults: 4 compute burst → 2 h cooldown ladder to 7 d, 10 s min gap, queue cap 20; see [5.2](#52-api-security-and-rate-limiting)).
 5. For testing: LAN (`http://<LAN-IP>:8765`) or Tailscale (`http://<100.x.x.x>:8765`); for public access use [Cloudflare Tunnel](#62-cloudflare-tunnel).
 6. Optional: mount `PHASER_DATA_DIR` → `data/databases/generated` if you will use external thermo DBs later ([Future features](#part-vii-future-features)).
 
 ---
 
-## Part VII — Future features
+## Part VII: Future features
 
 Planned product work that is only partially present in the current code. Details may change.
 

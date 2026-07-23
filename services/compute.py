@@ -269,6 +269,43 @@ def create_job() -> str:
     return job_id
 
 
+def _queue_depth_locked() -> tuple[int, int, int, int, bool]:
+    """Return (running, queued, depth, max_queue, full). Caller must hold _jobs_lock."""
+    running = int(_running_count)
+    queued = len(_pending)
+    depth = running + queued
+    max_queue = int(config.MAX_QUEUE)
+    full = depth >= max_queue if max_queue > 0 else False
+    return running, queued, depth, max_queue, full
+
+
+def try_admit_compute_job(body: ComputeRequest) -> str | None:
+    """Create and enqueue a job if the queue has capacity. Returns job_id or None if full."""
+    with _jobs_lock:
+        _prune_jobs_locked()
+        _running, _queued, _depth, _max_queue, full = _queue_depth_locked()
+        if full:
+            return None
+        job_id = str(uuid.uuid4())
+        now = _utcnow().isoformat()
+        _jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "progress": 0.0,
+            "queue_position": len(_pending) + 1,
+            "queue_size": len(_pending) + 1,
+            "created_at": now,
+            "last_seen_at": now,
+        }
+        _pending.append((job_id, body))
+        _jobs[job_id]["queue_position"] = len(_pending)
+        _jobs[job_id]["queue_size"] = len(_pending)
+        _jobs[job_id]["queue_position_at_start"] = _running_count + (len(_pending) - 1)
+        _refresh_queue_positions_locked()
+    _try_dispatch()
+    return job_id
+
+
 def get_job(job_id: str) -> dict[str, Any] | None:
     with _jobs_lock:
         job = _jobs.get(job_id)
@@ -328,8 +365,19 @@ def delete_job(job_id: str) -> bool:
 
 
 def run_compute_job(job_id: str, body: ComputeRequest) -> None:
+    """Enqueue an existing job. Prefer ``try_admit_compute_job`` for new work.
+
+    Refuses to enqueue when the queue is full so callers cannot bypass
+    ``MAX_QUEUE`` via ``create_job`` + ``run_compute_job``.
+    """
     with _jobs_lock:
         if job_id not in _jobs:
+            return
+        _r, _q, _d, _m, full = _queue_depth_locked()
+        if full:
+            # Drop the unused stub; admission belongs on try_admit_compute_job.
+            _jobs.pop(job_id, None)
+            clear_job_control(job_id)
             return
         _pending.append((job_id, body))
         _jobs[job_id]["queue_position"] = len(_pending)
@@ -666,10 +714,23 @@ def _reset_runtime_state_for_tests() -> None:
         _running_count = 0
 
 
+def queue_snapshot() -> dict[str, Any]:
+    """Public admission snapshot: running + queued depth vs MAX_QUEUE."""
+    with _jobs_lock:
+        running, queued, depth, max_queue, full = _queue_depth_locked()
+    return {
+        "running": running,
+        "queued": queued,
+        "depth": depth,
+        "max_queue": max_queue,
+        "full": full,
+    }
+
+
 def runtime_snapshot_for_tests() -> dict[str, Any]:
     """Queue / running-slot snapshot for assertions (unit tests only)."""
     with _jobs_lock:
-        return {
+        snap = {
             "running_count": _running_count,
             "pending": [job_id for job_id, _ in _pending],
             "jobs": {
@@ -680,3 +741,13 @@ def runtime_snapshot_for_tests() -> dict[str, Any]:
                 for job_id, job in _jobs.items()
             },
         }
+    public = queue_snapshot()
+    snap.update(
+        {
+            "queued_count": public["queued"],
+            "depth": public["depth"],
+            "max_queue": public["max_queue"],
+            "full": public["full"],
+        }
+    )
+    return snap
