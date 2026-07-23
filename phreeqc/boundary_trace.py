@@ -2,11 +2,14 @@
 
 Clean 2-category cells use edge ``brentq`` and a single dividing line. 3-category
 cells emit convex fill regions bounded by oriented lines: a genuine triple point
-(three crossings) or a diagonal band (four crossings). 2-category saddles (four
-edge crossings) split on two crossing lines. Unresolved 4-category cells and
-lost brackets share one sampled sub-grid per cell. Stability limits (converged
-vs failed) are traced separately. Solid/aqueous category pairs that share a
-name are disambiguated upstream via the ``(s)`` suffix (see ``diagram.packer``).
+(three crossings) or a diagonal band (four crossings). Triple points are the
+geometric intersection of straight pair-boundary lines (neighbor chords through
+the edge zeros) — a classic Y — with a soft 2D scalar root only as fallback.
+2-category saddles (four edge crossings) split on two crossing lines. Unresolved
+4-category cells and lost brackets share one sampled sub-grid per cell.
+Stability limits (converged vs failed) are traced separately. Solid/aqueous
+category pairs that share a name are disambiguated upstream via the ``(s)``
+suffix (see ``diagram.packer``).
 """
 from __future__ import annotations
 
@@ -713,6 +716,25 @@ def _collect_edge_crossings(
     return out
 
 
+def _intersect_lines(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    p4: tuple[float, float],
+) -> tuple[float, float] | None:
+    """Intersection of infinite lines (p1–p2) and (p3–p4), or None if parallel."""
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(den) < 1e-18:
+        return None
+    a = x1 * y2 - y1 * x2
+    b = x3 * y4 - y3 * x4
+    return (a * (x3 - x4) - (x1 - x2) * b) / den, (a * (y3 - y4) - (y1 - y2) * b) / den
+
+
 def _find_interior_point_2d(
     evaluator: PointEvaluator,
     cat_a: str,
@@ -727,7 +749,7 @@ def _find_interior_point_2d(
     tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[float, float] | None:
-    """Locate a point where two independent pair-scalars vanish (triple point)."""
+    """Fallback: locate a point where two pair-scalars vanish (PHREEQC 2D root)."""
     fn_ab, _ = evaluator.resolve_pair(
         cat_a, cat_b, evaluator.solid_phases, evaluator.collisions
     )
@@ -851,6 +873,142 @@ def _ray_segments_from_point(
     for _edge, (_loc, (wx, wy)) in crossings.items():
         segs.append({"x": [tx, wx], "y": [ty, wy]})
     return segs
+
+
+def _neighbor_of_edge(i: int, j: int, edge: int) -> tuple[int, int, int]:
+    """Return ``(ni, nj, neighbor_shared_edge)`` across cell edge ``edge``."""
+    if edge == 0:
+        return i, j - 1, 2
+    if edge == 1:
+        return i + 1, j, 3
+    if edge == 2:
+        return i, j + 1, 0
+    return i - 1, j, 1
+
+
+def _pair_line_from_neighbor(
+    evaluator: PointEvaluator,
+    corners: tuple[str, str, str, str],
+    i: int,
+    j: int,
+    edge: int,
+    cat_fn: Callable[[dict], str],
+    base_ij: dict[tuple[int, int], Any],
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    factor: int,
+    *,
+    tol: float,
+    stability_tol: float,
+    stats: TraceStats | None = None,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Straight pair-boundary line from a neighboring 2-category chord.
+
+    The neighbor's two edge zeros define the classic straight dividing line for
+    that category pair (same geometry already drawn for 2-cat cells).
+    """
+    ca = corners[edge]
+    cb = corners[(edge + 1) % 4]
+    pair = frozenset((ca, cb))
+    ni, nj, _n_edge = _neighbor_of_edge(i, j, edge)
+    if ni < 0 or nj < 0 or ni >= len(base_ph) - 1 or nj >= len(base_pe) - 1:
+        return None
+    try:
+        n_corners = _corner_cats(ni, nj, cat_fn, base_ij)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(set(n_corners)) != 2:
+        return None
+    # Neighbor must be the same pair (both corners from {ca, cb}).
+    if frozenset(n_corners) != pair:
+        return None
+    n_cross = _collect_edge_crossings(
+        evaluator, n_corners, ni, nj, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
+    )
+    if not n_cross or len(n_cross) != 2:
+        return None
+    pts = [(float(w[0]), float(w[1])) for _loc, w in n_cross.values()]
+    if (pts[0][0] - pts[1][0]) ** 2 + (pts[0][1] - pts[1][1]) ** 2 <= 1e-24:
+        return None
+    return pts[0], pts[1]
+
+
+def _geometric_triple_point(
+    evaluator: PointEvaluator,
+    corners: tuple[str, str, str, str],
+    i: int,
+    j: int,
+    crossings: dict[int, tuple[tuple[float, float], tuple[float, float]]],
+    cat_fn: Callable[[dict], str],
+    base_ij: dict[tuple[int, int], Any],
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    factor: int,
+    *,
+    tol: float,
+    stability_tol: float,
+    stats: TraceStats | None = None,
+) -> tuple[float, float] | None:
+    """Classic Y hub: intersection of straight pair-boundary lines.
+
+    Each mixed edge contributes the line of its neighboring 2-category chord.
+    Any two non-parallel lines intersect at the triple point; prefer an
+    intersection that lies inside the cell.
+    """
+    lines: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for edge in crossings:
+        line = _pair_line_from_neighbor(
+            evaluator,
+            corners,
+            i,
+            j,
+            edge,
+            cat_fn,
+            base_ij,
+            base_ph,
+            base_pe,
+            factor,
+            tol=tol,
+            stability_tol=stability_tol,
+            stats=stats,
+        )
+        if line is not None:
+            lines.append(line)
+    if len(lines) < 2:
+        return None
+
+    ph_lo, ph_hi, pe_lo, pe_hi = _cell_pe_ph_bounds(i, j, base_ph, base_pe)
+    margin_ph = 0.02 * max(ph_hi - ph_lo, 1e-15)
+    margin_pe = 0.02 * max(pe_hi - pe_lo, 1e-15)
+    best: tuple[float, float] | None = None
+    best_pen = math.inf
+    for a in range(len(lines)):
+        for b in range(a + 1, len(lines)):
+            hit = _intersect_lines(lines[a][0], lines[a][1], lines[b][0], lines[b][1])
+            if hit is None:
+                continue
+            ph, pe = float(hit[0]), float(hit[1])
+            # Soft interior preference; allow slight overshoot then clamp score.
+            pen = 0.0
+            if ph < ph_lo + margin_ph:
+                pen += (ph_lo + margin_ph - ph) ** 2
+            elif ph > ph_hi - margin_ph:
+                pen += (ph - (ph_hi - margin_ph)) ** 2
+            if pe < pe_lo + margin_pe:
+                pen += (pe_lo + margin_pe - pe) ** 2
+            elif pe > pe_hi - margin_pe:
+                pen += (pe - (pe_hi - margin_pe)) ** 2
+            if not (ph_lo <= ph <= ph_hi and pe_lo <= pe <= pe_hi):
+                pen += 1.0
+            if pen < best_pen:
+                best_pen = pen
+                best = (ph, pe)
+    if best is None:
+        return None
+    if not (ph_lo <= best[0] <= ph_hi and pe_lo <= best[1] <= pe_hi):
+        return None
+    return best
 
 
 def _line_constraint(
@@ -1001,17 +1159,17 @@ def _trace_triple_cell(
     base_pe: np.ndarray,
     factor: int,
     *,
+    cat_fn: Callable[[dict], str],
+    base_ij: dict[tuple[int, int], Any],
     tol: float,
     stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[dict[tuple[int, int], str], list[dict[str, Any]], dict[str, Any] | None] | None:
     """3-category cell: edge brentq plus convex per-category fill regions.
 
-    Three crossings => a genuine triple point (located by a 2D scalar root, or
-    the crossing centroid when a category is ``none`` and one scalar is the
-    convergence step). Four crossings => the doubled category forms a band, which
-    needs no interior point. Both yield convex line-bounded regions so fills are
-    smooth and coincide with the boundary segments.
+    Three crossings => classic Y hub from geometric intersection of the straight
+    pair-boundary lines (neighbor 2-cat chords). Soft 2D scalar root is only a
+    fallback when neighbors do not supply two lines. Four crossings => band.
     """
     distinct = list(dict.fromkeys(corners))
     if len(distinct) != 3:
@@ -1039,46 +1197,62 @@ def _trace_triple_cell(
         sum(w[0] for _, w in crossings.values()) / len(crossings),
         sum(w[1] for _, w in crossings.values()) / len(crossings),
     )
-    T_world: tuple[float, float] | None = None
-    # Try each category as the reference for the 2x2 scalar system.
-    for ref, other_a, other_b in (
-        (distinct[0], distinct[1], distinct[2]),
-        (distinct[1], distinct[0], distinct[2]),
-        (distinct[2], distinct[0], distinct[1]),
-    ):
-        T_world = _find_interior_point_2d(
-            evaluator,
-            ref,
-            other_a,
-            other_b,
-            ph_lo,
-            ph_hi,
-            pe_lo,
-            pe_hi,
-            x0,
-            tol=tol,
-            stats=stats,
-        )
-        if T_world is not None:
-            break
-    # Crossing centroid: an always-interior junction estimate. Used when the 2D
-    # solve cannot converge (a category is ``none``, so one pair-scalar is the
-    # convergence step) and as a guard when the solver clamps T onto a cell edge
-    # (degenerate: it collapses a sector and leaves a fill gap).
-    T_loc = (
-        None
-        if T_world is None
-        else _world_to_local_xy(T_world[0], T_world[1], i, j, base_ph, base_pe, factor)
+    T_world = _geometric_triple_point(
+        evaluator,
+        corners,
+        i,
+        j,
+        crossings,
+        cat_fn,
+        base_ij,
+        base_ph,
+        base_pe,
+        factor,
+        tol=tol,
+        stability_tol=stability_tol,
+        stats=stats,
+    )
+    if T_world is None:
+        # Fallback when neighbors are missing / not simple 2-cat chords.
+        for ref, other_a, other_b in (
+            (distinct[0], distinct[1], distinct[2]),
+            (distinct[1], distinct[0], distinct[2]),
+            (distinct[2], distinct[0], distinct[1]),
+        ):
+            T_world = _find_interior_point_2d(
+                evaluator,
+                ref,
+                other_a,
+                other_b,
+                ph_lo,
+                ph_hi,
+                pe_lo,
+                pe_hi,
+                x0,
+                tol=tol,
+                stats=stats,
+            )
+            if T_world is not None:
+                break
+    if T_world is None:
+        # Last resort: crossing centroid keeps fills contiguous vs stair fallback.
+        T_world = x0
+    T_loc = _world_to_local_xy(
+        T_world[0], T_world[1], i, j, base_ph, base_pe, factor
     )
     margin = 0.05 * factor
-    if T_loc is None or not (
-        margin <= T_loc[0] <= factor - margin and margin <= T_loc[1] <= factor - margin
+    if not (
+        margin <= T_loc[0] <= factor - margin
+        and margin <= T_loc[1] <= factor - margin
     ):
         T_world = x0
         T_loc = _world_to_local_xy(
             T_world[0], T_world[1], i, j, base_ph, base_pe, factor
         )
+
     regions = _triple_regions(corners, T_loc, crossings, factor)
+    if not regions:
+        return None
     node_cats = _regions_node_cats(regions, factor)
     segments = _ray_segments_from_point(T_world, crossings)
     return node_cats, segments, {"i": i, "j": j, "regions": regions}
@@ -1244,6 +1418,8 @@ def _classify_cell(
     if len(distinct) == 3:
         triple = _trace_triple_cell(
             evaluator, corners, i, j, base_ph, base_pe, factor,
+            cat_fn=cat_fn,
+            base_ij=base_ij,
             tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if triple is not None:
@@ -1384,13 +1560,23 @@ def _corner_seed(
     cells: list[tuple[int, int]],
     base_ij: dict[tuple[int, int], Any],
 ) -> dict[tuple[int, int], dict]:
+    """Seed grid nodes for traced cells plus a 1-cell halo.
+
+    The halo lets triple-point geometry read neighboring 2-category chords even
+    when that neighbor is not in the same worker chunk.
+    """
     needed: set[tuple[int, int]] = set()
     for i, j in cells:
-        for di, dj in ((0, 0), (1, 0), (1, 1), (0, 1)):
-            needed.add((i + di, j + dj))
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                for cj in (0, 1):
+                    for ci in (0, 1):
+                        needed.add((i + di + ci, j + dj + cj))
     out: dict[tuple[int, int], dict] = {}
     for key in needed:
-        r = base_ij[key]
+        r = base_ij.get(key)
+        if r is None:
+            continue
         out[key] = r if isinstance(r, dict) else asdict(r)
     return out
 

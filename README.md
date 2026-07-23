@@ -5,8 +5,9 @@
 <p align="center"><em>pH–pe / pH–Eh predominance and mineral-stability diagrams from PHREEQC</em></p>
 
 <p align="center">
-  <a href="https://github.com/matteo-loche/phaser/blob/main/LICENSE.txt"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL v3" /></a><!--
-  --><a href="https://doi.org/10.5281/zenodo.21145794"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21145794.svg" alt="DOI" /></a>
+  <a href="https://github.com/matteo-loche/phaser/blob/main/LICENSE.txt"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL v3" /></a>
+  &nbsp;
+  <a href="https://doi.org/10.5281/zenodo.21145794"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.21145794.svg" alt="DOI" /></a>
 </p>
 
 PHASER is a web service for building **pH–pe / pH–Eh geochemical phase diagrams** from PHREEQC thermodynamic databases. Two diagram products share the same grid and UI shell:
@@ -501,20 +502,42 @@ The optional **Trace phase edges** mode (`adaptive_boundaries`) evaluates the fu
 1. **Solid/aqueous name collisions** — names shared by a solid phase and an aqueous species come from the SQLite catalog (`solid_aqueous_collisions`, from `PHASES` ∩ `SOLUTION_SPECIES` text at scan time). `services/compute.py` loads them onto `GridJobParams` before the sweep; colliding solids are labelled `"<name>(s)"` during packing and tracing (not inferred from grid results).
 2. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
 3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid/mineral and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners.
-4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with **`_chunk_cells`** batching: ~`workers × TRACE_CHUNK_MULTIPLIER` jobs). Mixed cells are **Morton-sorted** into **contiguous** worker chunks so boundary chains and per-worker point/crossing caches stay local; progress is counted as chunks complete, independent of submission order. For each layer and cell:
-   - **2-category cells** — `scipy.optimize.brentq` along cell edges locates crossings of a continuous scalar whose zero is the boundary:
+
+   <img src="docs/schemes/trace-base-cell.png" width="520" alt="Base cell: square between four evaluated grid corners; flagged when corner phase labels disagree; mixed edges get brentq later" />
+
+4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (`ProcessPoolExecutor` with **`_chunk_cells`** batching: ~`workers × TRACE_CHUNK_MULTIPLIER` jobs). Mixed cells are **Morton-sorted** into **contiguous** worker chunks so boundary chains and per-worker point/crossing caches stay local; progress is counted as chunks complete, independent of submission order. For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
+   - **2-category cells (chord)** — two corner labels, two edge zeros. `brentq` on each mixed edge finds the zero of a continuous pair scalar; the boundary is the **straight chord** between those zeros (fills = both half-planes of that chord). Example: long Hausmannite | Mn²⁺ edge, or Pyrolusite | Manganite. Pair scalars:
      - SI predominance solid↔solid: `SI_A − SI_B`
      - mineral moles solid↔solid: precipitated-mole difference
      - mineral costability set edges: moles of the phase entering/leaving the co-stable set
      - aqueous↔aqueous: `log(m_A) − log(m_B)` (absent species floored so corners always bracket)
      - solid↔aqueous / solid↔fluid: SI predominance uses `SI_solid = 0`; mineral modes use **moles-gated** SI = 0 under EQUI pinning
      - converged↔failed (`none`): convergence scalar (+1 / −1) for the **stability limit**
+
+     <img src="docs/schemes/trace-chord.png" width="520" alt="Two-phase chord: edge brentq zeros joined by a straight chord with matching fills" />
+
    - **Solid/aqueous scalar choice** — the tracer reads solid vs aqueous from the category label (`label_is_solid` in `packer.py`): `"<name>(s)"` ⇒ solid, bare colliding name ⇒ aqueous; co-precip joins `"A + B"` count as solid sets. No per-corner SI guess.
-   - **3-category cells** — the cell is split into **convex fill regions**, each bounded by oriented lines (a category fills where every line's signed distance is ≥ 0). Two cases arise:
-     - *Triple point* (three crossings): a 2D root (`scipy.optimize.root` / `least_squares`), or the crossing centroid when one scalar is the convergence step (or the solver clamps to an edge), gives an interior junction `T`. Rays from `T` to the three crossings — plus a virtual ray toward the un-crossed same-category edge — cut the cell into angular sectors, one convex cone per corner; the category sharing two corners gets two sectors (joined by union).
-     - *Band* (four crossings): the doubled category sits on the diagonal, so each single-corner category is the half-plane cut off by the line joining its two adjacent crossings, and the doubled category is the convex strip between both cuts.
-   - **2-category saddles** (four edge crossings) — two intersecting dividing lines.
-   - **Fallback** — unresolved cells (4+ categories, lost brackets) share one local `(factor+1)²` sub-grid evaluation per cell across all layers, then marching squares on the sampled category field.
+   - **3-category cells** — split into **convex fill regions** (a category fills where every oriented line's signed distance is ≥ 0). Two topologies:
+     - *Triple Y* (three edge crossings) — e.g. the **tip** of a thin Manganite ribbon where Pyrolusite, Manganite, and Mn²⁺ meet. The figure shows the usual case: three phase fields around a **hub**, with edge dots from 1D `brentq` on mixed edges. How the hub is placed (in order):
+
+       1. **Geometric continuation (preferred)** — each neighboring cell that already has only two phases has a straight chord between its own edge zeros. That chord is continued as the **same straight line** through the shared edge into the central cell (no kink, no new slope). The hub is the intersection of those lines; the Y legs inside the center are just the inner parts of those same lines. Fills are the three convex sectors around the hub.
+       2. **Interior search with PHREEQC (fallback)** — sometimes a neighbor is missing, is itself a triple/band cell, or does not give a clean two-phase chord, so step 1 cannot build two usable lines. In that case the tracer asks PHREEQC for points **inside** the cell until it finds a location where **two** phase-boundary conditions are satisfied at once (the numerical analogue of “all three phases meet here”). That is a 2D root find on pair scalars (e.g. SI or mole differences), not another walk along the edges — edges stay 1D `brentq`. If a point is found, rays are drawn from it to the three edge zeros and fills use that hub.
+       3. **Centroid of the three edge zeros (last resort)** — if that interior search also fails, the hub is placed at the average of the three edge zeros. The diagram is still a Y (three sectors), not the stepped sampled fallback used for four-or-more labels in one cell.
+
+       <img src="docs/schemes/trace-triple-y.png" width="520" alt="Triple Y: three phases meet at a hub; neighbor chords continue as straight lines through shared edge zeros" />
+
+     - *Thin band* (four edge crossings) — e.g. **middle** of the Manganite strip (Pyrolusite above, Hausmannite below). Three labels but four edge zeros (thin phase on two opposite corners); no single hub inside the cell. Two nearly parallel cuts from the edge zeros keep the ribbon at **base-cell** scale so you do not need sub-cell refinement / sampled fallback just to resolve the strip.
+
+       <img src="docs/schemes/trace-band.png" width="520" alt="Thin band: four edge zeros and two cuts forming a Manganite strip" />
+
+   - **2-category saddles (X)** — only two labels but all four edges cross (checkerboard), e.g. Mn²⁺ / Hausmannite / Mn²⁺ / Hausmannite. Two chords join opposite edge zeros — not a three-phase Y.
+
+     <img src="docs/schemes/trace-saddle.png" width="520" alt="Saddle: two-phase checkerboard with four edge zeros and crossing chords" />
+
+   - **Fallback** — four+ labels in one cell (e.g. Mn²⁺, Pyrolusite, Manganite, Hausmannite crushed into one coarse square), or lost `brentq` brackets. True 4-phase points are non-generic in 2D; this usually means the grid is coarser than the features. One local `(factor+1)²` sub-grid per cell, then marching squares → can look stepped / jagged. On an Mn plot: long edges = chord; ribbon tips = triple Y; ribbon body = band; stairs at crushed tips often = fallback.
+
+     <img src="docs/schemes/trace-fallback.png" width="520" alt="Fallback: sampled stairs when four labels share one coarse cell" />
+
    - **Crossing cache** — edge `brentq` results are keyed by canonical grid-node pairs (shared by adjacent cells) and category pair, so each physical edge is root-found once per worker; converged↔failed edges use the same deduplication. Hits apply across layers that share geometry.
    - **Tolerances** — phase-boundary `brentq` uses `BOUNDARY_TRACE_TOLERANCE` (default `1e-3`); converged↔failed edges use the looser `BOUNDARY_TRACE_STABILITY_TOLERANCE` (default `1e-2`). Straight chord geometry dominates display error, so sub-node brentq precision is unnecessary; stability frontiers are numerical artifacts, not thermodynamic boundaries.
 5. **Vector display** — SI predominance uses `diagram/vectors.pack_traced_display` (`solid:*` layers → `solid_subsets`). Mineral stability uses `pack_traced_mineral_display` (`mineral:*` layers → `mineral_subsets`). Both share the same local geometry:
@@ -1168,6 +1191,7 @@ PHASER can consume databases produced by external tools:
   python scripts/smoke_check.py
   ```
 - **Mineral-stability local tests** (gitignored `tests/`): unit coverage in `test_mineral_stability_engine.py`, `test_mineral_stability_trace.py`, `test_mineral_stability_pack.py`; optional full-grid stress in `test_mineral_stability_fe_c_s_grid.py`; paired moles/costability preplots via `diag_mineral_stability_preplot.py` (`PHASER_DIAG_LEVELS` clamped to ≥ 50).
+- **Boundary-trace schemes** (gitignored `tests/`): regenerate README PNGs with `python tests/render_trace_schemes.py` (writes `docs/schemes/*.png`); full GitHub-dark README preview via `python tests/preview_readme.py` → open `tests/readme_preview.html`. Geometric Y helpers: `test_y_junction_rewrite.py`.
 
 ---
 
