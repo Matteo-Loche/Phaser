@@ -1,10 +1,8 @@
-# PHASER
-
 <p align="center">
   <img src="Icon/phaser_logo_v8.png" alt="PHASER — Phase Diagram Calculator" width="420" />
 </p>
 
-<p align="center"><em>pH–pe / pH–Eh predominance and mineral-stability diagrams from PHREEQC</em></p>
+<p align="center"><em>Phase diagrams from PHREEQC</em></p>
 
 <p align="center">
   <a href="https://github.com/matteo-loche/phaser/blob/main/LICENSE.txt"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL v3" /></a>
@@ -49,12 +47,12 @@ Two diagram products share the same workspace:
   - [Layer responsibilities](#layer-responsibilities)
 - [Project layout](#project-layout)
 - [Part I: Using PHASER](#part-i-using-phaser)
-  - [1.1 Diagram modes](#11-diagram-modes)
-  - [1.2 Build a diagram](#12-build-a-diagram)
-  - [1.3 Reading the diagram](#13-reading-the-diagram)
-  - [1.4 Useful settings](#14-useful-settings)
-  - [1.5 Water window and gas lines](#15-water-window-and-gas-lines)
-  - [1.6 Databases](#16-databases)
+  - [1.1 Databases](#11-databases)
+  - [1.2 Diagram modes](#12-diagram-modes)
+  - [1.3 Build a diagram](#13-build-a-diagram)
+  - [1.4 Reading the diagram](#14-reading-the-diagram)
+  - [1.5 Useful settings](#15-useful-settings)
+  - [1.6 Water window and gas lines](#16-water-window-and-gas-lines)
 - [Part II: Web UI](#part-ii-web-ui)
   - [2.1 Modes and routing](#21-modes-and-routing)
   - [2.2 Layout (diagram modes)](#22-layout-diagram-modes)
@@ -308,63 +306,103 @@ PHASER/
 
 ## Part I: Using PHASER
 
-Short guide for **running diagrams**: what the modes mean, what to click, and how to fix common plot issues. Screen layout: [Part II — Web UI](#part-ii-web-ui). Chemistry: [Part III](#part-iii-chemistry-engine). Compute/packing: [Part IV](#part-iv-compute-and-packing). API/config: [Part V](#part-v-api-security-and-configuration).
+Short guide for **running diagrams**: pick a database, choose a mode, set the system, compute, and read the plot. Screen layout and every control: [Part II — Web UI](#part-ii-web-ui). Chemistry internals: [Part III](#part-iii-chemistry-engine). Jobs/packing: [Part IV](#part-iv-compute-and-packing). API/config: [Part V](#part-v-api-security-and-configuration).
 
-### 1.1 Diagram modes
+Typical path: **database → mode → chemical system & axes → phases → Compute → inspect / export**. Settings and colours stay in this browser; the server only runs the job.
+
+### 1.1 Databases
+
+Every diagram is solved against one **PHREEQC thermodynamic database** (`.dat`). The database decides which elements, aqueous species, and solid/gas phases exist, and which equilibrium constants apply — so it is the first choice that matters.
+
+| Where | What you get |
+|-------|----------------|
+| **Header** (wide screens) | **Database** label, dropdown of ready `db_id`s, status dot |
+| **Sidebar → Database** (narrow / drawer) | Same selector, plus filename / source / catalog-status meta. Tap the header status dot to jump here. |
+
+**Status dot**
+
+| Colour | Meaning |
+|--------|---------|
+| **Green** | Catalog ready — safe to compute |
+| **Red** | Missing, offline, or catalog failed for that file |
+
+Hover the dot for a short status tip.
+
+**What is available today.** The list is the **builtin** set shipped with the install / Docker image (USGS Phreeqc Interactive databases under the configured builtin directory). A database appears only after the server has scanned it into the catalog; failed scans stay hidden. Changing the selection reloads element suggestions, species lists, and eligible phases automatically — no manual refresh. Different databases can give different predominance fields for the same totals and same phases (coverage and log *K* differ).
+
+### 1.2 Diagram modes
 
 | Mode | What it answers |
 |------|-----------------|
-| **Saturation** | Which solid or dissolved species is preferred at each (pH, redox) point? |
-| **Mineral Stability** | Which solids form when your selected phases are held at equilibrium? **Predominant mineral** = the solid with the largest precipitated amount; **Co-stability** = every solid that is present (`A + B` when several coexist). |
-| **Statistics** | Server usage only — no diagram compute. |
+| **Saturation** | Which solid or dissolved species is thermodynamically preferred at each (pH, redox) point? (highest saturation index / predominance) |
+| **Mineral Stability** | Which solids form when your selected phases are held at equilibrium? **Predominant mineral** = solid with the largest precipitated amount; **Co-stability** = every solid present (`A + B` when several coexist). |
+| **Statistics** | Server usage dashboard only — no diagram compute. |
 
-Saturation and Mineral Stability share the workspace (database, History, O₂/H₂ overlays) but keep **separate** results.
+Saturation and Mineral Stability share the workspace (**database**, History, O₂/H₂ overlays, layout) but keep **separate** results and History entries. Switching modes mid-job does not cancel the run; the finished diagram lands under the mode that started it.
 
-**Dummy vs Real** (sidebar): Dummy uses a simple charge-balance medium (typical for predominance maps); Real uses a chloride electrolyte. Pick what matches your modelling intent; chemistry details are in Part III.
+**Dummy vs Real** (sidebar calculation mode) — electrolyte frame for the speciation, not a separate product mode:
 
-### 1.2 Build a diagram
+| Frame | Intent |
+|-------|--------|
+| **Dummy** | Simple charge-balance medium — usual choice for predominance-style maps |
+| **Real** | Chloride electrolyte titration frame — closer to a saline background |
 
-1. Choose **Saturation** or **Mineral Stability**.
-2. Pick a **database** (green status = ready).
-3. Set the **chemical system** (totals; default mmol/kgw) and **temperature**.
-4. Set **pH** and **redox** ranges. Display can be **Eh**, **pe**, or **log fO₂**. pe↔Eh is display-only; switching to/from log fO₂ needs a new compute.
-5. Select **phases** offered for your system.
-6. Choose **layers** (solid/mineral and/or aqueous; optional per-element views). On Mineral Stability, pick Predominant vs Co-stability; optionally enable **Compute element-total contours** (+ log step) if you want `log₁₀ TOT` isolines.
-7. Under **Configuration**: resolution (50–200, default 100), leave **Trace phase edges** on for smooth boundaries, set **Convergence rescue** if needed.
-8. **Compute** — watch the job slot. Long jobs time out around **5 minutes** by default.
-9. **Inspect** — hover for species (and precipitated amounts in Mineral Stability). Right panel: labels, colours, **Concentration heatmaps** fill / contour overlays, PNG export.
-10. **History** — reopen prior diagrams (up to 24 in the browser). Closing the tab mid-job: the run can resume when you return.
+Pick what matches the modelling question; chemistry details are in [Part III](#33-single-point-evaluation-and-titration-frames).
 
-### 1.3 Reading the diagram
+### 1.3 Build a diagram
+
+1. **Database** — choose a ready entry ([1.1 Databases](#11-databases); green status).
+2. **Mode** — **Saturation** or **Mineral Stability** from the header switcher.
+3. **Chemical system** — element totals (default unit mmol/kgw) and **temperature**.
+4. **Axes** — **pH** range and redox range. Display as **Eh**, **pe**, or **log fO₂**. pe↔Eh is display-only; switching to or from log fO₂ needs a new compute.
+5. **Phases** — select from those eligible for your system (and database).
+6. **Layers / product options** — solid/mineral and/or aqueous; optional per-element views. On Mineral Stability: Predominant vs Co-stability; optionally enable **Compute element-total contours** (+ log step) before Compute if you want `log₁₀ TOT` isolines.
+7. **Configuration** — resolution (50–200, default 100), leave **Trace phase edges** on for smooth boundaries, set **Convergence rescue** if you expect hard points, adjust O₂/H₂ limits if needed.
+8. **Compute** — watch the header job slot (queue → progress → report). Long jobs time out around **5 minutes** by default.
+9. **Inspect** — hover for aqueous species (and precipitated amounts in Mineral Stability). Right panel: labels, colours, **Concentration heatmaps** / contour overlays, axis styling, PNG export.
+10. **History** — reopen prior diagrams (up to 24 in this browser). Leave mid-job: the run can resume when you return (same browser/origin).
+
+Edits after a successful plot mark the diagram **stale** until you Compute again. An identical request may show **Cached** and skip the server.
+
+### 1.4 Reading the diagram
 
 | What you see | What it usually means | What to try |
 |--------------|----------------------|-------------|
-| **White holes / blank patches** inside the chemistry field | Those grid points did not converge | Raise **Convergence rescue** (Standard → Maximum). Slightly coarser chemistry or a different database can also help. |
-| **White bands at oxidising / reducing extremes** with O₂/H₂ labels | Outside the water-stability window (overlay), not a failed solve | Expected with overlays on; adjust O₂/H₂ limits in Configuration if you want a different window. |
+| **White holes / blank patches** inside the chemistry field | Those grid points did not converge | Raise **Convergence rescue** (Standard → Maximum). Simpler chemistry or another database can also help. |
+| **White bands at oxidising / reducing extremes** with O₂/H₂ labels | Outside the water-stability window (overlay), not a failed solve | Expected with overlays on; adjust O₂/H₂ limits in Configuration for a different window. |
 | **Blocky / pixelated map** | Trace phase edges is off | Turn **Trace phase edges** on and recompute. |
 | **Jagged stairs on thin ribbons or tips** | Grid coarser than the feature | Raise **plot resolution**, or accept a local stepped look where many phases meet in one cell. |
-| **Grey regions in the solid/mineral view** | Dissolved species shown as a muted fallback colour | Switch the display to **Aqueous** to colour them properly. |
+| **Grey regions in the solid/mineral view** | Dissolved species shown as a muted fallback colour | Switch **Display** to **Aqueous** to colour them properly. |
 | **Stale** pill / Compute active after an edit | Inputs no longer match the plotted result | Press **Compute** again. |
 | **Cached** in the job slot | Same request served from browser history | Expected — no server run. |
 
-Hover always reflects the **base grid** point under the cursor (species list, precipitated amounts). Smooth edges are a drawing refinement of that grid.
+Hover always reflects the **base grid** point under the cursor (species list, precipitated amounts). Smooth edges are a drawing refinement of that grid, not a denser solve under the pointer.
 
-### 1.4 Useful settings
+### 1.5 Useful settings
+
+**At compute time** (changing these usually needs a new run)
 
 | Control | Why it matters |
 |---------|----------------|
+| **Database** | Thermodynamic data and available species/phases ([1.1 Databases](#11-databases)). |
+| **Dummy / Real** | Electrolyte frame for the speciation ([Single-point evaluation and titration frames](#33-single-point-evaluation-and-titration-frames) in Part III). |
 | **Trace phase edges** | On (default): smooth region fills and boundary lines. Off: fast uniform heatmap only. |
 | **Convergence rescue** | How hard the solver retries hard points before leaving them **white**. Off = fastest / more blanks; Standard = recommended; Maximum = fewest blanks / slowest. |
 | **Plot resolution** | Density of the base grid (and compute cost). Higher helps thin fields and reduces stepped fallback. |
-| **Dummy / Real** | Electrolyte frame for the speciation (see modes above). |
 | **O₂ / H₂ limits** | Where the water-window overlay is drawn (defaults 0.21 and 1.0 atm). |
 | **Predominant vs Co-stability** | Mineral Stability only — one “winner” solid vs all solids present. |
 | **Element-total contours** | Mineral Stability only — optional log-spaced isolines of aqueous **bare-element** totals (`TOT("Fe")`, …, mol/kgw). Enable **Compute element-total contours** in Plot options **before** Compute (default **Concentrations log steps** **2** log₁₀ mol/kgw); style/show afterward in Overlays (default stroke **dot**). |
-| **Concentration heatmap** | Mineral Stability always punched — Fill mode colours by `log₁₀ TOT` (mol/kgw) for a bare system element (`Fe`, `C`, …). Mutually exclusive with category colour fills; contour overlays stay independent. |
+
+**After compute** (display only — no recompute)
+
+| Control | Why it matters |
+|---------|----------------|
+| **Concentration heatmap** | Mineral Stability — Fill mode colours by `log₁₀ TOT` (mol/kgw) for a bare system element (`Fe`, `C`, …). Mutually exclusive with category colour fills; contour overlays stay independent. Colormap / opacity / invert / legend are display-only. |
+| **Labels, colours, opacity, axes, PNG** | Right plot panel — restyle or export the current result without a new job. |
 
 How edges are located numerically: [Trace phase edges](#36-trace-phase-edges) in Part III.
 
-### 1.5 Water window and gas lines
+### 1.6 Water window and gas lines
 
 O₂/H₂ (and other gas) lines are **overlays**. They do not change which solid/aqueous category won underneath.
 
@@ -372,12 +410,6 @@ O₂/H₂ (and other gas) lines are **overlays**. They do not change which solid
 - **Component gases** (CO₂, CH₄, … when in the system) — over-pressure edges from the gas saturation index; refined on the grid.
 
 Equations, packing, and solver wiring: [Vector display and gas overlay rendering](#45-vector-display-and-gas-overlay-rendering) in Part IV.
-
-### 1.6 Databases
-
-Choose a thermodynamic database from the header list. Today that means **builtin** sets shipped with the install / Docker image (green status = catalog ready).
-
-Catalog scanning and name collisions: [Database system](#32-database-system) in Part III. Loading databases from external generators (e.g. PyGCC) is planned — see [Future features](#part-vii-future-features).
 
 ---
 
@@ -545,7 +577,7 @@ Display controls describe the **plotted result**, not pending Configuration togg
 | **No fill** | Labels only, no category fill colours (hidden while Concentration heatmaps are active) |
 | **Phase / species colour** | Pick a plotted category (**name (formula)**) and set its colour; redraw without recompute. **Reset** restores the built-in/hash default |
 
-Colours persist in `colorByName` (`phaseDiagramState.v8`). In solid/mineral view, aqueous fallback categories stay light grey; switch to Aqueous to recolour them. Non-convergent / `none` cells are **white**; O₂/H₂ over-pressure regions are white gas fills (see [Water window and gas lines](#15-water-window-and-gas-lines)). Concentration heatmap / contours: [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability).
+Colours persist in `colorByName` (`phaseDiagramState.v8`). In solid/mineral view, aqueous fallback categories stay light grey; switch to Aqueous to recolour them. Non-convergent / `none` cells are **white**; O₂/H₂ over-pressure regions are white gas fills (see [Water window and gas lines](#16-water-window-and-gas-lines)). Concentration heatmap / contours: [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability).
 
 #### Overlays
 
@@ -724,12 +756,36 @@ Path: `PHASER_CATALOG_DB` (default `data/catalog.sqlite`). One logical snapshot 
 
 Parsers read PHREEQC datablocks from the `.dat` file. Blocks are bounded by keywords so trailing `PITZER` / `SIT` / `EXCHANGE_*` are not mis-read.
 
-| Parser | `.dat` block | Writes | Notes |
-|--------|--------------|--------|-------|
-| `parse_solution_master_species` | `SOLUTION_MASTER_SPECIES` | `totals`, `elements` | Keeps element-resolvable keys (`Fe`, `Fe(3)`, `C(4)`, …); USGS `.dat` `Fe(+3)` / `C(+4)` spellings are normalized to `Fe(3)` / `C(4)`. Drops pseudo-totals (`Alkalinity`, `Acetate`, `E`). UI picker shows **general symbols only** (`C`, `S`, …) |
-| `parse_solution_species_names` | `SOLUTION_SPECIES` | `species` | Tokens from **both sides** of each `=` line (so `… = Fe(OH)3 + …` still yields `Fe(OH)3`). Coefficients may be spaced or glued (`1.000Cu+2`) |
-| `parse_phases` | `PHASES` | `phases`, `phase_elements` | Name = first token (drops legacy numbers like `Brucite 19`). Composition and display formula from the **reaction** LHS (e.g. Goethite → `FeOOH`), not the label suffix. Gases: name ends with `(g)`. Supports two-line and same-line `Name = reaction` (Thermoddem) |
-| *(derived)* | — | `solid_aqueous_collisions` | Phase names ∩ aqueous species names (e.g. `Fe(OH)3`). At compute time colliding solids are labelled `"<name>(s)"` |
+| Parser | `.dat` block | Writes |
+|--------|--------------|--------|
+| `parse_solution_master_species` | `SOLUTION_MASTER_SPECIES` | `totals`, `elements` |
+| `parse_solution_species_names` | `SOLUTION_SPECIES` | `species` |
+| `parse_phases` | `PHASES` | `phases`, `phase_elements` |
+| *(derived)* | — | `solid_aqueous_collisions` |
+
+**`parse_solution_master_species`**
+
+- Keeps element-resolvable keys (`Fe`, `Fe(3)`, `C(4)`, …).
+- Normalizes USGS spellings `Fe(+3)` / `C(+4)` → `Fe(3)` / `C(4)`.
+- Drops pseudo-totals (`Alkalinity`, `Acetate`, `E`).
+- UI picker shows **general symbols only** (`C`, `S`, …).
+
+**`parse_solution_species_names`**
+
+- Takes tokens from **both sides** of each `=` line (so `… = Fe(OH)3 + …` still yields `Fe(OH)3`).
+- Coefficients may be spaced or glued (`1.000Cu+2`).
+
+**`parse_phases`**
+
+- Name = first token (drops legacy numbers like `Brucite 19`).
+- Composition and display formula come from the **reaction** LHS (e.g. Goethite → `FeOOH`), not the label suffix.
+- Gases: name ends with `(g)`.
+- Supports two-line and same-line `Name = reaction` (Thermoddem).
+
+**`solid_aqueous_collisions` (derived)**
+
+- Phase names ∩ aqueous species names (e.g. `Fe(OH)3`).
+- At compute time, colliding solids are labelled `"<name>(s)"`.
 
 **Element-subset eligibility** (“which solids can form from these elements?”) is set logic on `phase_elements` (`phase ⊆ system`). No per-subset PHREEQC runs.
 
@@ -776,7 +832,7 @@ The sweep coordinate is **`pe`** when `redox_axis` is `pe` (Eh display maps to p
 log10(fO₂) = 4 · (pe + pH − log K_O₂)        # O2(g) + 4H+ + 4e- = 2H2O
 ```
 
-with `log K_O₂` from `gas_limits.log_k_o2_water()`. Redox is therefore imposed as an oxygen fugacity reservoir — the same thermodynamic definition used for O₂/H₂ water-stability overlays and the `log fO₂` diagram axis (see [Water window and gas lines](#15-water-window-and-gas-lines) and [Redox axis](#211-redox-axis-log-fo-eh-pe)).
+with `log K_O₂` from `gas_limits.log_k_o2_water()`. Redox is therefore imposed as an oxygen fugacity reservoir — the same thermodynamic definition used for O₂/H₂ water-stability overlays and the `log fO₂` diagram axis (see [Water window and gas lines](#16-water-window-and-gas-lines) and [Redox axis](#211-redox-axis-log-fo-eh-pe)).
 
 **Output row.** Both modes produce one `SELECTED_OUTPUT` row per reaction step; `evaluate_point` uses the **last** row (equilibrated state at target pH and O₂ fugacity).
 
@@ -789,6 +845,48 @@ Charge-balanced predominance mode using a **fictitious inert medium** (`Bgc+` / 
 3. **No solids** in the assemblage — saturation indices come from selected phases only (SI predominance diagram).
 
 On convergence failure, a **flip-retry** swaps the charge-carrier side (required when hydrolysis inverts the formal charge guess, e.g. Fe(III) at high pH). Dummy elements (`Bgc`, `Bga`, `BgcOH`) are excluded from `system_elements` and dominance layers. O₂/H₂ overlays apply.
+
+Dummy masters / species / `Fix_H+` / `BgcOH` are defined **once per worker** after `LOAD_DATABASE` (`dummy_medium.WORKER_DEFINITIONS`), then each grid point runs a short two-step script. Example for Fe = 1 mmol/kgw at target pH 7, pe −2 (~`log₁₀ fO₂ = −63` at 25 °C):
+
+```phreeqc
+# Once per worker (after LOAD_DATABASE) — dummy_medium.WORKER_DEFINITIONS
+SOLUTION_MASTER_SPECIES
+    Bgc    Bgc+   0.0   Bgc   100.0
+    Bga    Bga-   0.0   Bga   100.0
+SOLUTION_SPECIES
+    Bgc+ = Bgc+
+        log_k 0
+    Bga- = Bga-
+        log_k 0
+PHASES
+Fix_H+
+    H+ = H+
+    log_k 0
+BgcOH
+    BgcOH = Bgc+ + OH-
+    log_k 0
+END
+
+# Per grid point — input_dummy_titration.format_dummy_titration_input
+TITLE Phase diagram (dummy titration)
+SOLUTION 1
+    temp      25
+    units     mmol/kgw
+    water     1
+    pH        1.8
+    pe        4.0
+    Fe        1
+    Bgc       1e-2 charge         # charge-carrier side (start guess); flip-retry may use Bga
+END
+USE solution 1
+EQUILIBRIUM_PHASES 1
+    Fix_H+ -7 BgcOH 10
+    -force_equality true
+    O2(g) -63 10
+    -force_equality true
+END
+# SELECTED_OUTPUT / USER_PUNCH … (SI + aqueous rankings)
+```
 
 #### Real electrolyte titration (`input_titration.py`)
 
@@ -804,6 +902,36 @@ Electroneutral equilibration with **`Cl … charge`** on the acidic seed and **`
 
 4. **`SELECTED_OUTPUT`** — saturation indices (`si`) for selected solid phases and any component trace gases, plus **`USER_PUNCH`** for dominant aqueous species and the **top-N ranked species per element** (`TOP_AQ_SPECIES_PER_ELEMENT`, default 64). For each element, `SYS("Fe", count, name$, type$, moles)` returns the element's total moles as its value and sets `count` by reference; the punch loop must not assign the return value back into `count` (that would break the species loop). `moles(i)` is the element's stoichiometric moles in each species, so multi-element complexes (e.g. `FeHCO3+`) appear under every element they contain.
 
+Same example point (Fe = 1 mmol/kgw, pH 7, pe −2). `Fix_H+` is defined in the per-point script here (NaOH comes from the loaded `.dat`):
+
+```phreeqc
+# Per grid point — input_titration.format_titration_input
+TITLE Phase diagram (real electrolyte titration)
+PHASES
+Fix_H+
+    H+ = H+
+    log_k 0
+SOLUTION 1
+    temp      25
+    units     mmol/kgw
+    water     1
+    pH        1.8
+    pe        4.0
+    Fe        1
+    Cl        1.0 charge
+END
+USE solution 1
+EQUILIBRIUM_PHASES 1
+    Fix_H+ -7 NaOH 10
+    -force_equality true
+    O2(g) -63 10
+    -force_equality true
+END
+# SELECTED_OUTPUT / USER_PUNCH … (SI + aqueous rankings)
+```
+
+The structural difference is only the supporting electrolyte / pH titrant: **`Bgc`/`Bga` + `BgcOH`** vs **`Cl … charge` + `NaOH`**. Both pin the diagram point with `Fix_H+` at `−pH` and `O2(g)` at target `log₁₀ fO₂`.
+
 #### Shared
 
 - **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point, and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain, `knobs_level`, optional `synthetic_label`). Assemblage modes additionally fill **`phase_moles`** (precipitated moles per selected solid), **`dominant_precip`** (argmax moles among solids), and **`aq_total_by_key`** (bare-element `TOT` mol/kgw when `tot_keys` is set).
@@ -811,7 +939,18 @@ Electroneutral equilibration with **`Cl … charge`** on the acidic seed and **`
 
 #### Mineral stability (assemblage modes)
 
-Mineral-stability jobs use **`assemblage_dummy_titration`** / **`assemblage_titration`** (`phreeqc/input_assemblage_dummy.py`, `input_assemblage_titration.py`). They keep the same pH / O₂(g) pins as the SI-predominance titration frames, and add every selected solid to **`EQUILIBRIUM_PHASES`** with target SI = 0 and initial moles = 0 so PHREEQC may precipitate them.
+Mineral-stability jobs use **`assemblage_dummy_titration`** / **`assemblage_titration`** (`phreeqc/input_assemblage_dummy.py`, `input_assemblage_titration.py`). They keep the same pH / O₂(g) pins as the SI-predominance titration frames, and add every selected solid to **`EQUILIBRIUM_PHASES`** with target SI = 0 and initial moles = 0 so PHREEQC may precipitate them. Example extras on the same `EQUILIBRIUM_PHASES` block:
+
+```phreeqc
+EQUILIBRIUM_PHASES 1
+    Fix_H+ -7 BgcOH 10          # or NaOH in the real-electrolyte assemblage frame
+    -force_equality true
+    O2(g) -63 10
+    -force_equality true
+    Goethite 0 0
+    Hematite 0 0
+    # …
+```
 
 **Isolation from SI predominance.** Assemblage and predominance share `evaluate_point` / `sweep.py`, but:
 
@@ -831,26 +970,23 @@ When no solid has precipitated above ε, both modes fall back to the dominant aq
 
 **Adaptive tracing** (`mineral_stability_trace.py` + `boundary_trace.py` plugins):
 
-| Trace mode | Alias | Category mode |
-|------------|-------|---------------|
-| `mineral_moles` | `mineral` | `moles` |
-| `mineral_costability` | `mineral_si` (historical name; **not** free-SI co-stability) | `costability` |
+The frontend **Predominant / Co-stability** control sets `mineral_category_mode` (`moles` / `costability`) for fill labels. That same value also chooses which **internal** boundary-trace plugin runs — there is no separate “trace mode” control in the UI. `boundary_trace.py` sees a `trace_mode` string:
+
+| Internal `trace_mode` | Alias | Chosen when | Notes |
+|-----------------------|-------|-------------|-------|
+| `mineral_moles` | `mineral` | `mineral_category_mode = moles` | Mole-difference roots between solids |
+| `mineral_costability` | `mineral_si` | `mineral_category_mode = costability` | Post-precip presence roots (historical alias name; **not** free-SI co-stability) |
 
 Layer ids are `mineral:<subset>` and `aqueous:<subset>`. Root scalars differ from SI predominance:
 
-- solid↔solid (`moles`): precipitated-mole difference (`mol`)
-- solid-set edges (`costability`): moles of the phase entering/leaving the set, centered on the presence threshold ε (`mol` / `mol_set`) so nested solid↔join edges bracket for `brentq`
+- solid↔solid (`mineral_moles`): precipitated-mole difference (`mol`)
+- solid-set edges (`mineral_costability`): moles of the phase entering/leaving the set, centered on the presence threshold ε (`mol` / `mol_set`) so nested solid↔join edges bracket for `brentq`
 - solid↔fluid: moles-gated SI = 0 (`aq_solid`) — under EQUI, precipitated solids stay near SI = 0 across their field, so ungated SI alone often fails to bracket
 - aqueous↔aqueous / convergence: unchanged (`aq` / `conv`)
 
-Entry point: `run_adaptive_mineral_stability_sweep(..., category_mode=...)`. O₂/H₂ water-band masking and gas overlays apply the same way as for SI predominance.
+Entry point: `run_adaptive_mineral_stability_sweep(..., category_mode=...)` maps category → `trace_mode` via `_TRACE_MODE_BY_CATEGORY`. O₂/H₂ water-band masking and gas overlays apply the same way as for SI predominance.
 
-**Packing / vector display** (wired in `services/compute.py` when `solution_mode` is an assemblage mode):
-
-- `diagram.packer.pack_mineral_grid_results` — hover grids with `layers.mineral_subsets`, `diagram_kind="assemblage"`, `mineral_category_mode`, and `hover_precip`
-- `diagram.vectors.pack_traced_mineral_display` — traced fills/boundaries from `mineral:*` trace layers
-
-SI predominance continues to use `pack_grid_results` / `pack_traced_display` (`layers.solid_subsets`, `diagram_kind="predominance"`).
+Hover grids and traced fills/boundaries are packed in Part IV — [Result packing](#result-packing-packerpy) and [Vector display and gas overlay rendering](#45-vector-display-and-gas-overlay-rendering).
 
 ---
 
@@ -954,12 +1090,7 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
 
    - **Crossing cache** — edge `brentq` results are keyed by canonical grid-node pairs (shared by adjacent cells) and category pair, so each physical edge is root-found once per worker; converged↔failed edges use the same deduplication. Hits apply across layers that share geometry.
    - **Tolerances** — phase-boundary `brentq` uses `BOUNDARY_TRACE_TOLERANCE` (default `1e-3`); converged↔failed edges use the looser `BOUNDARY_TRACE_STABILITY_TOLERANCE` (default `1e-2`). Straight chord geometry dominates display error, so sub-node brentq precision is unnecessary; stability frontiers are numerical artifacts, not thermodynamic boundaries.
-5. **Vector display** — SI predominance uses `diagram/vectors.pack_traced_display` (`solid:*` layers → `solid_subsets`). Mineral stability uses `pack_traced_mineral_display` (`mineral:*` layers → `mineral_subsets`). Both share the same local geometry:
-   - **Traced 2-category cells** — the base-cell rectangle is clipped by the same local dividing line used for the world-space boundary segment (Sutherland–Hodgman half-planes).
-   - **Traced 3-category / band cells** — the cell rectangle is clipped by the same oriented region lines emitted for convex fill regions.
-   - **Interior (untraced) cells** — merged mask contours of the coarse category field (one ring family per category) so large regions get a single fill suitable for region labels; avoids a per-cell rectangle mesh.
-   - **Fallback cells** — mask contours on the fine categorical sample; their black edges are also marching-squares from that sample (no `brentq` line exists).
-   - **Boundaries** — polylines taken directly from the trace bundle. O₂/H₂ overlays and water-band clipping apply when `water_stability_limits_enabled`. Despeckle removes isolated fallback pixels on the categorical sample before mask fills.
+5. **Vector display** — turn the trace bundle into Plotly fills/boundaries (`pack_traced_display` / `pack_traced_mineral_display`). Geometry and packing details: [Vector display and gas overlay rendering](#45-vector-display-and-gas-overlay-rendering).
 
 Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SPECIES`, default 4) while keeping explicit `-mol` output for species seen on boundaries.
 
@@ -1220,21 +1351,29 @@ Species molalities in hover are PHREEQC's per-element moles (`stoichiometry × s
 
 ### 4.5 Vector display and gas overlay rendering
 
-When boundary tracing is active, each plottable layer is converted into fill polygons and boundary polylines that are meant to **coincide on the same edges**:
+`services/compute.py` wires packing after the sweep / adaptive trace (and optional totals contours). Category grids and hover come from [Result packing](#result-packing-packerpy); this section covers the vector display path when **Trace phase edges** is on.
 
-- **`pack_traced_display`** — SI predominance; reads `solid:<subset>` / `aqueous:<subset>` from the trace bundle; emits `layers.solid_subsets` / `aqueous_subsets` with `diagram_kind="predominance"`.
-- **`pack_traced_mineral_display`** — mineral stability; reads `mineral:<subset>` / `aqueous:<subset>`; emits `layers.mineral_subsets` / `aqueous_subsets` with `diagram_kind="assemblage"` and `mineral_category_mode`.
+| Path | Hover / category pack | Traced fills & boundaries |
+|------|----------------------|---------------------------|
+| **Saturation** (SI predominance) | `pack_grid_results` → `layers.solid_subsets`, `diagram_kind="predominance"` | `pack_traced_display` — reads `solid:<subset>` / `aqueous:<subset>` |
+| **Mineral Stability** (assemblage) | `pack_mineral_grid_results` → `layers.mineral_subsets`, `diagram_kind="assemblage"`, `mineral_category_mode`, `hover_precip` | `pack_traced_mineral_display` — reads `mineral:<subset>` / `aqueous:<subset>` |
 
-Shared geometry:
+Both emit `aqueous_subsets` the same way. Chemistry of the assemblage frames and category modes: [Mineral stability](#mineral-stability-assemblage-modes) in Part III. How mixed cells are classified and root-found: [Trace phase edges](#36-trace-phase-edges) in Part III.
 
-- **Boundary polylines** — taken directly from the trace bundle (`brentq` / triple rays for clean cells; marching-squares rings for fallback cells).
-- **Fill polygons (traced cells)** — each mixed base cell is clipped in world `(pH, pe)` space by the same dividing line or convex region lines stored with the trace (local `0…factor` coords map linearly onto the cell). Adjacent same-color rings stay geometrically separate (no topology union), then **`batch_polygons_by_category`** concatenates them into one null-separated MultiPolygon per phase so Plotly paints **one fill trace per category** (not one SVG path per cell). Hairline stroke in the fill color still seals antialias seams between rings.
-- **Fill polygons (interiors)** — untraced cells of one category are merged into mask contours so labels (area-gated in the UI) still place on large regions.
-- **Fill polygons (fallback)** — mask contours on the fine categorical sample, matching how fallback boundaries are drawn (there is no separate root-traced edge to match).
+When boundary tracing is active, each plottable layer is converted into fill polygons and boundary polylines that are meant to **coincide on the same edges**. Local `0…factor` coords from the trace map linearly onto each base cell in world `(pH, pe)` space.
 
-Chemistry rings are clipped to the analytic O₂/H₂ water band in titration-style modes; gas outside regions use closed half-plane polygons.
+**Shared geometry** (both predominance and mineral paths):
 
-User-facing behaviour: [Water window and gas lines](#15-water-window-and-gas-lines). Chemistry of the water band: [Water-band mask and gas-limit chemistry](#35-water-band-mask-and-gas-limit-chemistry).
+- **Traced 2-category cells** — the base-cell rectangle is clipped by the same local dividing line used for the world-space boundary segment (Sutherland–Hodgman half-planes).
+- **Traced 3-category / band cells** — the cell rectangle is clipped by the same oriented region lines emitted for convex fill regions.
+- **Interior (untraced) cells** — merged mask contours of the coarse category field (one ring family per category) so large regions get a single fill suitable for region labels; avoids a per-cell rectangle mesh.
+- **Fallback cells** — mask contours on the fine categorical sample; their black edges are also marching-squares from that sample (no `brentq` line exists).
+- **Boundaries** — polylines taken directly from the trace bundle (`brentq` / triple rays for clean cells; marching-squares rings for fallback).
+- **Batching** — adjacent same-color rings stay geometrically separate (no topology union), then **`batch_polygons_by_category`** concatenates them into one null-separated MultiPolygon per phase so Plotly paints **one fill trace per category** (not one SVG path per cell). Hairline stroke in the fill color seals antialias seams between rings.
+- **Despeckle** — removes isolated fallback pixels on the categorical sample before mask fills.
+- **Water band / gas** — O₂/H₂ overlays and water-band clipping apply when `water_stability_limits_enabled`. Chemistry rings are clipped to the analytic O₂/H₂ water band in titration-style modes; gas outside regions use closed half-plane polygons.
+
+User-facing behaviour: [Water window and gas lines](#16-water-window-and-gas-lines). Chemistry of the water band: [Water-band mask and gas-limit chemistry](#35-water-band-mask-and-gas-limit-chemistry).
 
 **Analytic water-stability limits (O₂ / H₂)** — functions of `(pH, pe, T)`; no extra PHREEQC runs:
 
@@ -1303,7 +1442,7 @@ Key fields in the JSON body:
 | `totals_contour_log_step` | `2` | Spacing of contour levels in log₁₀(molality); clamped to `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN`–`_MAX` (0.5–6). Included in the browser cache key with `totals_contours` |
 | `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
 | `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
-| `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); see [Water window and gas lines](#15-water-window-and-gas-lines) |
+| `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); see [Water window and gas lines](#16-water-window-and-gas-lines) |
 | `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
 | `layer_solids` | `true` | Pack and trace solid maps (`solid_subsets` for SI predominance, `mineral_subsets` for assemblage) |
 | `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
