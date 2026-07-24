@@ -12,15 +12,20 @@ from typing import Any
 from .. import config
 
 _LOCK = threading.RLock()
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 3
 
 # Cap ranked lists so the dashboard stays scannable as usage grows.
-TOP_LIMIT = 15
+TOP_LIMIT = 10
 
 MODE_LABELS = {
     "phase-diagram": "Saturation",
     "mineral-stability": "Mineral Stability",
 }
+
+# UI Dummy / Real electrolyte frames (maps assemblage + SI predominance modes).
+ELECTROLYTE_DUMMY = "dummy"
+ELECTROLYTE_REAL = "real"
+_REAL_SOLUTION_MODES = frozenset({"titration", "assemblage_titration"})
 
 # Trailing windows for GET /api/stats?window=
 # Fixed windows use explicit bucket widths (~250–400 points).
@@ -50,6 +55,12 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, name: str, decl: str) -> None:
+    cols = {str(r[1]) for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if name not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
 def init_schema() -> None:
     with _LOCK:
         conn = _connect()
@@ -69,6 +80,8 @@ def init_schema() -> None:
                     layer_solids INTEGER NOT NULL,
                     layer_aqueous INTEGER NOT NULL,
                     layer_elements INTEGER NOT NULL,
+                    totals_contours INTEGER NOT NULL DEFAULT 0,
+                    electrolyte TEXT NOT NULL DEFAULT 'dummy',
                     adaptive INTEGER NOT NULL,
                     n_elements INTEGER NOT NULL,
                     n_phreeqc_runs INTEGER,
@@ -82,6 +95,19 @@ def init_schema() -> None:
                 CREATE INDEX IF NOT EXISTS idx_compute_events_db
                     ON compute_events(db_id);
                 """
+            )
+            # Existing DBs created before later schema versions lack these columns.
+            _ensure_column(
+                conn,
+                "compute_events",
+                "totals_contours",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            _ensure_column(
+                conn,
+                "compute_events",
+                "electrolyte",
+                "TEXT NOT NULL DEFAULT 'dummy'",
             )
             conn.execute(
                 "INSERT OR REPLACE INTO meta(key, value) VALUES ('schema_version', ?)",
@@ -99,11 +125,30 @@ def normalize_stats_window(window: str | None) -> str:
     return DEFAULT_STATS_WINDOW
 
 
+def electrolyte_frame(solution_mode: str | None) -> str:
+    """Map compute ``solution_mode`` to the UI Dummy / Real frame."""
+    if str(solution_mode or "") in _REAL_SOLUTION_MODES:
+        return ELECTROLYTE_REAL
+    return ELECTROLYTE_DUMMY
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    xs = sorted(values)
+    n = len(xs)
+    mid = n // 2
+    if n % 2:
+        return float(xs[mid])
+    return (float(xs[mid - 1]) + float(xs[mid])) / 2.0
+
+
 def layer_config_label(
     *,
     layer_solids: bool,
     layer_aqueous: bool,
     layer_elements: bool,
+    totals_contours: bool = False,
 ) -> str:
     parts: list[str] = []
     if layer_solids:
@@ -113,6 +158,8 @@ def layer_config_label(
     label = " + ".join(parts) if parts else "None"
     if layer_elements:
         label += " + subsets"
+    if totals_contours:
+        label += " + contours"
     return label
 
 
@@ -130,9 +177,16 @@ def record_compute_event(
     compute_ms: float | None,
     queue_position_at_start: int | None,
     queue_wait_ms: float | None,
+    totals_contours: bool = False,
+    electrolyte: str = ELECTROLYTE_DUMMY,
 ) -> None:
     elems = sorted(set(system_elements))
     finished_at = _utcnow()
+    frame = (
+        ELECTROLYTE_REAL
+        if str(electrolyte or "").strip().lower() == ELECTROLYTE_REAL
+        else ELECTROLYTE_DUMMY
+    )
     with _LOCK:
         conn = _connect()
         try:
@@ -140,10 +194,10 @@ def record_compute_event(
                 """
                 INSERT INTO compute_events (
                     finished_at, mode_id, db_id, grid_levels,
-                    layer_solids, layer_aqueous, layer_elements, adaptive,
-                    n_elements, n_phreeqc_runs, compute_ms,
+                    layer_solids, layer_aqueous, layer_elements, totals_contours,
+                    electrolyte, adaptive, n_elements, n_phreeqc_runs, compute_ms,
                     queue_position_at_start, queue_wait_ms, system_elements
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     finished_at,
@@ -153,6 +207,8 @@ def record_compute_event(
                     int(layer_solids),
                     int(layer_aqueous),
                     int(layer_elements),
+                    int(bool(totals_contours)),
+                    frame,
                     int(adaptive),
                     len(elems),
                     n_phreeqc_runs,
@@ -336,8 +392,7 @@ def _activity_series(
     ]
 
     counts = {b.isoformat(): 0 for b in buckets}
-    wait_sum = {b.isoformat(): 0.0 for b in buckets}
-    wait_n = {b.isoformat(): 0 for b in buckets}
+    waits: dict[str, list[float]] = {b.isoformat(): [] for b in buckets}
 
     window_start = buckets[0]
     rows = conn.execute(
@@ -364,17 +419,19 @@ def _activity_series(
             counts[key] += 1
             wait = row["queue_wait_ms"]
             if wait is not None:
-                wait_sum[key] += wait
-                wait_n[key] += 1
+                waits[key].append(float(wait))
 
     out: list[dict[str, Any]] = []
     for b in buckets:
         k = b.isoformat()
+        med = _median(waits[k])
         out.append(
             {
                 "bucket_start": k,
                 "count": counts[k],
-                "avg_wait_ms": (wait_sum[k] / wait_n[k]) if wait_n[k] else None,
+                "median_wait_ms": med,
+                # Back-compat alias for older clients / charts.
+                "avg_wait_ms": med,
             }
         )
     return out
@@ -400,10 +457,14 @@ def get_summary(window: str | None = None) -> dict[str, Any]:
                 "total_diagrams": 0,
                 "first_compute_at": None,
                 "last_compute_at": None,
+                "median_compute_ms": None,
+                "median_queue_wait_ms": None,
+                # Back-compat aliases (same values as medians).
                 "avg_compute_ms": None,
-                "avg_queue_position": None,
                 "avg_queue_wait_ms": None,
+                "avg_queue_position": None,
                 "adaptive_vs_uniform": {"adaptive": 0, "uniform": 0},
+                "electrolyte_vs": {"dummy": 0, "real": 0},
                 "top_modes": _top_modes(conn, since=since),
                 "activity": activity,
                 # Back-compat alias for older clients / docs.
@@ -420,11 +481,11 @@ def get_summary(window: str | None = None) -> dict[str, Any]:
                     COUNT(*) AS total_diagrams,
                     MIN(finished_at) AS first_compute_at,
                     MAX(finished_at) AS last_compute_at,
-                    AVG(compute_ms) AS avg_compute_ms,
                     AVG(queue_position_at_start) AS avg_queue_position,
-                    AVG(queue_wait_ms) AS avg_queue_wait_ms,
                     SUM(CASE WHEN adaptive = 1 THEN 1 ELSE 0 END) AS adaptive_count,
-                    SUM(CASE WHEN adaptive = 0 THEN 1 ELSE 0 END) AS uniform_count
+                    SUM(CASE WHEN adaptive = 0 THEN 1 ELSE 0 END) AS uniform_count,
+                    SUM(CASE WHEN electrolyte = 'real' THEN 1 ELSE 0 END) AS real_count,
+                    SUM(CASE WHEN electrolyte != 'real' THEN 1 ELSE 0 END) AS dummy_count
                 FROM compute_events
                 WHERE {_MODE_FILTER} AND finished_at >= ?
                 """,
@@ -436,6 +497,27 @@ def get_summary(window: str | None = None) -> dict[str, Any]:
             if total == 0:
                 empty["top_modes"] = top_modes
                 return empty
+
+            metric_rows = conn.execute(
+                f"""
+                SELECT compute_ms, queue_wait_ms
+                FROM compute_events
+                WHERE {_MODE_FILTER} AND finished_at >= ?
+                """,
+                (since,),
+            ).fetchall()
+            compute_vals = [
+                float(r["compute_ms"])
+                for r in metric_rows
+                if r["compute_ms"] is not None
+            ]
+            wait_vals = [
+                float(r["queue_wait_ms"])
+                for r in metric_rows
+                if r["queue_wait_ms"] is not None
+            ]
+            median_compute_ms = _median(compute_vals)
+            median_queue_wait_ms = _median(wait_vals)
 
             top_databases = _top_rows(
                 conn,
@@ -465,10 +547,11 @@ def get_summary(window: str | None = None) -> dict[str, Any]:
 
             layer_rows = conn.execute(
                 f"""
-                SELECT layer_solids, layer_aqueous, layer_elements, COUNT(*) AS count
+                SELECT layer_solids, layer_aqueous, layer_elements, totals_contours,
+                       COUNT(*) AS count
                 FROM compute_events
                 WHERE {_MODE_FILTER} AND finished_at >= ?
-                GROUP BY layer_solids, layer_aqueous, layer_elements
+                GROUP BY layer_solids, layer_aqueous, layer_elements, totals_contours
                 ORDER BY count DESC
                 LIMIT ?
                 """,
@@ -480,6 +563,7 @@ def get_summary(window: str | None = None) -> dict[str, Any]:
                         layer_solids=bool(r["layer_solids"]),
                         layer_aqueous=bool(r["layer_aqueous"]),
                         layer_elements=bool(r["layer_elements"]),
+                        totals_contours=bool(r["totals_contours"]),
                     ),
                     "count": int(r["count"]),
                 }
@@ -493,12 +577,18 @@ def get_summary(window: str | None = None) -> dict[str, Any]:
                 "total_diagrams": total,
                 "first_compute_at": agg["first_compute_at"],
                 "last_compute_at": agg["last_compute_at"],
-                "avg_compute_ms": agg["avg_compute_ms"],
+                "median_compute_ms": median_compute_ms,
+                "median_queue_wait_ms": median_queue_wait_ms,
+                "avg_compute_ms": median_compute_ms,
+                "avg_queue_wait_ms": median_queue_wait_ms,
                 "avg_queue_position": agg["avg_queue_position"],
-                "avg_queue_wait_ms": agg["avg_queue_wait_ms"],
                 "adaptive_vs_uniform": {
                     "adaptive": int(agg["adaptive_count"] or 0),
                     "uniform": int(agg["uniform_count"] or 0),
+                },
+                "electrolyte_vs": {
+                    "dummy": int(agg["dummy_count"] or 0),
+                    "real": int(agg["real_count"] or 0),
                 },
                 "top_modes": top_modes,
                 "activity": activity,

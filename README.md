@@ -391,7 +391,7 @@ Hover always reflects the **base grid** point under the cursor (species list, pr
 | **Plot resolution** | Density of the base grid (and compute cost). Higher helps thin fields and reduces stepped fallback. |
 | **O₂ / H₂ limits** | Where the water-window overlay is drawn (defaults 0.21 and 1.0 atm). |
 | **Predominant vs Co-stability** | Mineral Stability only — one “winner” solid vs all solids present. |
-| **Element-total contours** | Mineral Stability only — optional log-spaced isolines of aqueous **bare-element** totals (`TOT("Fe")`, …, mol/kgw). Enable **Compute element-total contours** in Plot options **before** Compute (default **Concentrations log steps** **2** log₁₀ mol/kgw); style/show afterward in Overlays (default stroke **dot**). |
+| **Element-total contours** | Mineral Stability only — optional log-spaced isolines of aqueous **bare-element** totals (`TOT("Fe")`, …, mol/kgw). Enable **Compute element-total contours** in Plot options **before** Compute (default **Concentration steps** **2** log₁₀ mol/kgw); style/show afterward in Overlays (default stroke **dot**). |
 
 **After compute** (display only — no recompute)
 
@@ -434,7 +434,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 - **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored under the job’s `mode_id`; switching back restores that mode’s diagram from memory or IndexedDB without clobbering the sibling.
 - **Cache keys** include `mode_id` plus the request body (including `mineral_category_mode` for Mineral Stability). Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
 - **Calculation mode** radios always show Dummy / Real electrolyte frames only. Saturation sends `dummy_titration` / `titration`; Mineral Stability maps the same radios to `assemblage_dummy_titration` / `assemblage_titration`.
-- **Plot options (Mineral Stability only)** — exclusive **Predominant mineral** (`moles`) vs **Co-stability** (`costability`) with `?` help; **Concentration contour lines** block with `?` help, **Compute element-total contours** + **Concentrations log steps** (default **2** log₁₀ mol/kgw, range **0.5–6**). Contour geometry is computed only when that checkbox is on at job start; changing it (or the log step) marks the diagram stale until recompute. Bare-element `TOT` fields for the heatmap are always punched on Mineral Stability jobs (no extra toggle).
+- **Plot options (Mineral Stability only)** — exclusive **Predominant mineral** (`moles`) vs **Co-stability** (`costability`) with `?` help; **Concentration contour lines** block with `?` help, **Compute element-total contours** + **Concentration steps** (default **2** log₁₀ mol/kgw, range **0.5–6**). Contour geometry is computed only when that checkbox is on at job start; changing it (or the log step) marks the diagram stale until recompute. Bare-element `TOT` fields for the heatmap are always punched on Mineral Stability jobs (no extra toggle).
 
 ### 2.2 Layout (diagram modes)
 
@@ -472,21 +472,22 @@ Side columns use `--panel-side` (darker than the header `--panel`, slightly lift
 
 Per-server usage metrics stored in **`data/stats.sqlite`** (env `PHASER_STATS_DB`, gitignored like other `*.sqlite` files). Recorded **only on successful server computes** for Saturation and Mineral Stability (`mode_id` `phase-diagram` / `mineral-stability`) — browser IndexedDB cache hits are excluded.
 
-The dashboard **Period** control selects a trailing window (`24h`, `7d`, `30d` default, `90d`, `1y`, or `all`). KPIs, ranked lists, and activity charts all use that window. Ranked lists are capped at the **top 15** entries.
+The dashboard **Period** control selects a trailing window (`24h`, `7d`, `30d` default, `90d`, `1y`, or `all`). KPIs, ranked lists, and activity charts all use that window. Ranked lists are capped at the **top 10** entries.
 
 | Metric | Description |
 |--------|-------------|
 | **Diagram count** | Successful server jobs in the selected window |
-| **Top mode** | Most-used product mode (`Saturation` / `Mineral Stability`) with a Modes bar chart (`top_modes`) |
-| **Top databases** | Most-used `db_id` values (≤15) |
-| **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) (≤15) |
-| **Layer configurations** | Solid / aqueous / per-element subset combinations (≤15) |
-| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C · Mg`), ranked by frequency (≤15) |
-| **Avg compute time** | Wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds) |
+| **Top mode** | Leading product mode name (`Saturation` / `Mineral Stability`) as the main value, with `share% · N Saturation · M Mineral Stability` underneath (`top_modes`) |
+| **Top databases** | Most-used `db_id` values (≤10) |
+| **Top grid sizes** | Most common `grid_levels` (= `ph_levels` = `pe_levels`) (≤10) |
+| **Layer configurations** | Solid / aqueous / per-element subset combinations, with `+ contours` when element-total contours were computed (≤10) |
+| **Chemical systems** | Full `system_elements` set per job (e.g. `Fe · C · Mg`), ranked by frequency (≤10) |
+| **Median compute time** | Median wall-clock duration from queue dispatch through packing (stored as ms; dashboard displays seconds). More robust than the mean when a few slow jobs dominate |
 | **Avg queue at start** | Mean number of jobs ahead when each job began running, captured at enqueue time (`0` = started immediately) |
-| **Avg wait time** | Mean time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
-| **Adaptive vs uniform** | Breakdown of boundary-tracing mode usage |
-| **Activity** | Compute counts in window-scaled buckets (`activity`, also aliased as `activity_24h`): 5 min (24 h), 30 min (7 d), 2 h (30 d), 6 h (90 d), 12 h (1 y); `all` picks a bucket width from the data span (~250–400 points). Each entry is `{bucket_start, count, avg_wait_ms}`. Companion graph plots average queue wait (seconds) per bucket. |
+| **Median wait time** | Median time spent queued before compute started; jobs with nothing ahead record exactly `0` (stored as ms, dashboard displays seconds) |
+| **Trace boundaries** | Share of computes with **Trace phase edges** on (`adaptive_vs_uniform`: on / off) |
+| **Top electrolyte** | Leading Dummy / Real frame name as the main value, with `share% · N dummy · M real` underneath (`electrolyte_vs`; assemblage modes map to the same two UI frames) |
+| **Activity** | Compute counts in window-scaled buckets (`activity`, also aliased as `activity_24h`): 5 min (24 h), 30 min (7 d), 2 h (30 d), 6 h (90 d), 12 h (1 y); `all` picks a bucket width from the data span (~250–400 points). Each entry is `{bucket_start, count, median_wait_ms}` (`avg_wait_ms` kept as an alias). Companion graph plots median queue wait (seconds) per bucket. |
 
 `GET /api/stats?window=24h|7d|30d|90d|1y|all` (default `30d`). Schema and queries live in `db/stats_store.py`; events are written from `services/compute.py` after each successful job.
 
@@ -508,7 +509,7 @@ Elements no longer need a manual reload button — everything refreshes when the
 | **Chemical system** | Element picker with concentrations (general element symbols only, e.g. `C` not `C(4)`), unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
 | **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max — **pe −14 to 20** for Eh/pe (stored as `peMin`/`peMax`), independent **log fO₂** bounds for log fO₂ mode. See [Redox axis](#211-redox-axis-log-fo-eh-pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
-| **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips, plus **Concentration contour lines** (**Compute element-total contours** + **Concentrations log steps** in log₁₀ mol/kgw; see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)) |
+| **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips, plus **Concentration contour lines** (**Compute element-total contours** + **Concentration steps** in log₁₀ mol/kgw; see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)) |
 | **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
 
 Changing units auto-converts species concentrations. Editing chemistry, axes, phases, or layer toggles marks the diagram **stale** until recomputed. Layer toggles in Configuration apply to the **next** compute; display controls in the plot panel always reflect the **currently plotted** result (see below).
@@ -572,7 +573,7 @@ Display controls describe the **plotted result**, not pending Configuration togg
 | Control | Effect |
 |---------|--------|
 | **Fill mode** *(Mineral Stability)* | **Category colors** (default) or **Concentration heatmaps**. Choosing heatmap **replaces** category colour filling (opacity / no-fill / per-phase picker hide). Contours remain independent overlays |
-| **Element total** / **Colormap** *(heatmap)* | Bare-element key from packed `totals_heatmap` (e.g. `Fe`, `C`) and colormap (`Viridis`, `Inferno`, `Plasma`, `Magma`, `Cividis`, `Turbo`, `Hot`, `Jet`, `YlOrRd`, `YlGnBu`, `Blues`, `Greens`, `Greys`, `RdBu`, `Spectral`), each shown with a CSS color swatch beside the name in the dropdown. **Opacity** (10–100%, default 100%) fades the heatmap fill; contours/labels stay opaque. Optional **Invert colors** flips the scale (swatches update too). Short **horizontal** inset colorbar along the top edge (`log₁₀ TOT …`), just left of the system-element badge. **Show legend** toggles the colorbar. **Legend size** (70–150%) sets length/thickness only; **Legend font** (8–28 px, default 15) sets title/tick type only — the two are independent. Each channel is auto-scaled from the plot box on small screens (no font→box feedback) |
+| **Element total** / **Colormap** *(heatmap)* | Bare-element key from packed `totals_heatmap` (e.g. `Fe`, `C`) and colormap (`Viridis`, `Inferno`, `Plasma`, `Magma`, `Cividis`, `Turbo`, `Hot`, `Jet`, `YlOrRd`, `YlGnBu`, `Blues`, `Greens`, `Greys`, `RdBu`, `Spectral`), each shown with a CSS color swatch beside the name in the dropdown. **Opacity** (10–100%, default 100%) fades the heatmap fill; contours/labels stay opaque. Optional **Invert colors** flips the scale (swatches update too). Short **horizontal** inset colorbar along the top edge (`log₁₀ TOT … (mol/kgw)`), just left of the system-element badge. **Show legend** toggles the colorbar. **Legend size** (70–150%) sets length/thickness only; **Legend font** (8–28 px, default 15) sets title/tick type only — the two are independent. Each channel is auto-scaled from the plot box on small screens (no font→box feedback) |
 | **Opacity** | Region fill transparency for category fills (default **100%**, range 10–100%). Boundaries stay opaque |
 | **No fill** | Labels only, no category fill colours (hidden while Concentration heatmaps are active) |
 | **Phase / species colour** | Pick a plotted category (**name (formula)**) and set its colour; redraw without recompute. **Reset** restores the built-in/hash default |
@@ -1414,7 +1415,7 @@ HTTP catalogue, abuse protection, and the env / `config.py` reference. Compute a
 | `GET` | `/api/queue` | Admission snapshot → `{running, queued, depth, max_queue, full}` (**`api` bucket only** — polling does not burn compute tokens) |
 | `POST` | `/api/compute` | Enqueue grid job → `{job_id, status, queue_position?, queue_size?}`; **503** `{detail, error_code: "queue_full"}` when `running + queued >= max_queue` |
 | `GET` | `/api/job/{job_id}` | Job status (`queued` \| `running` \| `done` \| `error`), `progress`, `phase`, queue position |
-| `GET` | `/api/stats` | Per-server compute usage summary; query `window=24h`, `7d`, `30d` (default), `90d`, `1y`, or `all`. Includes diagram counts, `top_modes`, top-15 DBs/grids/layers/systems, timing, queue, and `activity` |
+| `GET` | `/api/stats` | Per-server compute usage summary; query `window=24h`, `7d`, `30d` (default), `90d`, `1y`, or `all`. Includes diagram counts, `top_modes`, top-10 DBs/grids/layers/systems, median timing, queue, `electrolyte_vs`, and `activity` |
 | `GET` | `/api/job/{job_id}/result` | Packed diagram JSON |
 | `DELETE` | `/api/job/{job_id}` | Release job/result from server memory (called by UI after fetch) |
 

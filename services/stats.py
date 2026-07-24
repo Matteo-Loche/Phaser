@@ -33,6 +33,11 @@ def record_compute(
             layer_solids=body.layer_solids,
             layer_aqueous=body.layer_aqueous,
             layer_elements=effective_layer_elements(sys_tuple, body.layer_elements),
+            # Contours only run on Mineral Stability; ignore the flag on Saturation.
+            totals_contours=bool(
+                mode_id == "mineral-stability" and body.totals_contours
+            ),
+            electrolyte=stats_store.electrolyte_frame(body.solution_mode),
             adaptive=body.adaptive_boundaries,
             system_elements=sys_tuple,
             n_phreeqc_runs=n_phreeqc_runs,

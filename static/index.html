@@ -1108,11 +1108,15 @@
     .toggle {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);
-      align-items: start;
+      align-items: center;
       column-gap: 0.5rem;
       cursor: pointer;
     }
-    .toggle input { width: 18px; height: 18px; margin-top: 0.1rem; }
+    .toggle input {
+      width: 18px;
+      height: 18px;
+      margin: 0;
+    }
 
     /* Soft scrollbars: thin, muted, visible on hover or while scrolling. */
     .soft-scroll {
@@ -2019,17 +2023,34 @@
         <summary>Plot options <span class="chev">›</span></summary>
         <div class="body">
           <div class="meta" style="margin-bottom:0.35rem">Layers to compute and display</div>
-          <label class="toggle" style="display:block;margin-bottom:0.3rem">
+          <label class="toggle" style="margin-bottom:0.3rem">
             <input type="checkbox" id="layerSolids" checked />
             <span id="layerSolidsLabel">Solid predominance</span>
           </label>
-          <label class="toggle" style="display:block;margin-bottom:0.3rem">
-            <input type="checkbox" id="layerAqueous" checked /> Aqueous predominance
+          <label class="toggle" style="margin-bottom:0.3rem">
+            <input type="checkbox" id="layerAqueous" checked />
+            <span>Aqueous predominance</span>
           </label>
-          <label class="toggle" style="display:block">
-            <input type="checkbox" id="layerElements" /> Per-element subsets
-            <span class="meta">(filter map by element; off = one combined map)</span>
-          </label>
+          <div class="label-row" id="layerElementsRow">
+            <label class="toggle" style="margin:0" for="layerElements">
+              <input type="checkbox" id="layerElements" />
+              <span>Per-element subsets</span>
+            </label>
+            <button type="button" class="help-tip" id="layerElementsHelp"
+                    aria-label="Help: Per-element subsets" aria-expanded="false">?</button>
+          </div>
+          <div class="help-popover" id="layerElementsHelpPop" hidden>
+            Turn this on
+            (two or more elements) to <b>also</b> pack and trace every
+            element subset (e.g. Fe, C, and Fe–C) so Display can
+            switch maps with the element checkboxes without recomputing.
+            The active subset controls the coloured map, boundary traces,
+            region labels, and the system badge. Hover still uses the base
+            grid: the top category follows that subset map, and the aqueous
+            list is filtered to species of the checked element(s). Off: only
+            the combined map is packed (faster, especially with Trace phase
+            edges).
+          </div>
           <div class="mineral-only" id="totalsContoursComputeWrap" style="margin-top:0.75rem">
             <div class="meta" style="margin-bottom:0.35rem">Concentration contour lines</div>
             <div class="label-row">
@@ -2044,17 +2065,17 @@
             <div class="help-popover" id="totalsContoursComputeHelpPop" hidden>
               Draws dotted lines of equal dissolved amount for an element
               (for example total Fe in water). Turn this on and choose the
-              <b>Concentrations log steps</b> <b>before</b> you press Compute — the lines are root-found
+              <b>Concentration steps</b> <b>before</b> you press Compute — the lines are root-found
               during that run. A smaller step means more lines (and a
               longer wait). The concentration heatmap is always
               available on Mineral Stability; this option only adds the lines.
             </div>
             <div class="disp-row" id="totalsContourLogStepRow" style="opacity:0.45;margin-top:0.35rem;margin-left:1.65rem" title="Spacing between contour levels in log₁₀ of aqueous molality (mol/kgw)">
-              <label for="totalsContourLogStep">Concentrations log steps (log₁₀ mol/kgw)</label>
+              <label for="totalsContourLogStep">Concentration steps (log₁₀ mol/kgw)</label>
               <span class="disp-stepper">
-                <button type="button" id="totalsContourLogStepDec" aria-label="Decrease concentrations log steps">−</button>
+                <button type="button" id="totalsContourLogStepDec" aria-label="Decrease concentration steps">−</button>
                 <input type="number" id="totalsContourLogStep" min="0.5" max="6" step="0.5" value="2" disabled />
-                <button type="button" id="totalsContourLogStepInc" aria-label="Increase concentrations log steps">+</button>
+                <button type="button" id="totalsContourLogStepInc" aria-label="Increase concentration steps">+</button>
               </span>
             </div>
           </div>
@@ -2181,9 +2202,9 @@
           <details class="card disp-card">
             <summary>Labels <span class="chev">›</span></summary>
             <div class="body">
-              <label class="toggle" style="display:block;margin-bottom:0.45rem" title="Show or hide phase / species name labels on the diagram">
+              <label class="toggle" style="margin-bottom:0.45rem" title="Show or hide phase / species name labels on the diagram">
                 <input type="checkbox" id="showPhaseLabels" checked />
-                Phase / species names
+                <span>Phase / species names</span>
               </label>
               <div id="phaseLabelDetailControls">
                 <div class="disp-row" id="phaseLabelWrap">
@@ -2211,7 +2232,7 @@
                 </div>
                 <label class="toggle" title="Move labels aside with an arrow when they overlap, cover another tip, or hide their own small patch. Off = names stay at the region tip.">
                   <input type="checkbox" id="calloutArrows" checked />
-                  Arrow callout for conflict or small regions
+                  <span>Arrow callout for conflict or small regions</span>
                 </label>
               </div>
             </div>
@@ -2222,11 +2243,13 @@
             <div class="body">
               <div class="mineral-only" id="fillModeWrap" style="margin-bottom:0.55rem">
                 <div class="meta" style="margin-bottom:0.35rem">Fill mode</div>
-                <label class="toggle" style="display:block;margin-bottom:0.25rem">
-                  <input type="radio" name="fillMode" value="category" checked /> Category colors
+                <label class="toggle" style="margin-bottom:0.25rem">
+                  <input type="radio" name="fillMode" value="category" checked />
+                  <span>Category colors</span>
                 </label>
-                <label class="toggle" style="display:block;margin-bottom:0.35rem">
-                  <input type="radio" name="fillMode" value="heatmap" /> Concentration heatmaps
+                <label class="toggle" style="margin-bottom:0.35rem">
+                  <input type="radio" name="fillMode" value="heatmap" />
+                  <span>Concentration heatmaps</span>
                 </label>
                 <div id="heatmapFillControls" hidden>
                   <div class="disp-row" style="margin-bottom:0.35rem">
@@ -2257,11 +2280,13 @@
                     </div>
                     <input type="range" id="heatmapOpacity" min="10" max="100" step="5" value="100" />
                   </div>
-                  <label class="toggle" style="display:block;margin-bottom:0.35rem" title="Flip the colormap so high and low ends swap">
-                    <input type="checkbox" id="heatmapReverseScale" /> Invert colors
+                  <label class="toggle" style="margin-bottom:0.35rem" title="Flip the colormap so high and low ends swap">
+                    <input type="checkbox" id="heatmapReverseScale" />
+                    <span>Invert colors</span>
                   </label>
-                  <label class="toggle" style="display:block;margin-bottom:0.35rem" title="Show or hide the log₁₀ TOT colorbar">
-                    <input type="checkbox" id="heatmapShowColorbar" checked /> Show legend
+                  <label class="toggle" style="margin-bottom:0.35rem" title="Show or hide the log₁₀ TOT colorbar">
+                    <input type="checkbox" id="heatmapShowColorbar" checked />
+                    <span>Show legend</span>
                   </label>
                   <div class="disp-row" style="margin-bottom:0.35rem" title="Colorbar length and thickness only (independent of legend font; auto-fits the plot)">
                     <label for="heatmapColorbarSize">Legend size</label>
@@ -2289,7 +2314,10 @@
                   </div>
                   <input type="range" id="fillOpacity" min="10" max="100" step="5" value="100" />
                 </div>
-                <label class="toggle"><input type="checkbox" id="labelsOnly" /> No fill</label>
+                <label class="toggle">
+                  <input type="checkbox" id="labelsOnly" />
+                  <span>No fill</span>
+                </label>
                 <div class="disp-color-picker" id="fillColorControls" aria-disabled="true">
                   <label for="fillColorTarget">Phase / species</label>
                   <select id="fillColorTarget" class="disp-select" disabled>
@@ -2549,7 +2577,7 @@
           <p class="stats-footnote">
             Counts successful server computes for Saturation and Mineral Stability
             in the selected period (recorded separately by mode). Ranked lists show
-            the top 15 entries. Browser cache hits are not included.
+            the top 10 entries. Browser cache hits are not included.
             Re-open this page (or change the period) to refresh.
           </p>
         </div>
@@ -3016,7 +3044,7 @@
         if (contoursOn) {
           const step = Number(req.totals_contour_log_step);
           rows.push([
-            "Concentrations log steps",
+            "Concentration steps",
             Number.isFinite(step) ? `${step} log₁₀(mol/kgw)` : "—",
           ]);
         }
@@ -3661,7 +3689,10 @@
       const list = buckets || [];
       const x = list.map(b => new Date(b.bucket_start));
       const counts = list.map(b => b.count || 0);
-      const waitS = list.map(b => (b.avg_wait_ms != null ? b.avg_wait_ms / 1000 : null));
+      const waitS = list.map(b => {
+        const ms = b.median_wait_ms != null ? b.median_wait_ms : b.avg_wait_ms;
+        return ms != null ? ms / 1000 : null;
+      });
       const barWidth = statsBucketBarWidth(x);
 
       const muted = statsCssVar("--muted", "#888");
@@ -3709,7 +3740,7 @@
           color: "rgba(255,153,0,0.58)",
           line: { color: "#FF9900", width: 1 },
         },
-        hovertemplate: "%{y:.1f} s wait<extra></extra>",
+        hovertemplate: "%{y:.1f} s median wait<extra></extra>",
       }], { ...base, bargap: 0.08 }, config);
     }
 
@@ -3751,6 +3782,15 @@
       const adapt = data.adaptive_vs_uniform || {};
       const adaptTotal = (adapt.adaptive || 0) + (adapt.uniform || 0);
       const adaptPct = adaptTotal ? Math.round((adapt.adaptive / adaptTotal) * 100) : 0;
+      const elec = data.electrolyte_vs || {};
+      const dummyCount = elec.dummy || 0;
+      const realCount = elec.real || 0;
+      const elecTotal = dummyCount + realCount;
+      const topElecIsReal = realCount > dummyCount;
+      const topElecName = topElecIsReal ? "Real" : "Dummy";
+      const topElecPct = elecTotal
+        ? Math.round(((topElecIsReal ? realCount : dummyCount) / elecTotal) * 100)
+        : 0;
       const activity = data.activity || data.activity_24h || [];
       const activityTotal = activity.reduce((sum, b) => sum + (b.count || 0), 0);
       const gridItems = (data.top_grid_sizes || []).map(r => ({
@@ -3758,9 +3798,14 @@
         count: r.count,
       }));
       const modes = data.top_modes || [];
-      const topMode = modes.find(m => (m.count || 0) > 0) || modes[0];
-      const topModeLabel = topMode?.label || "—";
-      const topModeCount = topMode?.count || 0;
+      const satCount = modes.find(m => m.mode_id === "phase-diagram")?.count || 0;
+      const minCount = modes.find(m => m.mode_id === "mineral-stability")?.count || 0;
+      const modeTotal = satCount + minCount;
+      const topModeIsMineral = minCount > satCount;
+      const topModeName = topModeIsMineral ? "Mineral Stability" : "Saturation";
+      const topModePct = modeTotal
+        ? Math.round(((topModeIsMineral ? minCount : satCount) / modeTotal) * 100)
+        : 0;
 
       body.innerHTML = `
         <div class="stats-kpis">
@@ -3771,12 +3816,17 @@
           </div>
           <div class="stats-kpi" style="--kpi-accent:#F472B6">
             <div class="label">Top mode</div>
-            <div class="value" style="font-size:1.05rem">${htmlEscape(topModeLabel)}</div>
-            <div class="sub">${topModeCount} compute${topModeCount === 1 ? "" : "s"}</div>
+            <div class="value" style="font-size:1.05rem">${htmlEscape(topModeName)}</div>
+            <div class="sub">${topModePct}% · ${satCount} Saturation · ${minCount} Mineral Stability</div>
+          </div>
+          <div class="stats-kpi" style="--kpi-accent:#A78BFA">
+            <div class="label">Top electrolyte</div>
+            <div class="value" style="font-size:1.05rem">${htmlEscape(topElecName)}</div>
+            <div class="sub">${topElecPct}% · ${dummyCount} dummy · ${realCount} real</div>
           </div>
           <div class="stats-kpi" style="--kpi-accent:#00DDFF">
-            <div class="label">Avg compute</div>
-            <div class="value">${formatStatsDuration(data.avg_compute_ms)}</div>
+            <div class="label">Median compute</div>
+            <div class="value">${formatStatsDuration(data.median_compute_ms ?? data.avg_compute_ms)}</div>
             <div class="sub">wall time</div>
           </div>
           <div class="stats-kpi" style="--kpi-accent:#00FFB2">
@@ -3785,14 +3835,14 @@
             <div class="sub">jobs ahead at start (0 = immediate)</div>
           </div>
           <div class="stats-kpi" style="--kpi-accent:#FFB300">
-            <div class="label">Avg wait</div>
-            <div class="value">${formatStatsDuration(data.avg_queue_wait_ms)}</div>
+            <div class="label">Median wait</div>
+            <div class="value">${formatStatsDuration(data.median_queue_wait_ms ?? data.avg_queue_wait_ms)}</div>
             <div class="sub">queued before compute</div>
           </div>
           <div class="stats-kpi" style="--kpi-accent:#FF4D00">
-            <div class="label">Adaptive</div>
+            <div class="label">Trace boundaries</div>
             <div class="value">${adaptPct}%</div>
-            <div class="sub">${adapt.adaptive || 0} adaptive · ${adapt.uniform || 0} uniform</div>
+            <div class="sub">${adapt.adaptive || 0} on · ${adapt.uniform || 0} off</div>
           </div>
         </div>
         <div class="stats-charts">
@@ -3801,15 +3851,11 @@
             <div id="statsActivityPlot" class="stats-plot"></div>
           </section>
           <section class="stats-card" style="--card-accent:#FF9900">
-            <h3>Queue wait histogram — ${htmlEscape(windowLabel)} (seconds)</h3>
+            <h3>Median queue wait — ${htmlEscape(windowLabel)} (seconds)</h3>
             <div id="statsWaitPlot" class="stats-plot"></div>
           </section>
         </div>
         <div class="stats-grid">
-          <section class="stats-card" style="--card-accent:#F472B6">
-            <h3>Modes</h3>
-            ${statsBarList(modes, "label", "count")}
-          </section>
           <section class="stats-card" style="--card-accent:#0066FF">
             <h3>Top databases</h3>
             ${statsBarList(data.top_databases, "db_id", "count")}
@@ -3943,8 +3989,8 @@
       if (!el) return;
       const disabled = systemElements().length <= 1;
       el.disabled = disabled;
-      const label = el.closest("label");
-      if (label) label.style.opacity = disabled ? "0.55" : "";
+      const row = $("layerElementsRow") || el.closest("label");
+      if (row) row.style.opacity = disabled ? "0.55" : "";
       el.title = disabled
         ? "Per-element subsets apply only when the system has two or more elements."
         : "";
@@ -4652,7 +4698,10 @@
       const fontFamily = "system-ui,Segoe UI,sans-serif";
 
       const nticks = shortSide < 360 ? 4 : shortSide < 520 ? 5 : 7;
-      const titleText = shortSide < 400 ? `log₁₀ ${key}` : `log₁₀ TOT ${key}`;
+      const units = result?.totals_heatmap?.units || "mol/kgw";
+      const titleText = shortSide < 400
+        ? `log₁₀ ${key} (${units})`
+        : `log₁₀ TOT ${key} (${units})`;
 
       return {
         orientation: "h",
@@ -6389,6 +6438,24 @@
       {
         const helpBtn = $("totalsContoursComputeHelp");
         const helpPop = $("totalsContoursComputeHelpPop");
+        if (helpBtn && helpPop) {
+          helpBtn.addEventListener("click", e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const opening = helpPop.hidden;
+            helpPop.hidden = !opening;
+            helpBtn.setAttribute("aria-expanded", opening ? "true" : "false");
+          });
+          document.addEventListener("click", e => {
+            if (helpBtn.contains(e.target) || helpPop.contains(e.target)) return;
+            helpPop.hidden = true;
+            helpBtn.setAttribute("aria-expanded", "false");
+          });
+        }
+      }
+      {
+        const helpBtn = $("layerElementsHelp");
+        const helpPop = $("layerElementsHelpPop");
         if (helpBtn && helpPop) {
           helpBtn.addEventListener("click", e => {
             e.preventDefault();
@@ -8761,20 +8828,26 @@
 
     function hoverCellHtml(phase, speciesHtml, precipHtml = "") {
       const p = phase ? `<b>${phase}</b>` : "—";
+      const aqTitle = "Aqueous (mol/kgw)";
+      // Section titles a bit brighter/bolder than species/precip detail rows.
+      const titleStyle = "color:#f1f5f9;font-size:0.95em;font-weight:600";
+      const detailStyle = "color:#cbd5e1;font-size:0.92em;font-weight:400";
       if (!precipHtml && !speciesHtml) return p;
-      // Saturation mode: keep compact aqueous-only hover (no section headers).
+      // Saturation mode: phase + aqueous list (with unit on the section title).
       if (!precipHtml) {
-        return `${p}<br><span style="color:#cbd5e1;font-size:0.92em">${speciesHtml}</span>`;
+        return `${p}<br>`
+          + `<span style="${titleStyle}">${aqTitle}</span><br>`
+          + `<span style="${detailStyle}">${speciesHtml}</span>`;
       }
       const parts = [p];
       parts.push(
-        `<span style="color:#94a3b8;font-size:0.85em">Precipitated</span><br>`
-        + `<span style="color:#cbd5e1;font-size:0.92em">${precipHtml}</span>`
+        `<span style="${titleStyle}">Precipitated</span><br>`
+        + `<span style="${detailStyle}">${precipHtml}</span>`
       );
       if (speciesHtml) {
         parts.push(
-          `<span style="color:#94a3b8;font-size:0.85em">Aqueous</span><br>`
-          + `<span style="color:#cbd5e1;font-size:0.92em">${speciesHtml}</span>`
+          `<span style="${titleStyle}">${aqTitle}</span><br>`
+          + `<span style="${detailStyle}">${speciesHtml}</span>`
         );
       }
       return parts.join("<br>");
