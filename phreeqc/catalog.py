@@ -27,6 +27,8 @@ _FORMULA_ELEMENTS = re.compile(r"([A-Z][a-z]?)(?=\d|[A-Z]|\(|\)|\+|-|\s|$)")
 _NON_ELEMENTS = {"O", "H", "E", "e"}
 # SOLUTION_MASTER_SPECIES total keys that name a chemical element (optional redox).
 _MASTER_ELEMENT_KEY = re.compile(r"^([A-Z][a-z]?)(?:\([+-]?\d+\))?$")
+# USGS .dat files often spell masters as Fe(+3); PHREEQC/TOT also accept Fe(3).
+_PLUS_VALENCE_KEY = re.compile(r"^([A-Z][a-z]?)\(\+(\d+)\)$")
 _PURE_ELEMENT = re.compile(r"^[A-Z][a-z]?$")
 
 # Top-level PHREEQC datablock keywords. Used to bound the PHASES block: a
@@ -128,6 +130,53 @@ class DatabaseCatalogSnapshot:
 def element_from_total_key(key: str) -> str:
     m = re.match(r"^([A-Z][a-z]?)", key.strip())
     return m.group(1) if m else key
+
+
+def normalize_total_key(key: str) -> str:
+    """Canonical valence spelling: ``Fe(+3)`` → ``Fe(3)``; ``C(-4)`` unchanged.
+
+    SOLUTION_MASTER_SPECIES in many USGS databases uses the ``(+N)`` form, but
+    PHREEQC accepts ``TOT("Fe(3)")`` / ``C(4)`` and that is the spelling users
+    expect in the UI.
+    """
+    text = (key or "").strip()
+    m = _PLUS_VALENCE_KEY.match(text)
+    if m:
+        return f"{m.group(1)}({m.group(2)})"
+    return text
+
+
+def normalize_total_keys(keys: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """Normalize and de-duplicate total keys, preserving first-seen order."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for key in keys:
+        norm = normalize_total_key(key)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return tuple(out)
+
+
+def bare_system_tot_keys(
+    system_elements: tuple[str, ...] | list[str],
+    accepted_totals: tuple[str, ...] | list[str],
+) -> tuple[str, ...]:
+    """Bare element masters only (``Fe``, ``C``) — skip valence states.
+
+    Valence masters (``Fe(2)``, ``C(4)``, …) are often empty or near-zero on
+    mineral-stability diagrams; the aqueous element total is the useful field.
+    """
+    accepted = set(normalize_total_keys(accepted_totals))
+    out: list[str] = []
+    for el in system_elements:
+        sym = str(el or "").strip()
+        if not sym or "(" in sym:
+            continue
+        if sym in accepted:
+            out.append(sym)
+    return tuple(out)
 
 
 def subset_key(subset: tuple[str, ...]) -> str:
@@ -629,6 +678,9 @@ def scan_database_catalog(
 
     if not accepted:
         accepted = element_totals
+
+    # Prefer Fe(3)/C(4) spelling in the catalog even when .dat uses Fe(+3)/C(+4).
+    accepted = normalize_total_keys(accepted)
 
     symbols = element_symbols_from_totals(accepted)
     elements = tuple(ElementProbeHit(name=sym, kind="dis") for sym in symbols)

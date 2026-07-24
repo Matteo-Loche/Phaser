@@ -259,17 +259,17 @@ MINERAL_CATEGORY_MODE_META: dict[str, dict[str, str]] = {
     "moles": {
         "label": "Predominant mineral",
         "description": (
-            "Fill each cell with the solid that has the largest precipitated amount "
-            "(moles) among eligible phases. Near-equal moles may join as \"A + B\". "
-            "When nothing precipitates, the dominant aqueous species is shown."
+            "Colour each point by the solid that forms in the largest amount. "
+            "If two solids form about equally, both names may appear (A + B). "
+            "Where nothing solid forms, the main dissolved species is shown instead."
         ),
     },
     "costability": {
         "label": "Co-stability",
         "description": (
-            "Fill each cell with every solid that has precipitated (moles > 0), joined "
-            "as \"A + B + …\". This is the post-precipitation co-stable set held near "
-            "SI ≈ 0 by EQUILIBRIUM_PHASES — not free supersaturation."
+            "Colour each point by every solid that is present there, joined as "
+            "A + B when several form together. Use this to see which minerals "
+            "can coexist, not only which one is most abundant."
         ),
     },
 }
@@ -288,6 +288,16 @@ COMPUTE_MIN_INTERVAL_SEC = float(
 # When enabled, compute evaluates the full selected grid first, then traces
 # phase boundaries on mixed cells via root-finding (see boundary_trace.py).
 ADAPTIVE_BOUNDARIES_DEFAULT = True
+# Mineral-stability: root-find log10(TOT) isolines after the base grid (see totals_contours.py).
+TOTALS_CONTOUR_LOG_STEP_DEFAULT = float(
+    os.environ.get("PHASER_TOTALS_CONTOUR_LOG_STEP", "2")
+)
+TOTALS_CONTOUR_LOG_STEP_MIN = float(
+    os.environ.get("PHASER_TOTALS_CONTOUR_LOG_STEP_MIN", "0.5")
+)
+TOTALS_CONTOUR_LOG_STEP_MAX = float(
+    os.environ.get("PHASER_TOTALS_CONTOUR_LOG_STEP_MAX", "6")
+)
 # Subdivision per base cell for fallback sampling and geometric traced fills.
 ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"))
 # Soft cap on total PHREEQC evaluations in adaptive mode (base grid + trace work).
@@ -312,6 +322,8 @@ BOUNDARY_TRACE_STABILITY_TOLERANCE = float(
 # Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
 TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "16"))
 TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "4"))
+# Totals-contour pool: interleaved pH-line bands per worker (one job/worker).
+CONTOUR_BANDS_PER_WORKER = int(os.environ.get("PHASER_CONTOUR_BANDS_PER_WORKER", "2"))
 # Base grid sweep: ProcessPoolExecutor.map chunksize (points per IPC message).
 SWEEP_MAP_CHUNKSIZE = int(os.environ.get("PHASER_SWEEP_MAP_CHUNKSIZE", "200"))
 
@@ -321,8 +333,9 @@ JOB_RESULT_TTL_SEC = int(os.environ.get("PHASER_JOB_RESULT_TTL_SEC", "3600"))
 # Queued jobs that were never polled are removed (abandoned tab / never returned).
 JOB_QUEUE_TTL_SEC = int(os.environ.get("PHASER_JOB_QUEUE_TTL_SEC", "7200"))
 JOB_REAPER_INTERVAL_SEC = int(os.environ.get("PHASER_JOB_REAPER_INTERVAL_SEC", "60"))
-# Hard wall-clock limit for PHREEQC compute only (base grid + boundary tracing).
-# Does not include queue wait, DB/catalog setup, packing, or stats persistence.
+# Hard wall-clock limit for PHREEQC compute only (base grid + boundary tracing
+# + optional totals contours). Does not include queue wait, DB/catalog setup,
+# packing, or stats persistence.
 # Exceeding this terminates ProcessPool workers and frees the concurrent slot.
 JOB_WALL_TIMEOUT_SEC = int(os.environ.get("PHASER_JOB_WALL_TIMEOUT_SEC", "300"))
 
@@ -410,6 +423,8 @@ def _env_bool(name: str, default: bool) -> bool:
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off")
 
+
+TOTALS_CONTOURS_DEFAULT = _env_bool("PHASER_TOTALS_CONTOURS", False)
 
 RATE_LIMIT_ENABLED = _env_bool("PHASER_RATE_LIMIT", True)
 RATE_LIMIT_WINDOW_SEC = int(os.environ.get("PHASER_RATE_LIMIT_WINDOW_SEC", "60"))

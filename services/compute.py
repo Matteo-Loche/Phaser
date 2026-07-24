@@ -410,7 +410,7 @@ def _run_job_wrapper(job_id: str, body: ComputeRequest) -> None:
 
 @contextmanager
 def _wall_timeout_guard(job_id: str):
-    """Arm the wall clock only around PHREEQC grid + tracing.
+    """Arm the wall clock only around PHREEQC grid + tracing + contours.
 
     Setup (DB/catalog), packing, and stats recording stay outside the limit so a
     finished compute cannot time out while the diagram is being packed. Client
@@ -462,20 +462,28 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
         validate_phreeqc_setup(dll, db)
 
         from ..db.catalog_store import (
+            list_accepted_totals,
             list_collisions,
             list_gas_phases,
             list_trace_gas_phases,
             phase_names_by_subset_map,
             require_ready,
         )
-
         db_key = require_ready(db_rec)
+        from ..phreeqc.catalog import bare_system_tot_keys
         from ..phreeqc.dummy_medium import EXCLUDED_ELEMENTS
 
         sys_tuple = tuple(
             e
             for e in system_elements_from_totals(body.totals, body.system_elements)
             if e not in EXCLUDED_ELEMENTS
+        )
+        # Bare element TOT only (Fe, C, …) — valence masters are usually empty
+        # once solids buffer the system.
+        tot_keys = (
+            bare_system_tot_keys(sys_tuple, list_accepted_totals(db_key))
+            if config.is_assemblage_mode(body.solution_mode)
+            else ()
         )
         layer_elements = effective_layer_elements(sys_tuple, body.layer_elements)
         if body.gas_phases:
@@ -519,6 +527,7 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             layer_elements=layer_elements,
             solution_mode=body.solution_mode,
             knobs_mode=config.normalize_knobs_mode(body.knobs_mode),
+            tot_keys=tot_keys,
         )
 
         def progress(done: int, total: int, phase: str = "compute"):
@@ -530,8 +539,9 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
 
         assemblage = config.is_assemblage_mode(body.solution_mode)
         category_mode = body.mineral_category_mode
+        totals_contours_payload = None
 
-        # Wall clock covers PHREEQC work only (grid → end of boundary tracing).
+        # Wall clock covers PHREEQC work only (grid → boundary trace → contours).
         with _wall_timeout_guard(job_id):
             if body.adaptive_boundaries:
                 if assemblage:
@@ -570,6 +580,38 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
                 compute_mode = "uniform"
             check_abort(job_id)
 
+            # Contour root-find (process-pooled PointEvaluator); keep inside wall.
+            if (
+                assemblage
+                and body.totals_contours
+                and pack_params.tot_keys
+            ):
+                from ..phreeqc.sweep import build_grid
+                from ..phreeqc.totals_contours import (
+                    clamp_contour_log_step,
+                    find_totals_contours,
+                )
+
+                progress(0, 1, "contours")
+                ph_arr, pe_arr = build_grid(pack_params)
+
+                def contour_progress(done: int, total: int) -> None:
+                    progress(done, total, "contours")
+
+                totals_contours_payload = find_totals_contours(
+                    ph=ph_arr,
+                    pe=pe_arr,
+                    results=base_results,
+                    keys=pack_params.tot_keys,
+                    log_step=clamp_contour_log_step(body.totals_contour_log_step),
+                    job_id=job_id,
+                    progress_cb=contour_progress,
+                    params=pack_params,
+                    max_workers=config.MAX_WORKERS,
+                )
+                progress(1, 1, "contours")
+                check_abort(job_id)
+
         rows = [asdict(r) for r in base_results]
         pack_layers = count_layer_pack_steps(pack_params)
         # Adaptive jobs pack the base hover grids and then the traced vector
@@ -598,6 +640,14 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
                 pack_params, rows, db_path=db, progress_cb=pack_tick
             )
         packed["compute_mode"] = compute_mode
+        packed["totals_contours_requested"] = bool(assemblage and body.totals_contours)
+        packed["totals_contour_log_step"] = float(
+            body.totals_contour_log_step
+            if body.totals_contour_log_step is not None
+            else config.TOTALS_CONTOUR_LOG_STEP_DEFAULT
+        )
+        if totals_contours_payload is not None:
+            packed["totals_contours"] = totals_contours_payload
         # User-facing input snapshot for the composition overlay (display units).
         packed["input_totals"] = {
             str(k): float(v) for k, v in (body.totals or {}).items() if float(v) > 0

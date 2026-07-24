@@ -49,6 +49,9 @@ class ComputeRequest(BaseModel):
     solution_mode: str = config.SOLUTION_MODE_DEFAULT
     mineral_category_mode: str = config.MINERAL_CATEGORY_MODE_DEFAULT
     knobs_mode: str = config.KNOBS_MODE_DEFAULT
+    # Mineral Stability: root-find log10(TOT) isolines after the base grid.
+    totals_contours: bool = config.TOTALS_CONTOURS_DEFAULT
+    totals_contour_log_step: float = config.TOTALS_CONTOUR_LOG_STEP_DEFAULT
 
     @field_validator("solution_mode")
     @classmethod
@@ -96,6 +99,13 @@ class ComputeRequest(BaseModel):
                 f"Use one of: {', '.join(config.UNIT_OPTIONS)}."
             )
         return unit
+
+    @field_validator("totals_contour_log_step")
+    @classmethod
+    def _validate_totals_contour_log_step(cls, value: float) -> float:
+        from ..phreeqc.totals_contours import clamp_contour_log_step
+
+        return clamp_contour_log_step(value)
 
     @model_validator(mode="after")
     def _at_least_one_layer(self) -> ComputeRequest:

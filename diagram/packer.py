@@ -599,6 +599,60 @@ def pack_mineral_subset_grid(
     return layer
 
 
+def pack_totals_heatmap(
+    params: GridJobParams,
+    rows: list[dict],
+    *,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+) -> dict[str, Any]:
+    """Pack base-grid aqueous ``TOT`` fields as continuous mol/kgw heatmaps.
+
+    Grid layout matches category/hover packs: ``grids[key][pe_index][ph_index]``
+    so Plotly heatmap ``z[i][j]`` aligns with ``y[i]`` (pe) and ``x[j]`` (pH).
+    """
+    from ..phreeqc.catalog import normalize_total_key, normalize_total_keys
+
+    keys = normalize_total_keys(params.tot_keys or ())
+    grids: dict[str, list[list[float | None]]] = {}
+    for key in keys:
+        grid: list[list[float | None]] = [
+            [None] * params.ph_levels for _ in range(params.pe_levels)
+        ]
+        for row in rows:
+            if not row.get("converged"):
+                continue
+            # Synthetic O₂/H₂ outside-band points have no aqueous totals.
+            if row.get("synthetic_label"):
+                continue
+            pi = ph_lookup.get(round(float(row["ph"]), 12))
+            pj = pe_lookup.get(round(float(row["pe"]), 12))
+            if pi is None or pj is None:
+                continue
+            raw = row.get("aq_total_by_key") or {}
+            tot = raw.get(key)
+            if tot is None:
+                # Legacy punch keys may still use Fe(+3) / C(+4) spelling.
+                for rk, rv in raw.items():
+                    if normalize_total_key(rk) == key:
+                        tot = rv
+                        break
+            if tot is None:
+                continue
+            try:
+                val = float(tot)
+            except (TypeError, ValueError):
+                continue
+            if val == val and val > 0.0:
+                grid[pj][pi] = val
+        grids[key] = grid
+    return {
+        "keys": list(keys),
+        "units": "mol/kgw",
+        "grids": grids,
+    }
+
+
 def pack_mineral_grid_results(
     params: GridJobParams,
     rows: list[dict],
@@ -721,6 +775,12 @@ def pack_mineral_grid_results(
             pe_levels=params.pe_levels,
             ph_levels=params.ph_levels,
             collision_names=collisions,
+        ),
+        "totals_heatmap": pack_totals_heatmap(
+            params,
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
         ),
         "n_converged": sum(1 for r in rows if r.get("converged")),
         "n_total": len(rows),

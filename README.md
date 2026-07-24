@@ -23,6 +23,7 @@ Two diagram products share the same workspace:
 
 - **Smooth phase boundaries** (default) — boundaries are refined after the base grid so regions draw as clean fills and lines, not only a coarse heatmap style diagram.
 - **Layers** — solid/mineral and aqueous maps, optional per-element filter views; hover on the diagram lists top aqueous species and precipitated amounts in Mineral Stability at this location.
+- **Concentration heatmap & contours** *(Mineral Stability)* — colour by aqueous `log₁₀ TOT` (mol/kgw) for system elements, plus optional log-spaced isolines refinement.
 - **Rich display options** — labels (name / formula / both), colours per phase, fill opacity, boundary width, axis ticks/fonts, callouts, system badges, and more — tweak the figure without recomputing.
 - **PNG download** — export the plot (or selected layers) at chosen size, aspect, and DPI.
 - **No login — stays in your browser** — diagram history, sidebar settings, layout, and colour choices are stored locally on your machine; nothing of that is kept as a user account on the server. Leave mid-run and the job can resume when you return (same browser/origin).
@@ -66,6 +67,7 @@ Two diagram products share the same workspace:
     - [Labels](#labels)
     - [Fill](#fill)
     - [Overlays](#overlays)
+    - [Concentration heatmap and contours (Mineral Stability)](#concentration-heatmap-and-contours-mineral-stability)
     - [Axes](#axes)
     - [Download](#download)
   - [2.8 Diagram rendering](#28-diagram-rendering)
@@ -82,10 +84,11 @@ Two diagram products share the same workspace:
   - [3.4 Convergence rescue (KNOBS)](#34-convergence-rescue-knobs)
   - [3.5 Water-band mask and gas-limit chemistry](#35-water-band-mask-and-gas-limit-chemistry)
   - [3.6 Trace phase edges](#36-trace-phase-edges)
+  - [3.7 Element-total contours (Mineral Stability)](#37-element-total-contours-mineral-stability)
 - [Part IV: Compute and packing](#part-iv-compute-and-packing)
   - [4.1 End-to-end compute flow](#41-end-to-end-compute-flow)
   - [4.2 Compute queue and job lifecycle](#42-compute-queue-and-job-lifecycle)
-  - [4.3 Parallel workers (grid sweep and boundary trace)](#43-parallel-workers-grid-sweep-and-boundary-trace)
+  - [4.3 Parallel workers (grid sweep, boundary trace, and totals contours)](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours)
   - [4.4 Phase selection, packing, and hover](#44-phase-selection-packing-and-hover)
   - [4.5 Vector display and gas overlay rendering](#45-vector-display-and-gas-overlay-rendering)
 - [Part V: API, security and configuration](#part-v-api-security-and-configuration)
@@ -220,9 +223,9 @@ flowchart TB
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
 | **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py` with **spawn** ProcessPools), species helpers, and usage-statistics recording. No PHREEQC math here. |
 | **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`); persist per-server compute events (`stats_store.py`). |
-| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing (SI predominance and mineral-stability plugins); register live ProcessPools for hard-kill on timeout. Lazy imports avoid circular deps under multiprocessing **spawn**. |
-| **diagram** | Turn per-point SI / precipitated-mole / species data into 2D category grids and traced display layers (vector fills batched per category). |
-| **static** | Client UI: species editor, phase picker, plot canvas, job polling, browser-side settings and result cache. |
+| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing (SI predominance and mineral-stability plugins) / optional totals-contour root-find; register live ProcessPools for hard-kill on timeout. Lazy imports avoid circular deps under multiprocessing **spawn**. |
+| **diagram** | Turn per-point SI / precipitated-mole / species / `TOT` data into 2D category grids, `totals_heatmap` packs, and traced display layers (vector fills batched per category). |
+| **static** | Client UI: species editor, phase picker, plot canvas (incl. totals heatmap fill + contour overlays), job polling, browser-side settings and result cache. |
 
 
 ---
@@ -267,6 +270,7 @@ PHASER/
 │   ├── input_assemblage_titration.py # Real electrolyte + EQUI solids (mineral stability)
 │   ├── mineral_stability.py # Precipitated-mole categories + root scalars (moles / costability)
 │   ├── mineral_stability_trace.py # Adaptive trace orchestration for mineral modes
+│   ├── totals_contours.py # log₁₀(TOT) isoline root-find + polyline stitch (process-pooled)
 │   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
 │   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
 │   ├── sweep.py           # Multiprocessing grid sweep (killable ProcessPool)
@@ -274,7 +278,7 @@ PHASER/
 │   └── boundary_trace.py  # Root-finding tracer (brentq; predominance + mineral plugins)
 ├── diagram/               # Phase diagram assembly
 │   ├── phases.py          # Phase name resolution for a chemical system
-│   ├── packer.py          # Pack grid results; SI + mineral-stability category grids
+│   ├── packer.py          # Pack grid results; SI + mineral-stability category grids + totals_heatmap
 │   └── vectors.py         # Vector fills (predominance + mineral-stability traced display)
 ├── services/              # Orchestration logic
 │   ├── catalog.py         # Startup / background catalog scans (text parse + SI probe)
@@ -325,10 +329,10 @@ Saturation and Mineral Stability share the workspace (database, History, O₂/H�
 3. Set the **chemical system** (totals; default mmol/kgw) and **temperature**.
 4. Set **pH** and **redox** ranges. Display can be **Eh**, **pe**, or **log fO₂**. pe↔Eh is display-only; switching to/from log fO₂ needs a new compute.
 5. Select **phases** offered for your system.
-6. Choose **layers** (solid/mineral and/or aqueous; optional per-element views). On Mineral Stability, pick Predominant vs Co-stability.
+6. Choose **layers** (solid/mineral and/or aqueous; optional per-element views). On Mineral Stability, pick Predominant vs Co-stability; optionally enable **Compute element-total contours** (+ log step) if you want `log₁₀ TOT` isolines.
 7. Under **Configuration**: resolution (50–200, default 100), leave **Trace phase edges** on for smooth boundaries, set **Convergence rescue** if needed.
 8. **Compute** — watch the job slot. Long jobs time out around **5 minutes** by default.
-9. **Inspect** — hover for species (and precipitated amounts in Mineral Stability). Right panel: labels, colours, overlays, PNG export.
+9. **Inspect** — hover for species (and precipitated amounts in Mineral Stability). Right panel: labels, colours, **Concentration heatmaps** fill / contour overlays, PNG export.
 10. **History** — reopen prior diagrams (up to 24 in the browser). Closing the tab mid-job: the run can resume when you return.
 
 ### 1.3 Reading the diagram
@@ -355,6 +359,8 @@ Hover always reflects the **base grid** point under the cursor (species list, pr
 | **Dummy / Real** | Electrolyte frame for the speciation (see modes above). |
 | **O₂ / H₂ limits** | Where the water-window overlay is drawn (defaults 0.21 and 1.0 atm). |
 | **Predominant vs Co-stability** | Mineral Stability only — one “winner” solid vs all solids present. |
+| **Element-total contours** | Mineral Stability only — optional log-spaced isolines of aqueous **bare-element** totals (`TOT("Fe")`, …, mol/kgw). Enable **Compute element-total contours** in Plot options **before** Compute (default **Concentrations log steps** **2** log₁₀ mol/kgw); style/show afterward in Overlays (default stroke **dot**). |
+| **Concentration heatmap** | Mineral Stability always punched — Fill mode colours by `log₁₀ TOT` (mol/kgw) for a bare system element (`Fe`, `C`, …). Mutually exclusive with category colour fills; contour overlays stay independent. |
 
 How edges are located numerically: [Trace phase edges](#36-trace-phase-edges) in Part III.
 
@@ -396,7 +402,7 @@ Modes are client-side hash routes inside the same `index.html` shell (no extra b
 - **Cross-mode jobs** — switching modes during a compute does not cancel polling. Finished results are stored under the job’s `mode_id`; switching back restores that mode’s diagram from memory or IndexedDB without clobbering the sibling.
 - **Cache keys** include `mode_id` plus the request body (including `mineral_category_mode` for Mineral Stability). Active jobs are tracked in `phaserActiveJob.v2` with a `modeId` field.
 - **Calculation mode** radios always show Dummy / Real electrolyte frames only. Saturation sends `dummy_titration` / `titration`; Mineral Stability maps the same radios to `assemblage_dummy_titration` / `assemblage_titration`.
-- **Plot options (Mineral Stability only)** — exclusive **Predominant mineral** (`moles`) vs **Co-stability** (`costability`) with `?` help; changing it marks the diagram stale until recompute.
+- **Plot options (Mineral Stability only)** — exclusive **Predominant mineral** (`moles`) vs **Co-stability** (`costability`) with `?` help; **Concentration contour lines** block with `?` help, **Compute element-total contours** + **Concentrations log steps** (default **2** log₁₀ mol/kgw, range **0.5–6**). Contour geometry is computed only when that checkbox is on at job start; changing it (or the log step) marks the diagram stale until recompute. Bare-element `TOT` fields for the heatmap are always punched on Mineral Stability jobs (no extra toggle).
 
 ### 2.2 Layout (diagram modes)
 
@@ -470,7 +476,7 @@ Elements no longer need a manual reload button — everything refreshes when the
 | **Chemical system** | Element picker with concentrations (general element symbols only, e.g. `C` not `C(4)`), unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
 | **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max — **pe −14 to 20** for Eh/pe (stored as `peMin`/`peMax`), independent **log fO₂** bounds for log fO₂ mode. See [Redox axis](#211-redox-axis-log-fo-eh-pe) |
 | **Phases** | Searchable checklist of catalog solids; select all/none |
-| **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips |
+| **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips, plus **Concentration contour lines** (**Compute element-total contours** + **Concentrations log steps** in log₁₀ mol/kgw; see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)) |
 | **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
 
 Changing units auto-converts species concentrations. Editing chemistry, axes, phases, or layer toggles marks the diagram **stale** until recomputed. Layer toggles in Configuration apply to the **next** compute; display controls in the plot panel always reflect the **currently plotted** result (see below).
@@ -482,7 +488,7 @@ Changing units auto-converts species concentrations. Editing chemistry, axes, ph
 | Slot mode | What shows |
 |-----------|------------|
 | **queued** | Wide/mid: status line (`Queued — position 2 of 3`). Mobile (≤900px): compact pill (`Queued 2/3` or `Queued…`); progress bar hidden |
-| **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, …) |
+| **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, `Tracing element-total contours…`, …) |
 | **idle** | Done / error / cache report in the status line (e.g. `Done · 8.2s · 27k runs`) |
 
 While a job runs:
@@ -494,16 +500,17 @@ While a job runs:
 
 The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
 
-**Unified progress budget** (adaptive mode):
+**Unified progress budget** — packing and client finish are always `90–95 → 95–100`. The front of the bar depends on mode and whether contours run:
 
-| Step | Bar range |
-|------|-----------|
-| Grid sweep | 0–20% |
-| Trace phase edges | 20–90% |
-| Packing | 90–95% |
-| Download / cache / render | 95–100% |
+| Step | Adaptive, no contours | Adaptive + contours | Uniform, no contours | Uniform + contours |
+|------|----------------------|---------------------|----------------------|--------------------|
+| Grid sweep | 0–20% | 0–20% | 0–90% | 0–70% |
+| Trace phase edges | 20–90% | 20–70% | — | — |
+| Element-total contours | — | 70–90% | — | 70–90% |
+| Packing | 90–95% | 90–95% | 90–95% | 90–95% |
+| Download / cache / render | 95–100% | 95–100% | 95–100% | 95–100% |
 
-Uniform mode maps the main PHREEQC sweep to **0–80%** (no separate refinement slice), then the same packing and tail segments.
+Contour root-find runs inside the wall-clock timeout and cooperatively checks the job abort flag. Workers: [§4.3](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours).
 
 ### 2.7 Right plot panel
 
@@ -522,6 +529,7 @@ Display controls describe the **plotted result**, not pending Configuration togg
 
 | Control | Effect |
 |---------|--------|
+| **Phase / species names** | Show/hide region name labels on the diagram (on by default). Format / size / hide-below / callouts apply only while this is on |
 | **Format** | Solid/mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability / moles-tie joins (`"A + B"`) format each part the same way. Tip uses max clearance inside the **visible** vector fill when tracing is on |
 | **Size** | Phase annotation font (default **14** px, range 10–20) |
 | **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%; square-curve slider). Threshold `max(4, floor(n_cells × pct/100))` |
@@ -531,11 +539,13 @@ Display controls describe the **plotted result**, not pending Configuration togg
 
 | Control | Effect |
 |---------|--------|
-| **Opacity** | Region fill transparency (default **100%**, range 10–100%). Boundaries stay opaque |
-| **No fill** | Labels only, no fill colours |
+| **Fill mode** *(Mineral Stability)* | **Category colors** (default) or **Concentration heatmaps**. Choosing heatmap **replaces** category colour filling (opacity / no-fill / per-phase picker hide). Contours remain independent overlays |
+| **Element total** / **Colormap** *(heatmap)* | Bare-element key from packed `totals_heatmap` (e.g. `Fe`, `C`) and colormap (`Viridis`, `Inferno`, `Plasma`, `Magma`, `Cividis`, `Turbo`, `Hot`, `Jet`, `YlOrRd`, `YlGnBu`, `Blues`, `Greens`, `Greys`, `RdBu`, `Spectral`), each shown with a CSS color swatch beside the name in the dropdown. **Opacity** (10–100%, default 100%) fades the heatmap fill; contours/labels stay opaque. Optional **Invert colors** flips the scale (swatches update too). Short **horizontal** inset colorbar along the top edge (`log₁₀ TOT …`), just left of the system-element badge. **Show legend** toggles the colorbar. **Legend size** (70–150%) sets length/thickness only; **Legend font** (8–28 px, default 15) sets title/tick type only — the two are independent. Each channel is auto-scaled from the plot box on small screens (no font→box feedback) |
+| **Opacity** | Region fill transparency for category fills (default **100%**, range 10–100%). Boundaries stay opaque |
+| **No fill** | Labels only, no category fill colours (hidden while Concentration heatmaps are active) |
 | **Phase / species colour** | Pick a plotted category (**name (formula)**) and set its colour; redraw without recompute. **Reset** restores the built-in/hash default |
 
-Colours persist in `colorByName` (`phaseDiagramState.v8`). In solid/mineral view, aqueous fallback categories stay light grey; switch to Aqueous to recolour them. Non-convergent / `none` cells are **white**; O₂/H₂ over-pressure regions are white gas fills (see [Water window and gas lines](#15-water-window-and-gas-lines)).
+Colours persist in `colorByName` (`phaseDiagramState.v8`). In solid/mineral view, aqueous fallback categories stay light grey; switch to Aqueous to recolour them. Non-convergent / `none` cells are **white**; O₂/H₂ over-pressure regions are white gas fills (see [Water window and gas lines](#15-water-window-and-gas-lines)). Concentration heatmap / contours: [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability).
 
 #### Overlays
 
@@ -544,9 +554,27 @@ Colours persist in `colorByName` (`phaseDiagramState.v8`). In solid/mineral view
 | **Hover species** | How many aqueous species in the tooltip (default **4**; 2 / 4 / 6 / 8). Display truncate of packed data (jobs pack up to **8** per element) |
 | **System label** | Top-right badge (e.g. `Fe-C`): show/hide + font size (default **20** px, 15–35). Full system, or active element subset when filters are on |
 | **Initial system [C]** | Bottom-left composition box (always the full input system): show/hide + font size (default **16** px, 15–35) |
-| **Boundaries** | Phase and gas-limit polylines on/off + stroke width (default **1** px, 0.25–2.5). Stability/gas dashes scale with width |
+| **Boundaries width** / **Boundaries color** | Phase and gas-limit polylines on/off + stroke width (default **1** px, 0.25–2.5) + phase-boundary colour (default `#222222`; **Reset** restores it). O₂/H₂ gas dashes stay red and scale with width |
+| **Element-total contours** *(Mineral Stability)* | Show/hide isolines when computed (enable under Plot options → **Concentration contour lines** first); **one element** at a time; line style (default **dot**); **Line width** (0.25–3, default **1**); **Line color** (default `#111827`, with **Reset**; inline labels match); **Labels** — inline level numbers (8–20 px, default **11**). Labels show the log level only (e.g. `−6.0`), sitting in a break in the stroke (same colour, no halo box), oriented along the line and clustered near mid-arc while avoiding collisions. **Element label** toggles the bottom-right badge (element + units, e.g. `Contours for Mn · log₁₀(mol/kgw)`) and sets its font size (10–22 px, default **13**) |
 
 **Touch / hover.** Plotly hover sticks on touch until another plot tap; tap outside the data area (or redraw) dismisses via `Plotly.Fx.unhover`.
+
+#### Concentration heatmap and contours (Mineral Stability)
+
+Aqueous **element totals** from PHREEQC `TOT("…")` for **bare system elements** only (e.g. `Fe`, `C`) in **mol/kgw** — the same molality basis as hover. Valence masters (`Fe(2)`, `C(4)`, …) are **not** punched for heatmap/contours (often empty once solids precipitate). USGS `C(+4)`-style catalog spellings normalize to `C(4)` elsewhere; heatmap/contour keys stay the bare symbols selected for the system.
+
+| Piece | When | What you get |
+|-------|------|----------------|
+| **`totals_heatmap`** | Always on Mineral Stability jobs | Continuous mol/kgw grids packed as `grids[key][pe_index][ph_index]`; UI colours `log₁₀` of those values |
+| **`totals_contours`** | Only if **Compute element-total contours** was on at job start | Log-spaced isoline polylines (`log_step` default **2**, clamp **0.5–6**) |
+
+- **Fill exclusivity** — **Concentration heatmaps** XOR **Category colors**. Contour overlays are independent of both and can sit on either fill.
+- **Water window** — heatmap cells are **not** nulled outside the O₂/H₂ band (avoids stair gaps). Analytic **white half-plane masks** (drawn after heatmap + contours) cut colour and strokes cleanly at the gas lines. Contour geometry is **not** pre-clipped on the server (clipping would break polyline stitching); the same masks hide strokes past the limit.
+- **Phase labels** — mineral/aqueous region labels stay available in heatmap fill mode.
+- **Not available** in Saturation / SI predominance mode.
+- **Stale** — turning the compute checkbox off/on or changing the log step marks the diagram stale until recompute. Overlay style (dash, width, labels, which element) redraws without recompute.
+
+Server root-find details: [Element-total contours](#37-element-total-contours-mineral-stability). Request fields: `totals_contours`, `totals_contour_log_step` in [Compute request](#compute-request-post-apicompute). Defaults: [Configuration reference](#53-configuration-reference).
 
 #### Axes
 
@@ -579,9 +607,12 @@ Below the cards, **plot meta** shows convergence count, active layer, temperatur
 | Mode | Display | Hover |
 |------|---------|-------|
 | **Adaptive** (default) | Vector polygons + exact boundary lines from `diagram/vectors.py` | Invisible base-grid heatmap with phase name + top aqueous species |
-| **Uniform** | Coloured heatmap | Same hover layer |
+| **Uniform** | Coloured category heatmap | Same hover layer |
+| **Concentration heatmap** *(Mineral Stability fill)* | Continuous `log₁₀ TOT` Plotly heatmap from packed `totals_heatmap` (replaces category fills) | Same hover layer; phase/species name labels still drawn |
 
 Vector polygons are batched by category (largest phase first) so Plotly uses one fill trace per phase; within a trace, null-separated rings paint correctly. Stability limits (converged↔failed) render as distinct dashed lines.
+
+On Mineral Stability, when the concentration heatmap or contour overlay is on, analytic **white O₂/H₂ half-plane masks** are drawn after the fill and isolines so colour/strokes stop at the true gas lines (see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)).
 
 Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display remap on pe-native results (no recompute). **log fO₂** is a separate compute mode — switching to or from log fO₂ marks the diagram stale until recomputed.
 
@@ -601,11 +632,11 @@ Closing the tab or clearing site data resets settings. Cached diagrams and UI se
 
 ### 2.10 Result cache and reconnect
 
-Identical compute requests (including `mode_id`, `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, and **layer toggles**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
+Identical compute requests (including `mode_id`, `adaptive_boundaries`, `adaptive_refine_factor`, gas limits, **layer toggles**, and Mineral Stability **`totals_contours` / `totals_contour_log_step`**) are served from **IndexedDB** when possible — no server job, status shows **`Cached`**.
 
 On **cache miss**, the job is enqueued; after download the packed result is stored in `resultData`, a lightweight history record (request + later thumbnail) in `results`, and the server job is **`DELETE`**d to free memory. Plot thumbnails are captured **once** after a successful compute (or cache hit without a thumb), not when opening the History menu.
 
-**History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters and redraws that result as fresh (Compute greys out), opening on the main full-system solid/mineral view (or aqueous if solids were not computed) rather than a leftover element subset. Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
+**History menu** — the **History** control to the left of **Compute** lists saved diagrams for the **current mode** (newest first). Each card shows chemistry totals, temperature/units, **pH** and redox ranges (**log fO₂** or **pe**), grid size, absolute compute time, redox + `db: <name>` pills, and a plot thumbnail when available. **Details** lists Layers (including subsets), Mineral Stability category mode and concentration contours (on/off + log step when on), Convergence, electrolyte/grid settings, O₂/H₂ limits, and the full phase list (scrollable). The menu is `position: fixed` and clamped to the viewport. Clicking a row restores sidebar parameters (including contour compute options) and redraws that result as fresh (Compute greys out), opening on the main full-system solid/mineral view (or aqueous if solids were not computed) with **category colours** (not totals heatmap) rather than a leftover element subset. Listing the menu reads only the lightweight `results` store so it stays fast as the cache grows. Entries without a stored request are omitted; retyping the same inputs still hits the cache by key. **Clear history** removes listed entries for the active mode only.
 
 If you refresh, close the tab, or quit the browser during a **queued** or **running** job, polling resumes from `phaserActiveJob.v2` when you reopen the same origin (within server TTLs). A job that finished while you were away is fetched and rendered automatically (into the mode that started it) if it is still in server memory; otherwise the UI asks you to recompute. Opening a **second tab** shows a gate (PHASER logo + message + **Transfer here**); transferring moves poll ownership without killing the server job. Closing the other tab (or a stale lock after a crash) also lets the waiting tab take over.
 
@@ -695,7 +726,7 @@ Parsers read PHREEQC datablocks from the `.dat` file. Blocks are bounded by keyw
 
 | Parser | `.dat` block | Writes | Notes |
 |--------|--------------|--------|-------|
-| `parse_solution_master_species` | `SOLUTION_MASTER_SPECIES` | `totals`, `elements` | Keeps element-resolvable keys (`Fe`, `Fe(+3)`, `C(4)`, …); drops pseudo-totals (`Alkalinity`, `Acetate`, `E`). UI picker shows **general symbols only** (`C`, `S`, …) |
+| `parse_solution_master_species` | `SOLUTION_MASTER_SPECIES` | `totals`, `elements` | Keeps element-resolvable keys (`Fe`, `Fe(3)`, `C(4)`, …); USGS `.dat` `Fe(+3)` / `C(+4)` spellings are normalized to `Fe(3)` / `C(4)`. Drops pseudo-totals (`Alkalinity`, `Acetate`, `E`). UI picker shows **general symbols only** (`C`, `S`, …) |
 | `parse_solution_species_names` | `SOLUTION_SPECIES` | `species` | Tokens from **both sides** of each `=` line (so `… = Fe(OH)3 + …` still yields `Fe(OH)3`). Coefficients may be spaced or glued (`1.000Cu+2`) |
 | `parse_phases` | `PHASES` | `phases`, `phase_elements` | Name = first token (drops legacy numbers like `Brucite 19`). Composition and display formula from the **reaction** LHS (e.g. Goethite → `FeOOH`), not the label suffix. Gases: name ends with `(g)`. Supports two-line and same-line `Name = reaction` (Thermoddem) |
 | *(derived)* | — | `solid_aqueous_collisions` | Phase names ∩ aqueous species names (e.g. `Fe(OH)3`). At compute time colliding solids are labelled `"<name>(s)"` |
@@ -775,7 +806,7 @@ Electroneutral equilibration with **`Cl … charge`** on the acidic seed and **`
 
 #### Shared
 
-- **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point, and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain, `knobs_level`, optional `synthetic_label`). Assemblage modes additionally fill **`phase_moles`** (precipitated moles per selected solid) and **`dominant_precip`** (argmax moles among solids).
+- **`evaluate_point`** — runs the input through **phreeqpy** → **IPhreeqc**, parses selected output and USER_PUNCH, assigns gas-domain labels per point, and returns `GridPointResult` (convergence, SI, dominant solid, aqueous species by element, full per-element species rankings in `aq_species_by_element`, gas SI/domain, `knobs_level`, optional `synthetic_label`). Assemblage modes additionally fill **`phase_moles`** (precipitated moles per selected solid), **`dominant_precip`** (argmax moles among solids), and **`aq_total_by_key`** (bare-element `TOT` mol/kgw when `tot_keys` is set).
 - **`validate_phreeqc_setup`** — loads library and database once before worker spawn (fail-fast with clear errors).
 
 #### Mineral stability (assemblage modes)
@@ -786,6 +817,7 @@ Mineral-stability jobs use **`assemblage_dummy_titration`** / **`assemblage_titr
 
 - Saturation-mode inputs never list solids in the assemblage; `phase_moles` stays empty.
 - Assemblage `USER_PUNCH` filters `SYS` contributors to `ty$ = "aq"` so precipitated solids do not leak into aqueous rankings. Saturation mode keeps the original short SYS-by-rank punch (no `ty$` filter).
+- Assemblage jobs also punch bare-element **`TOT("Fe")`** (etc.) into `GridPointResult.aq_total_by_key` via `GridJobParams.tot_keys` from `bare_system_tot_keys` — packed as `totals_heatmap` and optionally root-found as isolines ([Element-total contours](#37-element-total-contours-mineral-stability)).
 - Category helpers in `phreeqc/mineral_stability.py` are used only on assemblage paths; SI predominance still uses max-SI packing (`category_solid_subset`).
 
 **Category modes** (`MineralCategoryMode` in `mineral_stability.py`):
@@ -869,6 +901,8 @@ Synthetic categories flow through packing and adaptive tracing; numeric boundary
 
 Expected savings: roughly 30–40% fewer base-sweep PHREEQC runs on typical pe–pH frames when the water band covers a minority of the plot.
 
+For Mineral Stability **concentration heatmap / contours**, the UI does **not** null heatmap cells or hard-clip isolines to this band (that produced stair gaps and broken polylines). Instead it paints analytic white half-planes after the fill/contours so the cut matches the gas lines — see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability).
+
 ---
 
 ### 3.6 Trace phase edges
@@ -885,7 +919,7 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
 
    <img src="docs/schemes/trace-base-cell.png" width="520" alt="Base cell: square between four evaluated grid corners; flagged when corner phase labels disagree; mixed edges get brentq later" />
 
-4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (separate ProcessPool after the base sweep; Morton-ordered `_chunk_cells` — see [Parallel workers](#43-parallel-workers-grid-sweep-and-boundary-trace)). For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
+4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (separate ProcessPool after the base sweep; Morton-ordered `_chunk_cells` — see [Parallel workers](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours)). For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
    - **2-category cells (chord)** — two corner labels, two edge zeros. `brentq` on each mixed edge finds the zero of a continuous pair scalar; the boundary is the **straight chord** between those zeros (fills = both half-planes of that chord). Example: long Hausmannite | Mn²⁺ edge, or Pyrolusite | Manganite. Pair scalars:
      - SI predominance solid↔solid: `SI_A − SI_B`
      - mineral moles solid↔solid: precipitated-mole difference
@@ -963,9 +997,37 @@ Worker count, packing, and wall-clock timeout: [Part IV — Compute and packing]
 
 ---
 
+### 3.7 Element-total contours (Mineral Stability)
+
+Optional post-grid step (`phreeqc/totals_contours.py`) when the compute request sets `totals_contours=true` on an assemblage job. It traces isolines of **`log₁₀(TOT(key))`** in mol/kgw for each bare-element key in `tot_keys`.
+
+**Levels.** From the finite field min/max on the base grid, levels are spaced by `totals_contour_log_step` (default **2**, clamp **0.5–6**): floor/ceil to the step grid so labels land on round log values.
+
+**Root-find.** Same idea as phase-boundary edges: for each grid cell and level, `brentq` finds zeros of `log₁₀(TOT) − level` on the four cell edges (shared edges rooted once per worker via a canonical edge cache). Two crossings → one chord; four crossings (saddle) → two chords in edge-walk order. Chords are **stitched** into continuous polylines by matching endpoints (grid-aware snap). Water-band clipping is **not** applied here — the UI white masks cut strokes at the gas lines (see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)).
+
+**Parallelism.** Contiguous **pH-line bands** (`workers × CONTOUR_BANDS_PER_WORKER`, default **2** interleaved strips per worker), not Morton cell shards — isolines need locality along consecutive `i` rows. Each worker gets a `PointEvaluator` that **trusts** the base-grid seed `aq_total_by_key` (no corner re-PHREEQC). Band results are merged and **re-stitched** across band seams. Abort/timeout uses the same `managed_process_pool` kill path as sweep/trace. Progress phase: **`contours`**.
+
+**Packed shape** (attached on the job result):
+
+```json
+{
+  "units": "mol/kgw",
+  "log_step": 2.0,
+  "by_key": {
+    "Fe": [
+      { "level": -6.0, "segments": [ [[ph, pe], …], … ] }
+    ]
+  }
+}
+```
+
+UI display controls: [Overlays](#overlays) / [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability). Workers: [§4.3](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours).
+
+---
+
 ## Part IV: Compute and packing
 
-How a diagram job runs on the server: enqueue → PHREEQC sweep (and optional edge tracing) → pack layers / hover → vector display for adaptive mode. Covers the FIFO queue, workers, timeouts, and the JSON the UI renders. System map and tree: [Architecture overview](#architecture-overview), [Project layout](#project-layout). Chemistry of a point: [Part III](#part-iii-chemistry-engine). CPU sizing in production: [Part VI — Deployment](#part-vi-deployment).
+How a diagram job runs on the server: enqueue → PHREEQC sweep (and optional edge tracing / totals contours) → pack layers / hover → vector display for adaptive mode. Covers the FIFO queue, workers, timeouts, and the JSON the UI renders. System map and tree: [Architecture overview](#architecture-overview), [Project layout](#project-layout). Chemistry of a point: [Part III](#part-iii-chemistry-engine). CPU sizing in production: [Part VI — Deployment](#part-vi-deployment).
 
 ### 4.1 End-to-end compute flow
 
@@ -978,6 +1040,7 @@ sequenceDiagram
     participant Sw as PHREEQC sweep
     participant Ad as Adaptive trace
     participant Tr as Boundary tracer
+    participant TC as Totals contours
     participant Pack as Diagram packer
     participant Vec as Vector display
 
@@ -993,10 +1056,16 @@ sequenceDiagram
     else adaptive mineral stability
         Job->>Ad: run_adaptive_mineral_stability_sweep
         Ad->>Tr: root-find boundaries
+        opt totals_contours
+            Job->>TC: find_totals_contours
+        end
         Job->>Pack: pack_mineral_grid_results
         Job->>Vec: pack_traced_mineral_display
     else uniform
         Job->>Sw: run_grid_sweep
+        opt assemblage and totals_contours
+            Job->>TC: find_totals_contours
+        end
         Job->>Pack: pack_grid_results or pack_mineral_grid_results
     end
     Pack-->>Job: layered grids (+ vector display if adaptive)
@@ -1010,7 +1079,7 @@ sequenceDiagram
     UI->>API: DELETE job
 ```
 
-Details below: [queue](#42-compute-queue-and-job-lifecycle), [parallel workers](#43-parallel-workers-grid-sweep-and-boundary-trace), [packing](#44-phase-selection-packing-and-hover), [vector display](#45-vector-display-and-gas-overlay-rendering).
+Details below: [queue](#42-compute-queue-and-job-lifecycle), [parallel workers](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours), [packing](#44-phase-selection-packing-and-hover), [vector display](#45-vector-display-and-gas-overlay-rendering).
 
 ---
 
@@ -1021,22 +1090,22 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 1. `POST /api/compute` creates a job with status **`queued`** (or **503** `queue_full` if admission is full).
 2. A dispatcher starts the job when `running_count < MAX_CONCURRENT_JOBS`.
 3. Status becomes **`running`** while the sweep executes; progress is polled via `GET /api/job/{id}`.
-   - Job payload includes **`progress`** (0–1) and **`phase`** (`grid`, `boundaries`, `packing`, or `compute` for uniform mode).
+   - Job payload includes **`progress`** (0–1) and **`phase`** (`grid`, `boundaries`, `contours` when element-total isolines run, `packing`, or `compute` for uniform mode).
 4. On completion: **`done`** or **`error`**.
 5. Queued jobs expose **`queue_position`** (1-based) and **`queue_size`** so the UI can show *"Queued — position 2 of 3"*.
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
 7. **Browser reconnect during compute:** the UI stores the active `job_id` in `localStorage` (`phaserActiveJob.v2`) and resumes polling on load after refresh, tab close, or full browser quit (same origin). If the job finished while you were away and is still within `JOB_RESULT_TTL_SEC`, the result is fetched automatically. If the job was already reaped or the server restarted, the UI shows **Job was deleted from the server. Please recompute.** A second tab shows a branded gate (logo + **Transfer here**); only the leader tab polls or starts compute. Closing the browser does **not** DELETE the server job.
 8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h from `finished_at`) and queued jobs after `JOB_QUEUE_TTL_SEC` (default 2 h from `created_at`). Status/result GETs refresh `last_seen_at` for diagnostics, but the reaper does **not** use it for pruning.
-9. **Wall-clock timeout:** once PHREEQC compute starts (base grid and, when enabled, boundary tracing), a timer (and the reaper as a safety net) hard-aborts after `JOB_WALL_TIMEOUT_SEC` (default 5 min). DB/catalog setup, packing, and stats persistence are **outside** that wall clock. Process pools use the **`spawn`** start method (not `fork`) so workers do not inherit the server listen socket. The pool stays **bound** for the whole shutdown so a mid-join abort can still `terminate_pool`; unbinding first used to leave `_running_count` held and block the FIFO queue after a timeout. Children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. Abort checks run through the grid→category-map→trace gap and on packing ticks (client `DELETE` still cancels packing). The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
+9. **Wall-clock timeout:** once PHREEQC compute starts (base grid and, when enabled, boundary tracing and totals-contour root-find), a timer (and the reaper as a safety net) hard-aborts after `JOB_WALL_TIMEOUT_SEC` (default 5 min). DB/catalog setup, packing, and stats persistence are **outside** that wall clock. Process pools use the **`spawn`** start method (not `fork`) so workers do not inherit the server listen socket. The pool stays **bound** for the whole shutdown so a mid-join abort can still `terminate_pool`; unbinding first used to leave `_running_count` held and block the FIFO queue after a timeout. Children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace/contour waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. Abort checks run through the grid→category-map→trace→contours gap and on packing ticks (client `DELETE` still cancels packing). The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
 10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
 
 Job statuses: `queued` → `running` → `done` | `error` (including `error_code` `timed_out` / `cancelled`).
 
 ---
 
-### 4.3 Parallel workers (grid sweep and boundary trace)
+### 4.3 Parallel workers (grid sweep, boundary trace, and totals contours)
 
-Both the base grid and (when **Trace phase edges** is on) boundary tracing use a **`ProcessPoolExecutor`** sized by `PHASER_MAX_WORKERS`, bound through `managed_process_pool` so abort/timeout can hard-kill children. They are **separate pools for separate job phases** (sweep finishes, then a new pool runs the trace) — not one shared pool across both stages. Geometry of what gets traced: [Trace phase edges](#36-trace-phase-edges).
+The base grid, (when **Trace phase edges** is on) boundary tracing, and (when **Compute element-total contours** is on) totals isolines each use a **`ProcessPoolExecutor`** sized by `PHASER_MAX_WORKERS`, bound through `managed_process_pool` so abort/timeout can hard-kill children. They are **separate pools for separate job phases** (sweep → optional trace → optional contours) — not one shared pool across stages. Geometry: [Trace phase edges](#36-trace-phase-edges), [Element-total contours](#37-element-total-contours-mineral-stability).
 
 #### Base grid (`sweep.py`)
 
@@ -1055,13 +1124,21 @@ After the base grid is labelled, only **mixed cells** (disagreeing corner signat
 - Each future runs `_trace_worker_job` with only that chunk’s cell indices and corner seed data (not the full grid).
 - Futures are collected with `iter_futures_abortable`; progress is **chunks completed**. Results are merged in Morton-chunk order for a deterministic bundle.
 
-| | Grid sweep | Boundary trace |
-|--|------------|----------------|
-| Unit of work | `(pH, pe)` points | Mixed base cells |
-| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`) |
-| Heavy payload in init | `GridJobParams` | `trace_params` + axes + tolerances + mode |
-| Per-task payload | Point coordinates | Cell indices + corner seeds |
-| Progress | Points done | Chunks done |
+#### Totals contours (`totals_contours.py`)
+
+After the base grid (and optional boundary trace), Mineral Stability jobs with `totals_contours` root-find `log₁₀(TOT)` isolines.
+
+- Pool initializer `_contour_worker_init`: each child gets IPhreeqc, `GridJobParams`, axis arrays, a light seed of base-grid `aq_total_by_key`, and `brentq` tolerance (`trust_seed_cache=True` on the evaluator).
+- The cell grid is split into **`workers × CONTOUR_BANDS_PER_WORKER`** contiguous pH-line strips (`_chunk_contour_cells`, default **2** bands/worker), then round-robin assigned so each worker owns that many strips in **one** pool job — isolines stay local; results are merged and re-stitched across band seams.
+- Futures run `_contour_chunk_job` (key + levels + cells); progress is **jobs completed** (`phase=contours`).
+
+| | Grid sweep | Boundary trace | Totals contours |
+|--|------------|----------------|-----------------|
+| Unit of work | `(pH, pe)` points | Mixed base cells | Cell bands × element key |
+| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`) | Contiguous pH-line bands (`CONTOUR_BANDS_PER_WORKER` strips/worker) |
+| Heavy payload in init | `GridJobParams` | `trace_params` + axes + tolerances + mode | `GridJobParams` + axes + seed totals |
+| Per-task payload | Point coordinates | Cell indices + corner seeds | Cells + key + levels |
+| Progress | Points done | Chunks done | Band jobs done |
 
 Production CPU / worker sizing: [6.5 CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs).
 
@@ -1102,7 +1179,15 @@ Shared behaviour:
    - `aqueous_subsets` — aqueous species predominance maps
 6. Packs **`hover_species`** — per grid cell, top `HOVER_SPECIES_PER_ELEMENT` (default 8) species **per element**, stored as `[name, element_moles, element]` so the client can filter to any active element subset and truncate for display.
 
-Mineral packs also set **`mineral_category_mode`** (`moles` | `costability`). The Saturation compute path calls `pack_grid_results`; the Mineral Stability path calls `pack_mineral_grid_results` / `pack_traced_mineral_display` via `services/compute.py` when `solution_mode` is an assemblage mode.
+Mineral packs also set **`mineral_category_mode`** (`moles` | `costability`) and always include **`totals_heatmap`** via `pack_totals_heatmap`:
+
+| Field | Content |
+|-------|---------|
+| `totals_heatmap.units` | `"mol/kgw"` |
+| `totals_heatmap.keys` | Bare system-element masters (`Fe`, `C`, …) |
+| `totals_heatmap.grids[key]` | `[pe_index][ph_index]` molality (or `null`); matches Plotly heatmap `z[y][x]` |
+
+When `totals_contours` is requested, `services/compute.py` runs `find_totals_contours` **inside the wall-clock window** (after the sweep/trace, before packing) and attaches **`totals_contours`** plus flags `totals_contours_requested` / `totals_contour_log_step`. Contour math: [§3.7](#37-element-total-contours-mineral-stability). The Saturation compute path calls `pack_grid_results`; the Mineral Stability path calls `pack_mineral_grid_results` / `pack_traced_mineral_display`.
 
 **Per-element subsets** (`layer_elements`):
 
@@ -1181,7 +1266,7 @@ HTTP catalogue, abuse protection, and the env / `config.py` reference. Compute a
 |--------|------|-------------|
 | `GET` | `/` | Web UI |
 | `GET` | `/api/health` | Liveness check (**exempt** from rate limits) |
-| `GET` | `/api/config` | Defaults, worker/queue limits (`max_queue`, `compute_min_interval_sec`), `rate_limits`, `about`, default `db_id`, database list, plus `solution_modes` / `assemblage_solution_modes` / `mineral_category_modes` (and their defaults) |
+| `GET` | `/api/config` | Defaults, worker/queue limits (`max_queue`, `compute_min_interval_sec`), `rate_limits`, `about`, default `db_id`, database list, `solution_modes` / `assemblage_solution_modes` / `mineral_category_modes` (and their defaults), plus `totals_contours_default` / `totals_contour_log_step` (and min/max) |
 | `GET` | `/api/databases` | List available databases |
 | `GET` | `/api/databases/{db_id}` | Database details |
 | `POST` | `/api/databases/register` | Provisional — notify the server of a generated `.dat` already on disk ([Future features](#part-vii-future-features)); not the intended long-term UX |
@@ -1214,6 +1299,8 @@ Key fields in the JSON body:
 | `adaptive_boundaries` | `true` | Enable adaptive boundary tracing |
 | `solution_mode` | `dummy_titration` | `dummy_titration`, `titration`, `assemblage_dummy_titration`, or `assemblage_titration` — see [Single-point evaluation](#33-single-point-evaluation-and-titration-frames) and [Mineral stability](#mineral-stability-assemblage-modes) |
 | `mineral_category_mode` | `moles` | `moles` or `costability` — used when `solution_mode` is an assemblage mode; ignored for SI predominance |
+| `totals_contours` | `false` (`PHASER_TOTALS_CONTOURS`) | Mineral Stability: root-find log₁₀(TOT) isolines after the base grid (packed as `totals_contours`; job `phase=contours`). Ignored for SI predominance. Bare-element `TOT` heatmap data is always punched on assemblage jobs regardless of this flag |
+| `totals_contour_log_step` | `2` | Spacing of contour levels in log₁₀(molality); clamped to `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN`–`_MAX` (0.5–6). Included in the browser cache key with `totals_contours` |
 | `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
 | `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
 | `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); see [Water window and gas lines](#15-water-window-and-gas-lines) |
@@ -1328,6 +1415,10 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PH_MIN`/`PH_MAX`, `PE_MIN`/`PE_MAX`, `LOG_FO2_MIN`/`LOG_FO2_MAX` | 2–12, −14–20, −90–10 | Default axis bounds |
 | `SOLUTION_MODE_DEFAULT` | `dummy_titration` | Default Saturation frame |
 | `MINERAL_CATEGORY_MODE_DEFAULT` | `moles` | Default Mineral Stability category mode |
+| `PHASER_TOTALS_CONTOURS` | `false` | Default for per-job `totals_contours` (Mineral Stability isolines) |
+| `PHASER_TOTALS_CONTOUR_LOG_STEP` | `2` | Default for `totals_contour_log_step` |
+| `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN` / `_MAX` | `0.5` / `6` | Clamp for `totals_contour_log_step` |
+| `PHASER_CONTOUR_BANDS_PER_WORKER` | `2` | Interleaved pH-line strips per contour worker (one pool job/worker) |
 | `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode` |
 | `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | Component-gas reference pressure |

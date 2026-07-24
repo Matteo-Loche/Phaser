@@ -51,6 +51,9 @@ class GridJobParams:
     background_molality: float = 0.0
     knobs_mode: str = config.KNOBS_MODE_DEFAULT
     sweep_skip_outside_water: bool = config.SWEEP_SKIP_OUTSIDE_WATER
+    # Assemblage: bare element TOT keys to PUNCH (e.g. ("Fe", "C")), not valence
+    # masters — Fe(2)/Fe(3) are usually empty once solids precipitate.
+    tot_keys: tuple[str, ...] = ()
 
 
 _TUPLE_FIELDS = (
@@ -60,6 +63,7 @@ _TUPLE_FIELDS = (
     "solid_aqueous_collisions",
     "gas_phases",
     "trace_gas_phases",
+    "tot_keys",
 )
 
 
@@ -107,6 +111,8 @@ class GridPointResult:
     phase_moles: dict[str, float] = field(default_factory=dict)
     # Assemblage convenience label from moles (SI modes leave default).
     dominant_precip: str = "aqueous"
+    # Assemblage: aqueous master totals from TOT("key") in mol/kgw (valence-aware).
+    aq_total_by_key: dict[str, float] = field(default_factory=dict)
     knobs_level: int = 0
     synthetic_label: str | None = None
 
@@ -290,16 +296,44 @@ def _format_user_punch_aq_only_sys(
     return lines
 
 
+def _tot_heading(key: str) -> str:
+    """SELECTED_OUTPUT / USER_PUNCH heading for a master total key."""
+    heading = f"tot_{key}"
+    if " " in key or "(" in key or ")" in key or "+" in key or "-" in key:
+        return f'"{heading}"'
+    return heading
+
+
+def _tot_punch_expr(key: str) -> str:
+    """BASIC expression punching aqueous total molality for ``key``."""
+    return f'TOT("{key}")'
+
+
+def tot_keys_heading_lines(tot_keys: tuple[str, ...]) -> list[str]:
+    """Public helper for tests: heading tokens for ``tot_keys``."""
+    return [_tot_heading(k) for k in tot_keys]
+
+
+def tot_keys_punch_lines(tot_keys: tuple[str, ...], *, base_line: int = 9000) -> list[str]:
+    """Public helper for tests: USER_PUNCH lines for ``TOT`` columns."""
+    return [
+        f"{base_line + 10 * i} PUNCH {_tot_punch_expr(key)}"
+        for i, key in enumerate(tot_keys)
+    ]
+
+
 def _format_user_punch(
     elements: tuple[str, ...],
     *,
     top_n: int,
     equi_phases: tuple[str, ...] = (),
+    tot_keys: tuple[str, ...] = (),
 ) -> str:
     """USER_PUNCH for aqueous SYS rankings and optional EQUI precipitated moles.
 
     Predominance (``equi_phases`` empty): original short SYS-by-index punch.
     Assemblage (``equi_phases`` set): aq-only SYS filter + EQUI mole columns.
+    When ``tot_keys`` is set (assemblage), also punch ``TOT("master")`` columns.
     """
     headings: list[str] = []
     for elem in elements:
@@ -311,6 +345,8 @@ def _format_user_punch(
             headings.append(f'"eq_{phase}"')
         else:
             headings.append(f"eq_{phase}")
+    for key in tot_keys:
+        headings.append(_tot_heading(key))
     if not headings:
         return ""
     lines = ["USER_PUNCH", f"    -headings {' '.join(headings)}", "    -start"]
@@ -323,8 +359,24 @@ def _format_user_punch(
         lines.append(
             f"{equi_base + 10 * i} PUNCH EQUI({_quote_equi_arg(phase)})"
         )
+    lines.extend(tot_keys_punch_lines(tot_keys, base_line=9000))
     lines.append("    -end")
     return "\n".join(lines) + "\n"
+
+
+def _parse_aq_totals(row: dict, tot_keys: tuple[str, ...]) -> dict[str, float]:
+    """Read ``tot_<key>`` columns into mol/kgw totals (skip non-finite / non-positive)."""
+    out: dict[str, float] = {}
+    for key in tot_keys:
+        m = _row_value(
+            row,
+            f"tot_{key}",
+            f'tot_"{key}"',
+            f'tot_{_quote_phreeqc_name(key)}',
+        )
+        if m == m and m > 0.0:
+            out[key] = float(m)
+    return out
 
 
 def _is_solid_leak_in_aq_map(
@@ -545,6 +597,7 @@ def _parse_grid_row(
 
     phase_moles: dict[str, float] = {}
     dominant_precip = "aqueous"
+    aq_total_by_key: dict[str, float] = {}
     if filter_equi_leak:
         from .mineral_stability import dominant_precip_label
 
@@ -552,6 +605,8 @@ def _parse_grid_row(
             m = _eq_from_row(row, phase)
             phase_moles[phase] = float(m) if m == m and m > 0.0 else 0.0
         dominant_precip = dominant_precip_label(phase_moles, solid_phases)
+        if params.tot_keys:
+            aq_total_by_key = _parse_aq_totals(row, params.tot_keys)
 
     return GridPointResult(
         ph=ph,
@@ -569,6 +624,7 @@ def _parse_grid_row(
         aq_species_by_element=sp_by_elem,
         phase_moles=phase_moles,
         dominant_precip=dominant_precip,
+        aq_total_by_key=aq_total_by_key,
     )
 
 
@@ -618,6 +674,7 @@ def format_assemblage_selected_output_suffix(params: GridJobParams) -> str:
         params.system_elements,
         top_n=_top_aq_species_per_element(params),
         equi_phases=_assemblage_solid_phases(params),
+        tot_keys=tuple(params.tot_keys or ()),
     )
     mol_line = ""
     if params.aq_species_molality:

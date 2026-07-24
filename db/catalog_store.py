@@ -337,13 +337,16 @@ def list_elements(db_key: str) -> list[str]:
 
 
 def list_accepted_totals(db_key: str) -> list[str]:
+    from ..phreeqc.catalog import normalize_total_keys
+
     conn = _connect()
     try:
         rows = conn.execute(
             "SELECT total_key FROM totals WHERE db_key = ? AND accepted = 1 ORDER BY total_key",
             (db_key,),
         ).fetchall()
-        return [r["total_key"] for r in rows]
+        # Normalize Fe(+3)→Fe(3) for older catalog rows written before spelling fix.
+        return list(normalize_total_keys([r["total_key"] for r in rows]))
     finally:
         conn.close()
 

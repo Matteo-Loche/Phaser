@@ -106,10 +106,22 @@ def _merge_stats(dest: TraceStats, src: TraceStats) -> None:
 class PointEvaluator:
     """Cached on-demand PHREEQC evaluation."""
 
-    def __init__(self, params: GridJobParams, seed_rows: dict[tuple[float, float], dict]):
+    def __init__(
+        self,
+        params: GridJobParams,
+        seed_rows: dict[tuple[float, float], dict],
+        *,
+        trust_seed_cache: bool = False,
+    ):
         self._params = params
         self._cache: dict[tuple[float, float], dict] = dict(seed_rows)
-        self._full: set[tuple[float, float]] = set()
+        # Boundary tracing seeds base-grid corners then re-evaluates with richer
+        # trace punch params — leave ``_full`` empty so ``eval`` refreshes.
+        # Totals contours seed ``aq_total_by_key`` from the same params; trusting
+        # the cache avoids a wasted PHREEQC call on every bracketing corner.
+        self._full: set[tuple[float, float]] = (
+            set(seed_rows.keys()) if trust_seed_cache else set()
+        )
         self.n_evals = 0
         self._pq = init_phreeqc(params.dll_path, params.db_path)
         self._crossing_t: dict[

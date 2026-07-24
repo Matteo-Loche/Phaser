@@ -960,7 +960,9 @@
     .mode-option-row { display: flex; flex-direction: column; gap: 0.25rem; }
     .mode-option {
       display: flex; align-items: center; gap: 0.5rem;
-      font-size: 0.82rem; color: var(--text);
+      /* Match body / .toggle primary options — not a smaller sub-label size. */
+      font-size: inherit;
+      color: var(--text);
     }
     .mode-option-main {
       display: flex; align-items: center; gap: 0.5rem;
@@ -1179,6 +1181,86 @@
       background: var(--bg);
       color: var(--text);
       font-size: 0.82rem;
+    }
+    .heatmap-cmap-select {
+      position: relative;
+      flex: 1 1 5rem;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .heatmap-cmap-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      width: 100%;
+      min-height: var(--tap);
+      padding: 0 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.82rem;
+      text-align: left;
+      cursor: pointer;
+    }
+    .heatmap-cmap-btn:hover { border-color: var(--accent); }
+    .heatmap-cmap-btn[aria-expanded="true"] { border-color: var(--accent); }
+    .heatmap-cmap-swatch {
+      flex: 0 0 2.6rem;
+      width: 2.6rem;
+      height: 0.85rem;
+      border-radius: 3px;
+      border: 1px solid color-mix(in srgb, var(--text) 22%, var(--border));
+      box-sizing: border-box;
+      background: linear-gradient(to right, #440154, #fde725);
+    }
+    .heatmap-cmap-select.is-reversed .heatmap-cmap-swatch,
+    .heatmap-cmap-menu.is-reversed .heatmap-cmap-swatch {
+      transform: scaleX(-1);
+    }
+    .heatmap-cmap-name {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .heatmap-cmap-menu {
+      position: fixed;
+      z-index: 9500;
+      min-width: 10rem;
+      max-height: min(18rem, 50vh);
+      overflow-x: hidden;
+      overflow-y: auto;
+      padding: 0.25rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel-2);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      box-sizing: border-box;
+    }
+    .heatmap-cmap-option {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
+      width: 100%;
+      min-height: 2rem;
+      padding: 0.2rem 0.4rem;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text);
+      font-size: 0.82rem;
+      text-align: left;
+      cursor: pointer;
+    }
+    .heatmap-cmap-option:hover,
+    .heatmap-cmap-option:focus-visible {
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+      outline: none;
+    }
+    .heatmap-cmap-option[aria-selected="true"] {
+      background: color-mix(in srgb, var(--accent) 28%, transparent);
     }
     .disp-card {
       min-width: 0;
@@ -1948,6 +2030,34 @@
             <input type="checkbox" id="layerElements" /> Per-element subsets
             <span class="meta">(filter map by element; off = one combined map)</span>
           </label>
+          <div class="mineral-only" id="totalsContoursComputeWrap" style="margin-top:0.75rem">
+            <div class="meta" style="margin-bottom:0.35rem">Concentration contour lines</div>
+            <div class="label-row">
+              <label class="toggle" style="margin:0" for="totalsContours"
+                     title="Root-find log₁₀ aqueous TOT isolines after the base grid (mol/kgw). Heatmap data is always computed for Mineral Stability.">
+                <input type="checkbox" id="totalsContours" />
+                Compute element-total contours
+              </label>
+              <button type="button" class="help-tip" id="totalsContoursComputeHelp"
+                      aria-label="Help: Concentration contour lines" aria-expanded="false">?</button>
+            </div>
+            <div class="help-popover" id="totalsContoursComputeHelpPop" hidden>
+              Draws dotted lines of equal dissolved amount for an element
+              (for example total Fe in water). Turn this on and choose the
+              <b>Concentrations log steps</b> <b>before</b> you press Compute — the lines are root-found
+              during that run. A smaller step means more lines (and a
+              longer wait). The concentration heatmap is always
+              available on Mineral Stability; this option only adds the lines.
+            </div>
+            <div class="disp-row" id="totalsContourLogStepRow" style="opacity:0.45;margin-top:0.35rem;margin-left:1.65rem" title="Spacing between contour levels in log₁₀ of aqueous molality (mol/kgw)">
+              <label for="totalsContourLogStep">Concentrations log steps (log₁₀ mol/kgw)</label>
+              <span class="disp-stepper">
+                <button type="button" id="totalsContourLogStepDec" aria-label="Decrease concentrations log steps">−</button>
+                <input type="number" id="totalsContourLogStep" min="0.5" max="6" step="0.5" value="2" disabled />
+                <button type="button" id="totalsContourLogStepInc" aria-label="Increase concentrations log steps">+</button>
+              </span>
+            </div>
+          </div>
           <div class="mineral-only" id="mineralCategoryWrap" style="margin-top:0.75rem">
             <div class="meta" style="margin-bottom:0.35rem">Mineral category mode</div>
             <div class="mode-options" id="mineralCategoryOptions" role="radiogroup"
@@ -1975,7 +2085,7 @@
           </div>
           <div style="margin-top:0.55rem">
             <div class="label-row">
-              <label class="toggle" style="font-size:0.82rem;margin:0" for="adaptiveBoundaries">
+              <label class="toggle" style="margin:0" for="adaptiveBoundaries">
                 <input type="checkbox" id="adaptiveBoundaries" />
                 Trace phase edges
               </label>
@@ -2071,62 +2181,131 @@
           <details class="card disp-card">
             <summary>Labels <span class="chev">›</span></summary>
             <div class="body">
-              <div class="disp-row" id="phaseLabelWrap">
-                <label for="phaseLabelMode">Format</label>
-                <select id="phaseLabelMode" class="disp-select">
-                  <option value="name">Name</option>
-                  <option value="formula">Formula</option>
-                  <option value="both">Name + formula</option>
-                </select>
-        </div>
-              <div class="disp-row" title="Phase label font size (px)">
-                <label for="labelFontSize">Size</label>
-                <span class="disp-stepper">
-                  <button type="button" id="labelFontSizeDec" aria-label="Decrease label size">−</button>
-                  <input type="number" id="labelFontSize" min="10" max="20" step="1" value="14" />
-                  <button type="button" id="labelFontSizeInc" aria-label="Increase label size">+</button>
-                </span>
-              </div>
-              <div class="disp-slider" title="Connected regions smaller than this % of the diagram are not labeled (floor: 4 cells). Slider is finer near 0%.">
-                <div class="disp-slider-head">
-                  <label for="labelMinAreaPct">Hide labels below</label>
-                  <span class="disp-val" id="labelMinAreaPctVal">0.1%</span>
-                </div>
-                <input type="range" id="labelMinAreaPct" min="0" max="1000" step="1" value="316" />
-              </div>
-              <label class="toggle" title="Move labels aside with an arrow when they overlap, cover another tip, or hide their own small patch. Off = names stay at the region tip.">
-                <input type="checkbox" id="calloutArrows" checked />
-                Arrow callout for conflict or small regions
+              <label class="toggle" style="display:block;margin-bottom:0.45rem" title="Show or hide phase / species name labels on the diagram">
+                <input type="checkbox" id="showPhaseLabels" checked />
+                Phase / species names
               </label>
+              <div id="phaseLabelDetailControls">
+                <div class="disp-row" id="phaseLabelWrap">
+                  <label for="phaseLabelMode">Format</label>
+                  <select id="phaseLabelMode" class="disp-select">
+                    <option value="name">Name</option>
+                    <option value="formula">Formula</option>
+                    <option value="both">Name + formula</option>
+                  </select>
+                </div>
+                <div class="disp-row" title="Phase label font size (px)">
+                  <label for="labelFontSize">Size</label>
+                  <span class="disp-stepper">
+                    <button type="button" id="labelFontSizeDec" aria-label="Decrease label size">−</button>
+                    <input type="number" id="labelFontSize" min="10" max="20" step="1" value="14" />
+                    <button type="button" id="labelFontSizeInc" aria-label="Increase label size">+</button>
+                  </span>
+                </div>
+                <div class="disp-slider" title="Connected regions smaller than this % of the diagram are not labeled (floor: 4 cells). Slider is finer near 0%.">
+                  <div class="disp-slider-head">
+                    <label for="labelMinAreaPct">Hide labels below</label>
+                    <span class="disp-val" id="labelMinAreaPctVal">0.1%</span>
+                  </div>
+                  <input type="range" id="labelMinAreaPct" min="0" max="1000" step="1" value="316" />
+                </div>
+                <label class="toggle" title="Move labels aside with an arrow when they overlap, cover another tip, or hide their own small patch. Off = names stay at the region tip.">
+                  <input type="checkbox" id="calloutArrows" checked />
+                  Arrow callout for conflict or small regions
+                </label>
+              </div>
             </div>
           </details>
 
           <details class="card disp-card">
             <summary>Fill <span class="chev">›</span></summary>
             <div class="body">
-              <div class="disp-slider" title="Region fill transparency (boundaries stay opaque)">
-                <div class="disp-slider-head">
-                  <label for="fillOpacity">Opacity</label>
-                  <span class="disp-val" id="fillOpacityVal">100%</span>
+              <div class="mineral-only" id="fillModeWrap" style="margin-bottom:0.55rem">
+                <div class="meta" style="margin-bottom:0.35rem">Fill mode</div>
+                <label class="toggle" style="display:block;margin-bottom:0.25rem">
+                  <input type="radio" name="fillMode" value="category" checked /> Category colors
+                </label>
+                <label class="toggle" style="display:block;margin-bottom:0.35rem">
+                  <input type="radio" name="fillMode" value="heatmap" /> Concentration heatmaps
+                </label>
+                <div id="heatmapFillControls" hidden>
+                  <div class="disp-row" style="margin-bottom:0.35rem">
+                    <label for="heatmapKey">Element total</label>
+                    <select id="heatmapKey" class="disp-select"></select>
+                  </div>
+                  <div class="disp-row" style="margin-bottom:0.35rem">
+                    <label id="heatmapColorscaleLabel">Colormap</label>
+                    <div class="heatmap-cmap-select" id="heatmapColorscaleWrap">
+                      <button
+                        type="button"
+                        id="heatmapColorscaleBtn"
+                        class="heatmap-cmap-btn"
+                        aria-haspopup="listbox"
+                        aria-expanded="false"
+                        aria-controls="heatmapColorscaleMenu"
+                        aria-labelledby="heatmapColorscaleLabel heatmapColorscaleName"
+                      >
+                        <span class="heatmap-cmap-swatch" id="heatmapColorscaleSwatch" aria-hidden="true"></span>
+                        <span class="heatmap-cmap-name" id="heatmapColorscaleName">Viridis</span>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="disp-slider" style="margin-bottom:0.35rem" title="Concentration heatmap fill transparency (contours and labels stay opaque)">
+                    <div class="disp-slider-head">
+                      <label for="heatmapOpacity">Opacity</label>
+                      <span class="disp-val" id="heatmapOpacityVal">100%</span>
+                    </div>
+                    <input type="range" id="heatmapOpacity" min="10" max="100" step="5" value="100" />
+                  </div>
+                  <label class="toggle" style="display:block;margin-bottom:0.35rem" title="Flip the colormap so high and low ends swap">
+                    <input type="checkbox" id="heatmapReverseScale" /> Invert colors
+                  </label>
+                  <label class="toggle" style="display:block;margin-bottom:0.35rem" title="Show or hide the log₁₀ TOT colorbar">
+                    <input type="checkbox" id="heatmapShowColorbar" checked /> Show legend
+                  </label>
+                  <div class="disp-row" style="margin-bottom:0.35rem" title="Colorbar length and thickness only (independent of legend font; auto-fits the plot)">
+                    <label for="heatmapColorbarSize">Legend size</label>
+                    <span class="disp-stepper">
+                      <button type="button" id="heatmapColorbarSizeDec" aria-label="Decrease legend size">−</button>
+                      <input type="number" id="heatmapColorbarSize" min="70" max="150" step="10" value="100" />
+                      <button type="button" id="heatmapColorbarSizeInc" aria-label="Increase legend size">+</button>
+                    </span>
+                  </div>
+                  <div class="disp-row" title="Colorbar title and tick font only (independent of legend size; scaled on small plots)">
+                    <label for="heatmapColorbarFontSize">Legend font</label>
+                    <span class="disp-stepper">
+                      <button type="button" id="heatmapColorbarFontSizeDec" aria-label="Decrease legend font size">−</button>
+                      <input type="number" id="heatmapColorbarFontSize" min="8" max="28" step="1" value="15" />
+                      <button type="button" id="heatmapColorbarFontSizeInc" aria-label="Increase legend font size">+</button>
+                    </span>
+                  </div>
                 </div>
-                <input type="range" id="fillOpacity" min="10" max="100" step="5" value="100" />
               </div>
-              <label class="toggle"><input type="checkbox" id="labelsOnly" /> No fill</label>
-              <div class="disp-color-picker" id="fillColorControls" aria-disabled="true">
-                <label for="fillColorTarget">Phase / species</label>
-                <select id="fillColorTarget" class="disp-select" disabled>
-                  <option value="">No plotted categories</option>
-                </select>
-                <div class="disp-color-controls">
-                  <input
-                    type="color"
-                    class="disp-color-input"
-                    id="fillColorPicker"
-                    value="#ffffff"
-                    aria-label="Choose fill color"
-                    disabled
-                  />
-                  <button type="button" class="disp-color-reset" id="fillColorReset" disabled>Reset</button>
+              <div id="categoryFillControls">
+                <div class="disp-slider" title="Region fill transparency (boundaries stay opaque)">
+                  <div class="disp-slider-head">
+                    <label for="fillOpacity">Opacity</label>
+                    <span class="disp-val" id="fillOpacityVal">100%</span>
+                  </div>
+                  <input type="range" id="fillOpacity" min="10" max="100" step="5" value="100" />
+                </div>
+                <label class="toggle"><input type="checkbox" id="labelsOnly" /> No fill</label>
+                <div class="disp-color-picker" id="fillColorControls" aria-disabled="true">
+                  <label for="fillColorTarget">Phase / species</label>
+                  <select id="fillColorTarget" class="disp-select" disabled>
+                    <option value="">No plotted categories</option>
+                  </select>
+                  <div class="disp-color-controls">
+                    <input
+                      type="color"
+                      class="disp-color-input"
+                      id="fillColorPicker"
+                      value="#ffffff"
+                      aria-label="Choose fill color"
+                      disabled
+                    />
+                    <button type="button" class="disp-color-reset" id="fillColorReset" disabled>Reset</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2161,12 +2340,79 @@
                 </span>
               </div>
               <div class="disp-inline-control" title="Show/hide phase and gas-limit boundaries and set line thickness (px)">
-                <label class="toggle"><input type="checkbox" id="showBoundaries" checked /> <span>Boundaries</span></label>
+                <label class="toggle"><input type="checkbox" id="showBoundaries" checked /> <span>Boundaries width</span></label>
                 <span class="disp-stepper">
                   <button type="button" id="boundaryWidthDec" aria-label="Decrease boundary width">−</button>
                   <input type="number" id="boundaryWidth" min="0.25" max="2.5" step="0.25" value="1" />
                   <button type="button" id="boundaryWidthInc" aria-label="Increase boundary width">+</button>
                 </span>
+              </div>
+              <div class="disp-row" style="margin-top:0.35rem" title="Phase boundary line color (O₂/H₂ gas dashes stay red)">
+                <label for="boundaryColor">Boundaries color</label>
+                <span class="disp-color-controls">
+                  <input type="color" class="disp-color-input" id="boundaryColor" value="#222222" aria-label="Boundary line color" />
+                  <button type="button" class="disp-color-reset" id="boundaryColorReset">Reset</button>
+                </span>
+              </div>
+              <div class="mineral-only" id="totalsContourOverlayWrap" style="margin-top:0.65rem;padding-top:0.55rem;border-top:1px solid var(--border)">
+                <div class="disp-inline-control" title="Show or hide log₁₀ TOT isolines (must have been computed in Plot options)">
+                  <label class="toggle">
+                    <input type="checkbox" id="showTotalsContours" checked />
+                    <span>Element-total contours</span>
+                  </label>
+                </div>
+                <div id="totalsContourDetailControls" style="margin-top:0.35rem">
+                  <div class="disp-row" title="Which computed element total to contour (one at a time)">
+                    <label for="totalsContourKey">Element</label>
+                    <select id="totalsContourKey" class="disp-select">
+                      <option value="">—</option>
+                    </select>
+                  </div>
+                  <div class="disp-row" style="margin-top:0.35rem" title="Contour line dash style">
+                    <label for="totalsContourDash">Line style</label>
+                    <select id="totalsContourDash" class="disp-select">
+                      <option value="dot" selected>Dot</option>
+                      <option value="dash">Dash</option>
+                      <option value="dashdot">Dash-dot</option>
+                      <option value="longdash">Long dash</option>
+                      <option value="solid">Solid</option>
+                    </select>
+                  </div>
+                  <div class="disp-row" style="margin-top:0.35rem" title="Contour line thickness (px)">
+                    <label for="totalsContourWidth">Line width</label>
+                    <span class="disp-stepper">
+                      <button type="button" id="totalsContourWidthDec" aria-label="Decrease contour line width">−</button>
+                      <input type="number" id="totalsContourWidth" min="0.25" max="3" step="0.25" value="1" />
+                      <button type="button" id="totalsContourWidthInc" aria-label="Increase contour line width">+</button>
+                    </span>
+                  </div>
+                  <div class="disp-row" style="margin-top:0.35rem" title="Contour line and inline label color">
+                    <label for="totalsContourColor">Line color</label>
+                    <span class="disp-color-controls">
+                      <input type="color" class="disp-color-input" id="totalsContourColor" value="#111827" aria-label="Contour line color" />
+                      <button type="button" class="disp-color-reset" id="totalsContourColorReset">Reset</button>
+                    </span>
+                  </div>
+                  <div class="disp-row" style="margin-top:0.35rem" title="Inline contour level number size (px); text sits in a break in the stroke">
+                    <label for="totalsContourFontSize">Labels</label>
+                    <span class="disp-stepper">
+                      <button type="button" id="totalsContourFontSizeDec" aria-label="Decrease contour label size">−</button>
+                      <input type="number" id="totalsContourFontSize" min="8" max="20" step="1" value="11" />
+                      <button type="button" id="totalsContourFontSizeInc" aria-label="Increase contour label size">+</button>
+                    </span>
+                  </div>
+                  <div class="disp-inline-control" style="margin-top:0.35rem" title="Show/hide the bottom-right badge naming the contoured element and units, and set its font size (px)">
+                    <label class="toggle">
+                      <input type="checkbox" id="showTotalsContourElementLabel" checked />
+                      <span>Element label</span>
+                    </label>
+                    <span class="disp-stepper">
+                      <button type="button" id="totalsContourElementFontSizeDec" aria-label="Decrease contour element label size">−</button>
+                      <input type="number" id="totalsContourElementFontSize" min="10" max="22" step="1" value="13" />
+                      <button type="button" id="totalsContourElementFontSizeInc" aria-label="Increase contour element label size">+</button>
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           </details>
@@ -2331,6 +2577,8 @@
     const RESULT_DB = "phaserResultCache.v23";
     const RESULT_STORE = "results";       // lightweight history meta + thumb
     const RESULT_DATA_STORE = "resultData"; // heavy diagram payloads
+    // Bump when thumbnail render contract changes (e.g. restore phase labels).
+    const HISTORY_THUMB_GEN = 2;
     const RESULT_SESSION_KEY = "phaserLastResultKey.v2";
     const ACTIVE_JOB_KEY = "phaserActiveJob.v2";
     const TAB_LOCK_KEY = "phaserTabLock.v1";
@@ -2422,6 +2670,24 @@
       knobsMode: "standard",
       solutionMode: "dummy_titration",
       mineralCategoryMode: "moles",
+      totalsContours: false,
+      totalsContourLogStep: 2,
+      fillMode: "category", // "category" | "heatmap" (mineral-stability)
+      heatmapKey: "",
+      heatmapColorscale: "Viridis",
+      heatmapOpacity: 1, // 0.1–1 totals heatmap fill alpha
+      heatmapReverseScale: false,
+      heatmapShowColorbar: true,
+      heatmapColorbarSize: 100, // % — colorbar length/thickness only (70–150); not coupled to font
+      heatmapColorbarFontSize: 15, // px — title/ticks only (8–28); not coupled to bar box
+      showTotalsContours: true,
+      totalsContourKey: "", // bare-element TOT key; "" until keys available
+      totalsContourDash: "dot",
+      totalsContourWidth: 1,
+      totalsContourColor: "#111827",
+      totalsContourFontSize: 11,
+      showTotalsContourElementLabel: true,
+      totalsContourElementFontSize: 13, // px — bottom-right element badge (10–22)
       displayMode: "solid",
       solidSubsetElements: [],
       layerSolids: true,
@@ -2434,11 +2700,13 @@
       showCompositionBox: true,
       compositionLabelSize: 16, // px — bottom-left composition box (15–35)
       boundaryWidth: 1,       // px — phase boundary stroke (0.25–2.5)
+      boundaryColor: "#222222", // phase boundary stroke color
       axisTickStepX: "auto",   // X-axis tick spacing (dtick) or "auto" (Plotly native)
       axisTickStepY: "auto",   // Y-axis tick spacing (dtick) or "auto" (Plotly native)
       axisTickFont: 15,       // px — axis tick label font (8–28)
       axisTitleFont: 18,      // px — axis title font (10–30)
       axisLineWidth: 1,       // px — axis/frame line thickness (0.5–4)
+      showPhaseLabels: true,  // phase / species name annotations on the diagram
       phaseLabelMode: "name", // "name" | "formula" | "both" — solids + joins; aqueous always chem-formatted
       labelFontSize: 14,      // px — Plotly annotation font (10–20)
       fillOpacity: 1,         // 0.1–1 region fill alpha (boundaries stay opaque)
@@ -2738,9 +3006,20 @@
       ];
       if (modeId === "mineral-stability") {
         rows.push([
-          "Categories",
-          req.mineral_category_mode === "costability" ? "Co-stability" : "Predominant",
+          "Mineral category",
+          req.mineral_category_mode === "costability"
+            ? "Co-stability"
+            : "Predominant mineral",
         ]);
+        const contoursOn = !!req.totals_contours;
+        rows.push(["Concentration contours", contoursOn ? "On" : "Off"]);
+        if (contoursOn) {
+          const step = Number(req.totals_contour_log_step);
+          rows.push([
+            "Concentrations log steps",
+            Number.isFinite(step) ? `${step} log₁₀(mol/kgw)` : "—",
+          ]);
+        }
       }
       rows.push(
         ["Electrolyte", electrolyte],
@@ -2859,6 +3138,31 @@
       positionHistoryMenu();
       // Reposition after layout (details content / fonts).
       requestAnimationFrame(() => positionHistoryMenu());
+      // Quietly refresh thumbs captured under an older render contract.
+      refreshStaleHistoryThumbs().catch(() => {});
+    }
+
+    async function refreshStaleHistoryThumbs() {
+      if (!isDiagramMode(activeModeId)) return;
+      let rows = [];
+      try { rows = await listCachedResults(activeModeId); } catch (e) { return; }
+      let refreshed = false;
+      for (const rec of rows) {
+        if (!runtime.historyMenuOpen) break;
+        if (rec?.thumb && rec.thumbGen === HISTORY_THUMB_GEN) continue;
+        let result = null;
+        try { result = await getCachedResult(rec.key); } catch (e) { continue; }
+        if (!result) continue;
+        const blob = await captureHistoryThumb(result, rec.request);
+        if (!blob) continue;
+        try {
+          await patchCachedThumb(rec.key, blob);
+          refreshed = true;
+        } catch (e) {}
+      }
+      if (refreshed && runtime.historyMenuOpen) {
+        try { await renderHistoryMenu(); } catch (e) {}
+      }
     }
 
     async function toggleHistoryMenu() {
@@ -2912,6 +3216,13 @@
           ? "costability"
           : "moles";
       }
+      if (modeId === "mineral-stability") {
+        state.totalsContours = !!req.totals_contours;
+        const step = Number(req.totals_contour_log_step);
+        state.totalsContourLogStep = Number.isFinite(step)
+          ? Math.min(6, Math.max(0.5, Math.round(step * 2) / 2))
+          : 2;
+      }
       state.phaseSel = phaseSel;
       if (!state.layerSolids && state.layerAqueous) state.displayMode = "aqueous";
       else if (state.layerSolids && !state.layerAqueous) state.displayMode = "solid";
@@ -2926,6 +3237,8 @@
       else if (wantAq) state.displayMode = "aqueous";
       const elems = result?.system_elements || systemElements();
       state.solidSubsetElements = elems.slice();
+      // History / fresh open always lands on category colours, not totals heatmap.
+      state.fillMode = "category";
     }
 
     function syncSidebarFromState() {
@@ -3991,6 +4304,19 @@
       return Math.min(2.5, Math.max(0.25, Math.round(n * 4) / 4));
     }
 
+    const BOUNDARY_COLOR_DEFAULT = "#222222";
+    const CONTOUR_COLOR_DEFAULT = "#111827";
+
+    function normalizeHexColor(v, fallback) {
+      const fb = String(fallback || "#000000").toLowerCase();
+      const s = String(v || "").trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(s)) return s.toLowerCase();
+      if (/^#[0-9a-fA-F]{3}$/.test(s)) {
+        return (`#${s[1]}${s[1]}${s[2]}${s[2]}${s[3]}${s[3]}`).toLowerCase();
+      }
+      return fb;
+    }
+
     const AXIS_TICK_STEPS = [0.25, 0.5, 1, 2, 4, 5, 10, 20, 30];
     function clampAxisTickStep(v) {
       if (v === "auto" || v === "" || v == null) return "auto";
@@ -4043,6 +4369,8 @@
         compEl.value = String(state.compositionLabelSize);
       }
       if (bwEl && document.activeElement !== bwEl) bwEl.value = String(state.boundaryWidth);
+      const bcEl = $("boundaryColor");
+      if (bcEl) bcEl.value = normalizeHexColor(state.boundaryColor, BOUNDARY_COLOR_DEFAULT);
       const axTickFontEl = $("axisTickFont");
       const axTitleFontEl = $("axisTitleFont");
       const axLineEl = $("axisLineWidth");
@@ -4063,6 +4391,17 @@
       });
     }
 
+    function syncPhaseLabelDetailControls() {
+      const on = state.showPhaseLabels !== false;
+      const showEl = $("showPhaseLabels");
+      if (showEl) showEl.checked = on;
+      const detail = $("phaseLabelDetailControls");
+      if (detail) detail.style.opacity = on ? "1" : "0.45";
+      [...(detail?.querySelectorAll("select, input, button") || [])].forEach(el => {
+        el.disabled = !on;
+      });
+    }
+
     function syncDisplayStyleControls() {
       const fsEl = $("labelFontSize");
       const opEl = $("fillOpacity");
@@ -4072,6 +4411,8 @@
       const sysEl = $("systemLabelSize");
       const compEl = $("compositionLabelSize");
       const bwEl = $("boundaryWidth");
+      const bcEl = $("boundaryColor");
+      syncPhaseLabelDetailControls();
       if (fsEl) fsEl.value = String(state.labelFontSize);
       if (opEl) opEl.value = String(Math.round(state.fillOpacity * 100));
       if (arEl) {
@@ -4083,6 +4424,7 @@
       if (hsEl) hsEl.value = String(clampHoverSpeciesCount(state.hoverSpeciesCount));
       if (sysEl) sysEl.value = String(state.systemLabelSize);
       if (compEl) compEl.value = String(state.compositionLabelSize);
+      if (bcEl) bcEl.value = normalizeHexColor(state.boundaryColor, BOUNDARY_COLOR_DEFAULT);
       if (bwEl) bwEl.value = String(state.boundaryWidth);
       {
         const axTickFontEl = $("axisTickFont");
@@ -4120,6 +4462,30 @@
     }
 
     function syncDisplayControls(result = runtime.lastResult) {
+      syncFillModeControls(result);
+      syncTotalsContourKeyList(result);
+      syncTotalsContourComputeControls();
+      const showTc = $("showTotalsContours");
+      if (showTc) showTc.checked = state.showTotalsContours !== false;
+      const detail = $("totalsContourDetailControls");
+      if (detail) detail.style.opacity = state.showTotalsContours !== false ? "1" : "0.45";
+      const tcDash = $("totalsContourDash");
+      if (tcDash) tcDash.value = state.totalsContourDash || "dot";
+      const tcw = $("totalsContourWidth");
+      if (tcw && document.activeElement !== tcw) tcw.value = String(state.totalsContourWidth ?? 1);
+      const tcc = $("totalsContourColor");
+      if (tcc) tcc.value = normalizeHexColor(state.totalsContourColor, CONTOUR_COLOR_DEFAULT);
+      const tcf = $("totalsContourFontSize");
+      if (tcf && document.activeElement !== tcf) tcf.value = String(state.totalsContourFontSize ?? 11);
+      const showElem = $("showTotalsContourElementLabel");
+      if (showElem) showElem.checked = state.showTotalsContourElementLabel !== false;
+      const tcef = $("totalsContourElementFontSize");
+      if (tcef && document.activeElement !== tcef) {
+        tcef.value = String(state.totalsContourElementFontSize ?? 13);
+      }
+      [...(detail?.querySelectorAll("select, input, button") || [])].forEach(el => {
+        el.disabled = state.showTotalsContours === false;
+      });
       const mode = state.displayMode;
       const cfg = displayLayerConfig(result);
       $("solidSubsetWrap").style.display = cfg.elements ? "flex" : "none";
@@ -4224,6 +4590,108 @@
 
     function chemicalSystemLabelText(result = runtime.lastResult) {
       return displayedSystemElements(result).join("-");
+    }
+
+    /** Paper-x reserve on the top-right so the heatmap colorbar clears the system badge. */
+    function systemLabelPaperReserve(result = runtime.lastResult) {
+      if (state.showSystemLabel === false) return 0;
+      const text = chemicalSystemLabelText(result);
+      if (!text) return 0;
+      const fontSize = clampSystemLabelSize(state.systemLabelSize);
+      const pad = Math.max(4, Math.round(fontSize * 0.35));
+      // Bold system-ui char width ~0.62em; + padding/border + annotation xshift.
+      const boxPx = text.length * fontSize * 0.62 + 2 * pad + 12;
+      const plotW = Math.max(280, (screenPlotBaseSize().width || 640));
+      // Leave room for the colorbar; tighter cap on narrow plots.
+      const maxReserve = plotW < 420 ? 0.34 : plotW < 560 ? 0.42 : 0.52;
+      return Math.min(maxReserve, Math.max(0.10, boxPx / plotW + 0.03));
+    }
+
+    /**
+     * Heatmap colorbar layout — box and font are independent channels.
+     *
+     *   Legend size  → length + thickness only (then fit to available paper)
+     *   Legend font  → title / tick type size only
+     *   Plot resize  → scales each channel from the plot box separately
+     *
+     * Font never feeds length/thickness (avoids the old feedback loop where
+     * bigger type grew the bar, which then fought auto-fit).
+     */
+    function heatmapColorbarLayout(result, key) {
+      const plot = screenPlotBaseSize();
+      const plotW = Math.max(240, plot.width || 640);
+      const plotH = Math.max(240, plot.height || 640);
+      const shortSide = Math.min(plotW, plotH);
+      // 720px ≈ comfortable desktop plot; shrink below that, mild grow above.
+      const viewScale = Math.min(1.12, Math.max(0.52, shortSide / 720));
+
+      // —— Box channel (Legend size) ——
+      const userSize = Math.min(1.5, Math.max(0.7, (Number(state.heatmapColorbarSize) || 100) / 100));
+      const sysReserve = systemLabelPaperReserve(result);
+      const rightEdge = sysReserve > 0 ? Math.min(0.99, 1 - sysReserve) : 0.98;
+      const baseLen = 0.20 * (0.70 + 0.30 * viewScale);
+      let barLen = baseLen * userSize;
+      const maxLen = Math.max(0.10, rightEdge - 0.03);
+      barLen = Math.min(Math.max(0.10, barLen), maxLen);
+      // xanchor=right → left edge at x − len; keep clear of the left margin.
+      if (rightEdge - barLen < 0.02) {
+        barLen = Math.max(0.10, rightEdge - 0.02);
+      }
+      const thickBase = 15 * viewScale;
+      const thickMax = Math.max(9, Math.round(plotH * 0.032));
+      const thickness = Math.round(
+        Math.min(thickMax, Math.max(8, thickBase * userSize))
+      );
+      // Pad from box thickness only — not from font.
+      const pad = Math.max(3, Math.round(thickness * 0.22));
+
+      // —— Font channel (Legend font) ——
+      const userFont = Math.min(28, Math.max(8, Math.round(Number(state.heatmapColorbarFontSize) || 15)));
+      const fontCap = Math.max(10, Math.min(28, Math.round(plotW * 0.032)));
+      const fontSize = Math.round(Math.min(fontCap, Math.max(8, userFont * viewScale)));
+      const fontFamily = "system-ui,Segoe UI,sans-serif";
+
+      const nticks = shortSide < 360 ? 4 : shortSide < 520 ? 5 : 7;
+      const titleText = shortSide < 400 ? `log₁₀ ${key}` : `log₁₀ TOT ${key}`;
+
+      return {
+        orientation: "h",
+        title: {
+          text: titleText,
+          side: "top",
+          font: {
+            size: fontSize,
+            color: "#0f172a",
+            family: fontFamily,
+            weight: 700,
+          },
+        },
+        thickness,
+        len: barLen,
+        x: rightEdge,
+        y: shortSide < 400 ? 0.992 : 0.985,
+        xref: "paper",
+        yref: "paper",
+        xanchor: "right",
+        yanchor: "top",
+        xpad: pad,
+        ypad: pad,
+        bgcolor: "rgba(255,255,255,0.90)",
+        bordercolor: "#cbd5e1",
+        borderwidth: 1,
+        tickfont: {
+          size: fontSize,
+          color: "#334155",
+          family: fontFamily,
+          weight: 700,
+        },
+        ticks: "outside",
+        ticklen: Math.max(3, Math.round(fontSize * 0.4)),
+        tickwidth: 1,
+        tickcolor: "#334155",
+        outlinewidth: 0,
+        nticks,
+      };
     }
 
     function systemLabelAnnotation(result) {
@@ -4516,35 +4984,51 @@
     // Queued: compact queue indicator. Running: progress (+ phase text on wide).
     // Idle/done: status report sits where the bar was on mobile.
     const JobProgress = (() => {
-      const ADAPTIVE = [
-        { id: "grid", start: 0, end: 20 },
-        { id: "boundaries", start: 20, end: 90 },
+      // Fixed skeleton: 0–20 → 20–90 → 90–95 → 95–100.
+      // Only the middle (20–90) changes when contours are on.
+      const TAIL = [
         { id: "packing", start: 90, end: 95 },
         { id: "download", start: 95, end: 98 },
         { id: "cache", start: 98, end: 99 },
         { id: "render", start: 99, end: 100 },
       ];
-      // Uniform: no boundary-refinement slice — grid/compute uses 0–80%.
+      const ADAPTIVE = [
+        { id: "grid", start: 0, end: 20 },
+        { id: "boundaries", start: 20, end: 70 },
+        { id: "contours", start: 70, end: 90 },
+        ...TAIL,
+      ];
+      const ADAPTIVE_NO_CONTOURS = [
+        { id: "grid", start: 0, end: 20 },
+        { id: "boundaries", start: 20, end: 90 },
+        ...TAIL,
+      ];
       const UNIFORM = [
-        { id: "grid", start: 0, end: 80 },
-        { id: "packing", start: 80, end: 95 },
-        { id: "download", start: 95, end: 98 },
-        { id: "cache", start: 98, end: 99 },
-        { id: "render", start: 99, end: 100 },
+        { id: "grid", start: 0, end: 70 },
+        { id: "contours", start: 70, end: 90 },
+        ...TAIL,
+      ];
+      const UNIFORM_NO_CONTOURS = [
+        { id: "grid", start: 0, end: 90 },
+        ...TAIL,
       ];
       const LABELS = {
         grid: "Computing grid",
         compute: "Computing grid",
         boundaries: "Tracing phase edges",
+        contours: "Tracing element-total contours",
         packing: "Packing diagram",
         download: "Downloading",
         cache: "Caching",
         render: "Rendering",
       };
-      let segments = UNIFORM;
+      let segments = UNIFORM_NO_CONTOURS;
+      let adaptiveMode = false;
 
-      function begin(adaptive) {
-        segments = adaptive ? ADAPTIVE : UNIFORM;
+      function begin(adaptive, withContours = false) {
+        adaptiveMode = !!adaptive;
+        if (adaptiveMode) segments = withContours ? ADAPTIVE : ADAPTIVE_NO_CONTOURS;
+        else segments = withContours ? UNIFORM : UNIFORM_NO_CONTOURS;
       }
       function phaseId(id) {
         return id === "compute" ? "grid" : id;
@@ -4553,7 +5037,13 @@
         return segments.find(s => s.id === phaseId(id));
       }
       function toGlobal(id, fraction) {
-        const s = segment(id);
+        let s = segment(id);
+        // Server entered the contour phase — promote to the contours-on budget
+        // even if the client request flag was missing (e.g. stale reconnect).
+        if (!s && phaseId(id) === "contours") {
+          begin(adaptiveMode, true);
+          s = segment(id);
+        }
         if (!s) return 0;
         const f = Math.max(0, Math.min(1, fraction ?? 0));
         return s.start + f * (s.end - s.start);
@@ -4763,6 +5253,7 @@
       }
       if (state.displayMode === "element") state.displayMode = "aqueous"; // removed mode id
       if (!["solid", "aqueous"].includes(state.displayMode)) state.displayMode = "solid";
+      state.showPhaseLabels = state.showPhaseLabels !== false;
       if (!["name", "formula", "both"].includes(state.phaseLabelMode)) state.phaseLabelMode = "name";
       state.labelFontSize = clampLabelFontSize(state.labelFontSize);
       {
@@ -4777,6 +5268,7 @@
       state.systemLabelSize = clampSystemLabelSize(state.systemLabelSize);
       state.compositionLabelSize = clampCompositionLabelSize(state.compositionLabelSize);
       state.boundaryWidth = clampBoundaryWidth(state.boundaryWidth);
+      state.boundaryColor = normalizeHexColor(state.boundaryColor, BOUNDARY_COLOR_DEFAULT);
       // Old count-based tick controls no longer apply; drop them for the step model.
       delete state.axisTickCount;
       delete state.axisTickCountX;
@@ -4811,6 +5303,71 @@
           state.knobsMode = knobsModes.includes(defaultKnobs) ? defaultKnobs : "standard";
         }
       }
+      state.fillMode = state.fillMode === "heatmap" ? "heatmap" : "category";
+      state.heatmapColorscale = HEATMAP_COLORSCALE_NAMES.includes(state.heatmapColorscale)
+        ? state.heatmapColorscale
+        : "Viridis";
+      {
+        const hop = Number(state.heatmapOpacity);
+        state.heatmapOpacity = Number.isFinite(hop)
+          ? Math.min(1, Math.max(0.1, hop > 1 ? hop / 100 : hop))
+          : 1;
+      }
+      state.heatmapReverseScale = !!state.heatmapReverseScale;
+      state.heatmapShowColorbar = state.heatmapShowColorbar !== false;
+      {
+        const sz = Math.round(Number(state.heatmapColorbarSize));
+        state.heatmapColorbarSize = Number.isFinite(sz)
+          ? Math.min(150, Math.max(70, Math.round(sz / 10) * 10))
+          : 100;
+        const fs = Math.round(Number(state.heatmapColorbarFontSize));
+        state.heatmapColorbarFontSize = Number.isFinite(fs)
+          ? Math.min(28, Math.max(8, fs))
+          : 15;
+      }
+      state.heatmapKey = typeof state.heatmapKey === "string" ? state.heatmapKey : "";
+      // Contour compute is opt-in (default off). Persist only explicit true.
+      state.totalsContours = state.totalsContours === true;
+      {
+        const step = Number(state.totalsContourLogStep);
+        state.totalsContourLogStep = Number.isFinite(step)
+          ? Math.min(6, Math.max(0.5, Math.round(step * 2) / 2))
+          : 2;
+      }
+      state.showTotalsContours = state.showTotalsContours !== false;
+      // Migrate old checklist / "All" (empty) → single element key.
+      if (typeof state.totalsContourKey !== "string") {
+        const oldKeys = Array.isArray(state.totalsContourKeys)
+          ? state.totalsContourKeys.filter(k => typeof k === "string")
+          : [];
+        state.totalsContourKey = oldKeys[0] || "";
+      }
+      delete state.totalsContourKeys;
+      state.totalsContourKey = normalizeTotalKey(state.totalsContourKey || "");
+      {
+        const dashOk = ["solid", "dash", "dot", "dashdot", "longdash"];
+        state.totalsContourDash = dashOk.includes(state.totalsContourDash)
+          ? state.totalsContourDash
+          : "dot";
+      }
+      {
+        const w = Number(state.totalsContourWidth);
+        state.totalsContourWidth = Number.isFinite(w)
+          ? Math.min(3, Math.max(0.25, w))
+          : 1;
+        const fs = Number(state.totalsContourFontSize);
+        state.totalsContourFontSize = Number.isFinite(fs)
+          ? Math.min(20, Math.max(8, Math.round(fs)))
+          : 11;
+        const efs = Number(state.totalsContourElementFontSize);
+        state.totalsContourElementFontSize = Number.isFinite(efs)
+          ? Math.min(22, Math.max(10, Math.round(efs)))
+          : 13;
+      }
+      state.showTotalsContourElementLabel = state.showTotalsContourElementLabel !== false;
+      state.totalsContourColor = normalizeHexColor(
+        state.totalsContourColor, CONTOUR_COLOR_DEFAULT,
+      );
       const catModes = (runtime.cfg?.mineral_category_modes || []).map(m => m.id);
       const defaultCat = runtime.cfg?.default_mineral_category_mode || "moles";
       if (!catModes.includes(state.mineralCategoryMode)) {
@@ -5058,20 +5615,25 @@
     function fillMineralCategoryOptions() {
       const host = $("mineralCategoryOptions");
       if (!host) return;
+      // User-facing tips stay in the client so a stale /api/config description
+      // (e.g. after a code update without server restart) cannot resurface.
+      const catHelp = {
+        moles:
+          "Colour each point by the solid that forms in the largest amount. "
+          + "If two solids form about equally, both names may appear (A + B). "
+          + "Where nothing solid forms, the main dissolved species is shown instead.",
+        costability:
+          "Colour each point by every solid that is present there, joined as "
+          + "A + B when several form together. Use this to see which minerals "
+          + "can coexist, not only which one is most abundant.",
+      };
       const modes = runtime.cfg?.mineral_category_modes || [
-        {
-          id: "moles",
-          label: "Predominant mineral",
-          description: "Argmax precipitated moles among eligible solids.",
-        },
-        {
-          id: "costability",
-          label: "Co-stability",
-          description: "All solids with precipitated moles > 0, joined.",
-        },
+        { id: "moles", label: "Predominant mineral" },
+        { id: "costability", label: "Co-stability" },
       ];
       host.innerHTML = modes.map(m => {
-        const tip = (m.description || m.label || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const tip = (catHelp[m.id] || m.description || m.label || "")
+          .replace(/</g, "&lt;").replace(/>/g, "&gt;");
         const label = (m.label || m.id).replace(/</g, "&lt;").replace(/>/g, "&gt;");
         return `<div class="mode-option-row">
           <div class="mode-option">
@@ -5359,6 +5921,18 @@
       fitPlotBox();
       if (window.Plotly && document.getElementById("plotDiv") && runtime.lastResult) {
         try { Plotly.Plots.resize("plotDiv"); } catch (e) {}
+        // Colorbar length/font/thickness depend on plot px size — refit after layout.
+        if (
+          state.fillMode === "heatmap"
+          && runtime.lastResult?.totals_heatmap
+          && state.heatmapShowColorbar !== false
+        ) {
+          debounce(
+            () => { if (runtime.lastResult) drawDiagram(runtime.lastResult); },
+            "colorbarRefitTimer",
+            140,
+          );
+        }
       }
       syncExportControls(runtime.lastResult);
     }
@@ -5617,6 +6191,156 @@
           e.target.blur();
         }
       });
+      const markComputeStale = () => { markStale(); persist(); };
+      $("totalsContours")?.addEventListener("change", e => {
+        state.totalsContours = e.target.checked;
+        syncTotalsContourComputeControls();
+        markComputeStale();
+      });
+      const setLogStep = (v) => {
+        const n = Math.min(6, Math.max(0.5, Math.round((Number(v) || 2) * 2) / 2));
+        state.totalsContourLogStep = n;
+        syncTotalsContourComputeControls();
+        markComputeStale();
+      };
+      $("totalsContourLogStepDec")?.addEventListener("click", () => setLogStep((state.totalsContourLogStep || 2) - 0.5));
+      $("totalsContourLogStepInc")?.addEventListener("click", () => setLogStep((state.totalsContourLogStep || 2) + 0.5));
+      $("totalsContourLogStep")?.addEventListener("change", e => setLogStep(e.target.value));
+      document.querySelectorAll('input[name="fillMode"]').forEach(r => {
+        r.addEventListener("change", () => {
+          if (!r.checked) return;
+          state.fillMode = r.value === "heatmap" ? "heatmap" : "category";
+          if (state.fillMode === "heatmap") {
+            state.labelsOnly = false;
+            const lo = $("labelsOnly");
+            if (lo) lo.checked = false;
+          }
+          persist();
+          syncFillModeControls(runtime.lastResult);
+          if (runtime.lastResult) drawDiagram(runtime.lastResult);
+        });
+      });
+      $("heatmapKey")?.addEventListener("change", e => {
+        state.heatmapKey = e.target.value || "";
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      initHeatmapColorscalePicker();
+      $("heatmapOpacity")?.addEventListener("input", e => {
+        state.heatmapOpacity = Math.min(1, Math.max(0.1, (Number(e.target.value) || 100) / 100));
+        const val = $("heatmapOpacityVal");
+        if (val) val.textContent = `${Math.round(state.heatmapOpacity * 100)}%`;
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      $("heatmapReverseScale")?.addEventListener("change", e => {
+        state.heatmapReverseScale = !!e.target.checked;
+        syncHeatmapColorscalePicker();
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      $("heatmapShowColorbar")?.addEventListener("change", e => {
+        state.heatmapShowColorbar = !!e.target.checked;
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      const setHeatmapColorbarSize = (v) => {
+        const n = Math.round(Number(v));
+        state.heatmapColorbarSize = Number.isFinite(n)
+          ? Math.min(150, Math.max(70, Math.round(n / 10) * 10))
+          : 100;
+        const el = $("heatmapColorbarSize");
+        if (el) el.value = String(state.heatmapColorbarSize);
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      const setHeatmapColorbarFont = (v) => {
+        state.heatmapColorbarFontSize = Math.min(28, Math.max(8, Math.round(Number(v) || 15)));
+        const el = $("heatmapColorbarFontSize");
+        if (el) el.value = String(state.heatmapColorbarFontSize);
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      $("heatmapColorbarSizeDec")?.addEventListener("click", () =>
+        setHeatmapColorbarSize((state.heatmapColorbarSize || 100) - 10));
+      $("heatmapColorbarSizeInc")?.addEventListener("click", () =>
+        setHeatmapColorbarSize((state.heatmapColorbarSize || 100) + 10));
+      $("heatmapColorbarSize")?.addEventListener("change", e => setHeatmapColorbarSize(e.target.value));
+      $("heatmapColorbarFontSizeDec")?.addEventListener("click", () =>
+        setHeatmapColorbarFont((state.heatmapColorbarFontSize || 15) - 1));
+      $("heatmapColorbarFontSizeInc")?.addEventListener("click", () =>
+        setHeatmapColorbarFont((state.heatmapColorbarFontSize || 15) + 1));
+      $("heatmapColorbarFontSize")?.addEventListener("change", e => setHeatmapColorbarFont(e.target.value));
+      $("showTotalsContours")?.addEventListener("change", e => {
+        state.showTotalsContours = e.target.checked;
+        persist();
+        syncDisplayControls(runtime.lastResult);
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      $("totalsContourKey")?.addEventListener("change", e => {
+        state.totalsContourKey = normalizeTotalKey(e.target.value || "");
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      $("totalsContourDash")?.addEventListener("change", e => {
+        const v = e.target.value || "dot";
+        state.totalsContourDash = ["solid", "dash", "dot", "dashdot", "longdash"].includes(v)
+          ? v
+          : "dot";
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      const setContourColor = (v) => {
+        state.totalsContourColor = normalizeHexColor(v, CONTOUR_COLOR_DEFAULT);
+        const el = $("totalsContourColor");
+        if (el) el.value = state.totalsContourColor;
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      $("totalsContourColor")?.addEventListener("input", e => setContourColor(e.target.value));
+      $("totalsContourColor")?.addEventListener("change", e => setContourColor(e.target.value));
+      $("totalsContourColorReset")?.addEventListener("click", () => setContourColor(CONTOUR_COLOR_DEFAULT));
+      const setContourWidth = (v) => {
+        state.totalsContourWidth = Math.min(3, Math.max(0.25, Number(v) || 1));
+        const el = $("totalsContourWidth");
+        if (el) el.value = String(state.totalsContourWidth);
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      const setContourFont = (v) => {
+        state.totalsContourFontSize = Math.min(20, Math.max(8, Math.round(Number(v) || 11)));
+        const el = $("totalsContourFontSize");
+        if (el) el.value = String(state.totalsContourFontSize);
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      $("totalsContourWidthDec")?.addEventListener("click", () => setContourWidth((state.totalsContourWidth || 1) - 0.25));
+      $("totalsContourWidthInc")?.addEventListener("click", () => setContourWidth((state.totalsContourWidth || 1) + 0.25));
+      $("totalsContourWidth")?.addEventListener("change", e => setContourWidth(e.target.value));
+      $("totalsContourFontSizeDec")?.addEventListener("click", () => setContourFont((state.totalsContourFontSize || 11) - 1));
+      $("totalsContourFontSizeInc")?.addEventListener("click", () => setContourFont((state.totalsContourFontSize || 11) + 1));
+      $("totalsContourFontSize")?.addEventListener("change", e => setContourFont(e.target.value));
+      $("showTotalsContourElementLabel")?.addEventListener("change", e => {
+        state.showTotalsContourElementLabel = !!e.target.checked;
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
+      const setContourElementFont = (v) => {
+        state.totalsContourElementFontSize = Math.min(
+          22, Math.max(10, Math.round(Number(v) || 13)),
+        );
+        const el = $("totalsContourElementFontSize");
+        if (el) el.value = String(state.totalsContourElementFontSize);
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      $("totalsContourElementFontSizeDec")?.addEventListener("click", () =>
+        setContourElementFont((state.totalsContourElementFontSize || 13) - 1));
+      $("totalsContourElementFontSizeInc")?.addEventListener("click", () =>
+        setContourElementFont((state.totalsContourElementFontSize || 13) + 1));
+      $("totalsContourElementFontSize")?.addEventListener("change", e =>
+        setContourElementFont(e.target.value));
+
       $("adaptiveBoundaries").addEventListener("change", e => {
         state.adaptiveBoundaries = e.target.checked;
         renderGridMeta();
@@ -5647,6 +6371,24 @@
       {
         const helpBtn = $("knobsModeHelp");
         const helpPop = $("knobsModeHelpPop");
+        if (helpBtn && helpPop) {
+          helpBtn.addEventListener("click", e => {
+            e.preventDefault();
+            e.stopPropagation();
+            const opening = helpPop.hidden;
+            helpPop.hidden = !opening;
+            helpBtn.setAttribute("aria-expanded", opening ? "true" : "false");
+          });
+          document.addEventListener("click", e => {
+            if (helpBtn.contains(e.target) || helpPop.contains(e.target)) return;
+            helpPop.hidden = true;
+            helpBtn.setAttribute("aria-expanded", "false");
+          });
+        }
+      }
+      {
+        const helpBtn = $("totalsContoursComputeHelp");
+        const helpPop = $("totalsContoursComputeHelpPop");
         if (helpBtn && helpPop) {
           helpBtn.addEventListener("click", e => {
             e.preventDefault();
@@ -5719,6 +6461,12 @@
       });
 
       // display-only toggles: re-render last result without recomputing
+      $("showPhaseLabels")?.addEventListener("change", e => {
+        state.showPhaseLabels = !!e.target.checked;
+        syncPhaseLabelDetailControls();
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      });
       $("phaseLabelMode").addEventListener("change", e => {
         const v = e.target.value;
         state.phaseLabelMode = ["name", "formula", "both"].includes(v) ? v : "name";
@@ -5832,6 +6580,16 @@
           e.target.blur();
         }
       });
+      const setBoundaryColor = (v) => {
+        state.boundaryColor = normalizeHexColor(v, BOUNDARY_COLOR_DEFAULT);
+        const el = $("boundaryColor");
+        if (el) el.value = state.boundaryColor;
+        persist();
+        if (runtime.lastResult) drawDiagram(runtime.lastResult);
+      };
+      $("boundaryColor")?.addEventListener("input", e => setBoundaryColor(e.target.value));
+      $("boundaryColor")?.addEventListener("change", e => setBoundaryColor(e.target.value));
+      $("boundaryColorReset")?.addEventListener("click", () => setBoundaryColor(BOUNDARY_COLOR_DEFAULT));
       // Axes submenu — tick count, tick/title font, axis line width.
       const bindAxisStepper = (id, clamp, step) => {
         const setVal = (v) => {
@@ -6067,6 +6825,8 @@
       setVal("phMax", roundPh(state.ph.max));
       syncGridLevelsControls();
       $("adaptiveBoundaries").checked = !!state.adaptiveBoundaries;
+      syncTotalsContourComputeControls();
+      syncFillModeControls(runtime.lastResult);
       {
         const knobsEl = $("knobsMode");
         if (knobsEl && knobsEl !== focused) knobsEl.value = normalizeKnobsMode(state.knobsMode);
@@ -6325,6 +7085,7 @@
       const rec = await getCachedRecord(key);
       if (!rec) return;
       rec.thumb = thumb;
+      rec.thumbGen = HISTORY_THUMB_GEN;
       delete rec.result; // never re-embed payload on the meta row
       const db = await openResultDb();
       await new Promise((resolve, reject) => {
@@ -6458,7 +7219,7 @@
     async function ensureHistoryThumb(key, result, request) {
       try {
         const rec = await getCachedRecord(key);
-        if (rec?.thumb) return;
+        if (rec?.thumb && rec.thumbGen === HISTORY_THUMB_GEN) return;
       } catch (e) {}
       const blob = await captureHistoryThumb(result, request);
       if (!blob) return;
@@ -6843,11 +7604,21 @@
       }
     }
 
+    function jobProgressWithContours(modeId, request = null) {
+      const mid = modeId || activeModeId;
+      if (mid !== "mineral-stability") return false;
+      if (request && typeof request === "object" && "totals_contours" in request) {
+        return !!request.totals_contours;
+      }
+      return !!state.totalsContours;
+    }
+
     async function fetchAndRenderJobResult(jobId, cacheKey, st, modeId) {
       if (!runtime.isTabLeader) return;
       const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
       const adaptive = isDiagramMode(jobModeId) && !!state.adaptiveBoundaries;
-      JobProgress.begin(adaptive);
+      const req = runtime.pendingCacheRequest || loadActiveJob()?.request || null;
+      JobProgress.begin(adaptive, jobProgressWithContours(jobModeId, req));
       setLogoComputing(true);
       let result;
       try {
@@ -6978,6 +7749,8 @@
       };
       if (modeId === "mineral-stability") {
         body.mineral_category_mode = state.mineralCategoryMode || "moles";
+        body.totals_contours = !!state.totalsContours;
+        body.totals_contour_log_step = Number(state.totalsContourLogStep) || 2;
       }
       if (state.adaptiveBoundaries) {
         // Include the factor so the cache key reflects it (changing the factor
@@ -7023,7 +7796,7 @@
         setStatus("Starting job…");
         setLogoComputing(true, "Starting job…");
         runtime.computeStartedAt = performance.now();
-        JobProgress.begin(state.adaptiveBoundaries);
+        JobProgress.begin(state.adaptiveBoundaries, jobProgressWithContours(modeId, body));
         const prev = loadActiveJob();
         if (prev?.jobId) {
           clearActiveJob();
@@ -7113,9 +7886,14 @@
       const epoch = runtime.pollEpoch;
       const jobModeId = modeId || runtime.activeJobModeId || DEFAULT_MODE_ID;
       runtime.activeJobModeId = jobModeId;
-      saveActiveJob(jobId, cacheKey, jobModeId, runtime.pendingCacheRequest);
+      // Keep the stored request when pending is empty so reconnect still knows
+      // whether totals_contours was on (progress budget + cache key context).
+      const prevJob = loadActiveJob();
+      const req = runtime.pendingCacheRequest || prevJob?.request || null;
+      if (req) runtime.pendingCacheRequest = req;
+      saveActiveJob(jobId, cacheKey, jobModeId, req);
       const adaptive = isDiagramMode(jobModeId) && !!state.adaptiveBoundaries;
-      JobProgress.begin(adaptive);
+      JobProgress.begin(adaptive, jobProgressWithContours(jobModeId, req));
       setLogoComputing(true, "Computing…");
       runtime.pollTimer = setInterval(async () => {
         // Ignore in-flight ticks from a superseded poll session.
@@ -7137,6 +7915,7 @@
               grid: "Computing grid",
               compute: "Computing grid",
               boundaries: "Tracing phase edges",
+              contours: "Tracing element-total contours",
               packing: "Packing diagram",
             }[phase] || "Computing";
             setLogoComputing(true, `${phaseLabel}…`);
@@ -7275,7 +8054,10 @@
       }
       return {
         type: "scattergl", mode: "lines", x: xs, y: ys,
-        line: { color: "#222", width: clampBoundaryWidth(state.boundaryWidth) },
+        line: {
+          color: normalizeHexColor(state.boundaryColor, BOUNDARY_COLOR_DEFAULT),
+          width: clampBoundaryWidth(state.boundaryWidth),
+        },
         hoverinfo: "skip", showlegend: false,
       };
     }
@@ -7391,7 +8173,7 @@
       return { l: cx - w / 2, r: cx + w / 2, t: cy - h / 2, b: cy + h / 2, cx, cy, w, h };
     }
 
-    // Data → plot-area pixels using current axis ranges and #plotDiv size.
+    // Data → plot-area pixels using the same axis ranges as drawDiagram.
     function makeLabelPlotMapper(result) {
       const el = $("plotDiv");
       const W = Math.max(120, el?.clientWidth || 480);
@@ -7400,6 +8182,7 @@
       const pw = Math.max(1, W - ml - mr);
       const ph = Math.max(1, H - mt - mb);
       const x0 = result.ph[0], x1 = result.ph[result.ph.length - 1];
+      // Match layout.yaxis.range (state display bounds), not only result samples.
       const yLo = displayYMin(), yHi = displayYMax();
       const y0 = Math.min(yLo, yHi), y1 = Math.max(yLo, yHi);
       const sx = (x1 - x0) || 1;
@@ -7418,9 +8201,9 @@
       };
     }
 
-    function labelCollides(box, placed) {
+    function labelCollides(box, placed, gap = 3) {
       for (const p of placed) {
-        if (labelBoxesOverlap(box, p)) return true;
+        if (labelBoxesOverlap(box, p, gap)) return true;
       }
       return false;
     }
@@ -7953,7 +8736,10 @@
         type: "scattergl", mode: "lines",
         x: mapped.x,
         y: mapped.y,
-        line: { color: "#222", width: clampBoundaryWidth(state.boundaryWidth) },
+        line: {
+          color: normalizeHexColor(state.boundaryColor, BOUNDARY_COLOR_DEFAULT),
+          width: clampBoundaryWidth(state.boundaryWidth),
+        },
         hoverinfo: "skip",
         showlegend: false,
       };
@@ -8197,6 +8983,1007 @@
       };
     }
 
+    function isTotalsHeatmapMode(result) {
+      if (activeModeId !== "mineral-stability") return false;
+      if (state.fillMode !== "heatmap") return false;
+      const hm = result?.totals_heatmap;
+      return !!(hm && hm.grids && (hm.keys || []).length);
+    }
+
+    /** USGS .dat masters may be Fe(+3); UI / TOT spelling is Fe(3). */
+    function normalizeTotalKey(key) {
+      const m = String(key || "").trim().match(/^([A-Z][a-z]?)\(\+(\d+)\)$/);
+      return m ? `${m[1]}(${m[2]})` : String(key || "").trim();
+    }
+
+    function normalizeTotalKeyList(keys) {
+      const out = [];
+      const seen = new Set();
+      for (const k of keys || []) {
+        const n = normalizeTotalKey(k);
+        if (!n || seen.has(n)) continue;
+        seen.add(n);
+        out.push(n);
+      }
+      return out;
+    }
+
+    function totalsHeatmapKeys(result) {
+      return normalizeTotalKeyList(result?.totals_heatmap?.keys || []);
+    }
+
+    function totalsHeatmapGrid(result, key) {
+      const grids = result?.totals_heatmap?.grids || {};
+      const norm = normalizeTotalKey(key);
+      if (grids[norm]) return grids[norm];
+      const plus = norm.replace(/^([A-Z][a-z]?)\((\d+)\)$/, (_, e, n) => `${e}(+${n})`);
+      return grids[plus] || grids[key] || null;
+    }
+
+    function totalsContourByKey(result) {
+      const raw = result?.totals_contours?.by_key || {};
+      const out = {};
+      for (const [k, entries] of Object.entries(raw)) {
+        const norm = normalizeTotalKey(k);
+        if (!out[norm]) out[norm] = entries;
+      }
+      return out;
+    }
+
+    function activeHeatmapKey(result) {
+      const keys = totalsHeatmapKeys(result);
+      if (!keys.length) return "";
+      const want = normalizeTotalKey(state.heatmapKey);
+      if (keys.includes(want)) return want;
+      return keys[0];
+    }
+
+    // Explicit stop lists so dropdown swatches match the Plotly heatmap colorscale.
+    const HEATMAP_COLORSCALE_NAMES = [
+      "Viridis", "Inferno", "Plasma", "Magma", "Cividis", "Turbo", "Hot", "Jet",
+      "YlOrRd", "YlGnBu", "Blues", "Greens", "Greys", "RdBu", "Spectral",
+    ];
+    const HEATMAP_COLORSCALES = {
+      Viridis: [
+        [0, "rgb(68,1,84)"], [0.13, "rgb(72,36,117)"], [0.25, "rgb(64,67,135)"],
+        [0.38, "rgb(52,94,141)"], [0.5, "rgb(41,120,142)"], [0.63, "rgb(32,144,140)"],
+        [0.75, "rgb(34,167,132)"], [0.88, "rgb(68,190,112)"], [1, "rgb(253,231,37)"],
+      ],
+      Cividis: [
+        [0, "rgb(0,34,77)"], [0.25, "rgb(40,52,110)"], [0.5, "rgb(87,93,109)"],
+        [0.75, "rgb(165,156,116)"], [1, "rgb(253,231,55)"],
+      ],
+      Hot: [
+        [0, "rgb(0,0,0)"], [0.25, "rgb(178,0,0)"], [0.5, "rgb(255,69,0)"],
+        [0.75, "rgb(255,210,0)"], [1, "rgb(255,255,255)"],
+      ],
+      Jet: [
+        [0, "rgb(0,0,131)"], [0.125, "rgb(0,60,170)"], [0.375, "rgb(5,255,255)"],
+        [0.625, "rgb(255,255,0)"], [0.875, "rgb(250,0,0)"], [1, "rgb(128,0,0)"],
+      ],
+      YlOrRd: [
+        [0, "rgb(255,255,204)"], [0.25, "rgb(254,217,118)"], [0.5, "rgb(253,141,60)"],
+        [0.75, "rgb(227,26,28)"], [1, "rgb(128,0,38)"],
+      ],
+      YlGnBu: [
+        [0, "rgb(255,255,217)"], [0.25, "rgb(199,233,180)"], [0.5, "rgb(65,182,196)"],
+        [0.75, "rgb(34,94,168)"], [1, "rgb(8,29,88)"],
+      ],
+      Blues: [
+        [0, "rgb(247,251,255)"], [0.25, "rgb(198,219,239)"], [0.5, "rgb(107,174,214)"],
+        [0.75, "rgb(33,113,181)"], [1, "rgb(8,48,107)"],
+      ],
+      Greens: [
+        [0, "rgb(247,252,245)"], [0.25, "rgb(199,233,192)"], [0.5, "rgb(116,196,118)"],
+        [0.75, "rgb(35,139,69)"], [1, "rgb(0,68,27)"],
+      ],
+      Greys: [
+        [0, "rgb(255,255,255)"], [0.5, "rgb(150,150,150)"], [1, "rgb(0,0,0)"],
+      ],
+      RdBu: [
+        [0, "rgb(5,10,172)"], [0.35, "rgb(106,137,247)"], [0.5, "rgb(190,190,190)"],
+        [0.7, "rgb(220,170,132)"], [1, "rgb(178,10,28)"],
+      ],
+      Spectral: [
+        [0, "rgb(94,79,162)"], [0.25, "rgb(102,194,165)"], [0.5, "rgb(255,255,191)"],
+        [0.75, "rgb(244,109,67)"], [1, "rgb(158,1,66)"],
+      ],
+      Inferno: [
+        [0, "rgb(0,0,4)"], [0.13, "rgb(31,12,72)"], [0.25, "rgb(85,15,109)"],
+        [0.38, "rgb(136,34,106)"], [0.5, "rgb(186,54,85)"], [0.63, "rgb(227,89,51)"],
+        [0.75, "rgb(249,140,10)"], [0.88, "rgb(249,201,50)"], [1, "rgb(252,255,164)"],
+      ],
+      Magma: [
+        [0, "rgb(0,0,4)"], [0.13, "rgb(28,16,68)"], [0.25, "rgb(79,18,123)"],
+        [0.38, "rgb(129,37,129)"], [0.5, "rgb(181,54,122)"], [0.63, "rgb(229,80,100)"],
+        [0.75, "rgb(251,135,97)"], [0.88, "rgb(254,194,140)"], [1, "rgb(252,253,191)"],
+      ],
+      Plasma: [
+        [0, "rgb(13,8,135)"], [0.13, "rgb(75,3,161)"], [0.25, "rgb(125,3,168)"],
+        [0.38, "rgb(168,34,150)"], [0.5, "rgb(203,70,121)"], [0.63, "rgb(229,107,93)"],
+        [0.75, "rgb(248,148,65)"], [0.88, "rgb(253,195,40)"], [1, "rgb(240,249,33)"],
+      ],
+      Turbo: [
+        [0, "rgb(48,18,59)"], [0.1, "rgb(68,57,144)"], [0.2, "rgb(47,108,219)"],
+        [0.3, "rgb(24,163,241)"], [0.4, "rgb(18,202,180)"], [0.5, "rgb(74,230,90)"],
+        [0.6, "rgb(170,245,45)"], [0.7, "rgb(237,215,40)"], [0.8, "rgb(250,140,30)"],
+        [0.9, "rgb(230,55,20)"], [1, "rgb(122,4,3)"],
+      ],
+    };
+
+    function heatmapColorscaleValue(name) {
+      const key = name || "Viridis";
+      return HEATMAP_COLORSCALES[key] || HEATMAP_COLORSCALES.Viridis;
+    }
+
+    function heatmapColorscaleGradientCss(name) {
+      const stops = heatmapColorscaleValue(name);
+      return `linear-gradient(to right, ${stops.map(([t, c]) => `${c} ${(Number(t) * 100).toFixed(1)}%`).join(", ")})`;
+    }
+
+    // Precomputed once — options reuse these CSS gradients (no canvas/images).
+    const HEATMAP_COLORSCALE_GRADIENT = Object.fromEntries(
+      HEATMAP_COLORSCALE_NAMES.map(name => [name, heatmapColorscaleGradientCss(name)])
+    );
+
+    let heatmapColorscaleMenuEl = null;
+    let heatmapColorscalePickerBound = false;
+
+    function closeHeatmapColorscaleMenu() {
+      const btn = $("heatmapColorscaleBtn");
+      if (btn) btn.setAttribute("aria-expanded", "false");
+      if (heatmapColorscaleMenuEl) heatmapColorscaleMenuEl.hidden = true;
+    }
+
+    function positionHeatmapColorscaleMenu() {
+      const btn = $("heatmapColorscaleBtn");
+      const menu = heatmapColorscaleMenuEl;
+      if (!btn || !menu || menu.hidden) return;
+      const rect = btn.getBoundingClientRect();
+      const pad = 6;
+      const width = Math.max(rect.width, 11 * 16);
+      let left = rect.left;
+      let top = rect.bottom + 4;
+      if (left + width > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - width - pad);
+      menu.style.width = `${width}px`;
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+      const menuH = menu.offsetHeight;
+      if (top + menuH > window.innerHeight - pad && rect.top > menuH + pad) {
+        menu.style.top = `${Math.max(pad, rect.top - menuH - 4)}px`;
+      }
+    }
+
+    function setHeatmapColorscale(name, { redraw = true } = {}) {
+      const next = HEATMAP_COLORSCALE_NAMES.includes(name) ? name : "Viridis";
+      state.heatmapColorscale = next;
+      syncHeatmapColorscalePicker();
+      persist();
+      closeHeatmapColorscaleMenu();
+      if (redraw && runtime.lastResult) drawDiagram(runtime.lastResult);
+    }
+
+    function syncHeatmapColorscalePicker() {
+      const name = HEATMAP_COLORSCALE_NAMES.includes(state.heatmapColorscale)
+        ? state.heatmapColorscale
+        : "Viridis";
+      state.heatmapColorscale = name;
+      const wrap = $("heatmapColorscaleWrap");
+      const swatch = $("heatmapColorscaleSwatch");
+      const label = $("heatmapColorscaleName");
+      const rev = !!state.heatmapReverseScale;
+      if (wrap) wrap.classList.toggle("is-reversed", rev);
+      if (swatch) swatch.style.background = HEATMAP_COLORSCALE_GRADIENT[name] || HEATMAP_COLORSCALE_GRADIENT.Viridis;
+      if (label) label.textContent = name;
+      if (heatmapColorscaleMenuEl) {
+        heatmapColorscaleMenuEl.classList.toggle("is-reversed", rev);
+        heatmapColorscaleMenuEl.querySelectorAll(".heatmap-cmap-option").forEach(opt => {
+          opt.setAttribute("aria-selected", opt.dataset.value === name ? "true" : "false");
+        });
+      }
+    }
+
+    function initHeatmapColorscalePicker() {
+      const btn = $("heatmapColorscaleBtn");
+      if (!btn || heatmapColorscalePickerBound) {
+        syncHeatmapColorscalePicker();
+        return;
+      }
+      heatmapColorscalePickerBound = true;
+
+      const menu = document.createElement("div");
+      menu.id = "heatmapColorscaleMenu";
+      menu.className = "heatmap-cmap-menu";
+      menu.setAttribute("role", "listbox");
+      menu.setAttribute("aria-labelledby", "heatmapColorscaleLabel");
+      menu.hidden = true;
+      const frag = document.createDocumentFragment();
+      for (const name of HEATMAP_COLORSCALE_NAMES) {
+        const opt = document.createElement("button");
+        opt.type = "button";
+        opt.className = "heatmap-cmap-option";
+        opt.setAttribute("role", "option");
+        opt.dataset.value = name;
+        const sw = document.createElement("span");
+        sw.className = "heatmap-cmap-swatch";
+        sw.setAttribute("aria-hidden", "true");
+        sw.style.background = HEATMAP_COLORSCALE_GRADIENT[name];
+        const text = document.createElement("span");
+        text.textContent = name;
+        opt.append(sw, text);
+        opt.addEventListener("click", () => setHeatmapColorscale(name));
+        frag.appendChild(opt);
+      }
+      menu.appendChild(frag);
+      document.body.appendChild(menu);
+      heatmapColorscaleMenuEl = menu;
+
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = btn.getAttribute("aria-expanded") === "true";
+        if (open) {
+          closeHeatmapColorscaleMenu();
+          return;
+        }
+        syncHeatmapColorscalePicker();
+        menu.hidden = false;
+        btn.setAttribute("aria-expanded", "true");
+        positionHeatmapColorscaleMenu();
+        menu.querySelector('.heatmap-cmap-option[aria-selected="true"]')?.focus();
+      });
+
+      document.addEventListener("click", (e) => {
+        if (menu.hidden) return;
+        if (menu.contains(e.target) || btn.contains(e.target)) return;
+        closeHeatmapColorscaleMenu();
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !menu.hidden) {
+          closeHeatmapColorscaleMenu();
+          btn.focus();
+        }
+      });
+      window.addEventListener("resize", () => {
+        if (!menu.hidden) positionHeatmapColorscaleMenu();
+      }, { passive: true });
+      document.querySelector(".plot-toolbar")?.addEventListener("scroll", () => {
+        if (!menu.hidden) closeHeatmapColorscaleMenu();
+      }, { passive: true });
+
+      syncHeatmapColorscalePicker();
+    }
+
+    function logKO2Water(tempC) {
+      return 20.75 + 0.0018 * ((Number(tempC) || 25) - 25);
+    }
+
+    /** Analytic O₂/H₂ water-stability window in native (pH, pe|log fO₂) coords. */
+    function waterBandBounds(result) {
+      const t = Number(result?.temp_c ?? state.tempC) || 25;
+      const o2 = Math.max(1e-30, Number(state.o2LimitAtm) || 0.21);
+      const h2 = Math.max(1e-30, Number(state.h2LimitAtm) || 1.0);
+      const k = logKO2Water(t);
+      if (resultRedoxAxis(result) === "log_fo2") {
+        return {
+          mode: "y",
+          lower: 4.0 * (-Math.log10(h2) / 2.0 - k),
+          upper: Math.log10(o2),
+        };
+      }
+      return {
+        mode: "sum",
+        lower: -Math.log10(h2) / 2.0,
+        upper: k + Math.log10(o2) / 4.0,
+      };
+    }
+
+    function halfPlaneClipRing(verts, scalarFn, keepNonPositive) {
+      if (!verts || verts.length < 3) return [];
+      const inside = (v) => (keepNonPositive ? v <= 0 : v >= 0);
+      const cross = (p0, v0, p1, v1) => {
+        if (v0 === v1) return p0;
+        const t = v0 / (v0 - v1);
+        return [p0[0] + t * (p1[0] - p0[0]), p0[1] + t * (p1[1] - p0[1])];
+      };
+      const out = [];
+      for (let i = 0; i < verts.length; i++) {
+        const curr = verts[i];
+        const prev = verts[(i + verts.length - 1) % verts.length];
+        const vc = scalarFn(curr[0], curr[1]);
+        const vp = scalarFn(prev[0], prev[1]);
+        const currIn = inside(vc);
+        const prevIn = inside(vp);
+        if (currIn) {
+          if (!prevIn) out.push(cross(prev, vp, curr, vc));
+          out.push(curr);
+        } else if (prevIn) {
+          out.push(cross(prev, vp, curr, vc));
+        }
+      }
+      return out;
+    }
+
+    /** White O₂/H₂ covers — analytic half-planes so the cut matches the gas lines. */
+    function waterBandMaskTraces(result) {
+      const tempC = result.temp_c;
+      const traces = [];
+      const phArr = result.ph || [];
+      const peArr = result.pe || result.y || [];
+      if (phArr.length < 2 || peArr.length < 2) return traces;
+      // Slightly expand the plot box so masks seal past the axis edges.
+      const dPh = Math.abs(phArr[1] - phArr[0]) || 0.1;
+      const dPe = Math.abs(peArr[1] - peArr[0]) || 0.1;
+      const phMin = phArr[0] - dPh;
+      const phMax = phArr[phArr.length - 1] + dPh;
+      const peMin = Math.min(peArr[0], peArr[peArr.length - 1]) - dPe;
+      const peMax = Math.max(peArr[0], peArr[peArr.length - 1]) + dPe;
+      const band = waterBandBounds(result);
+      const box = [
+        [phMin, peMin], [phMax, peMin], [phMax, peMax], [phMin, peMax],
+      ];
+      const scalars = band.mode === "y"
+        ? [
+          (_ph, y) => y - band.upper,
+          (_ph, y) => band.lower - y,
+        ]
+        : [
+          (ph, y) => (ph + y) - band.upper,
+          (ph, y) => band.lower - (ph + y),
+        ];
+      for (const fn of scalars) {
+        const verts = halfPlaneClipRing(box, fn, false);
+        if (verts.length < 3) continue;
+        const sx = verts.map(v => v[0]);
+        const sy = verts.map(v => v[1]);
+        sx.push(verts[0][0]);
+        sy.push(verts[0][1]);
+        const mapped = mapPlotXY(sx, sy, tempC, result);
+        traces.push({
+          type: "scatter",
+          mode: "lines",
+          fill: "toself",
+          x: mapped.x,
+          y: mapped.y,
+          fillcolor: NONE_COLOR,
+          line: { width: 0, color: NONE_COLOR },
+          hoverinfo: "skip",
+          showlegend: false,
+        });
+      }
+      return traces;
+    }
+
+    function totalsHeatmapTrace(result, x, y) {
+      const key = activeHeatmapKey(result);
+      const grid = totalsHeatmapGrid(result, key);
+      if (!grid) return null;
+      // Do not null by water band here — that leaves stair gaps short of the gas
+      // line. Show every punched cell (incl. margin); white masks cut cleanly.
+      const z = grid.map(row => (row || []).map(v => {
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? Math.log10(n) : null;
+      }));
+      // Horizontal colorbar: user size/font prefs, then fit to plot box + badge.
+      const showLegend = state.heatmapShowColorbar !== false;
+      const opacity = Math.min(1, Math.max(0.1, Number(state.heatmapOpacity) || 1));
+      return {
+        type: "heatmap",
+        x,
+        y,
+        z,
+        colorscale: heatmapColorscaleValue(state.heatmapColorscale),
+        reversescale: !!state.heatmapReverseScale,
+        opacity,
+        colorbar: showLegend ? heatmapColorbarLayout(result, key) : undefined,
+        showscale: showLegend,
+        xgap: 0,
+        ygap: 0,
+        hoverinfo: "skip",
+      };
+    }
+
+    function visibleTotalsContourKeys(result) {
+      const byKey = totalsContourByKey(result);
+      const available = Object.keys(byKey);
+      if (!available.length) return [];
+      const selected = normalizeTotalKey(state.totalsContourKey || "");
+      if (selected && available.includes(selected)) return [selected];
+      // One element at a time — fall back to the first computed key.
+      state.totalsContourKey = available[0];
+      return [available[0]];
+    }
+
+    function formatContourLevelLabel(level) {
+      const v = Number(level);
+      if (!Number.isFinite(v)) return "";
+      const body = Math.abs(v).toFixed(1);
+      return v < 0 ? `−${body}` : body;
+    }
+
+    function pointInWaterBand(ph, pe, band, inset = 0) {
+      const lo = band.lower + inset;
+      const hi = band.upper - inset;
+      if (!(lo < hi)) return true;
+      if (band.mode === "y") return pe >= lo && pe <= hi;
+      const s = ph + pe;
+      return s >= lo && s <= hi;
+    }
+
+    function rotatedLabelBox(cx, cy, w, h, angleDeg) {
+      const rad = (Number(angleDeg) || 0) * Math.PI / 180;
+      const c = Math.abs(Math.cos(rad));
+      const s = Math.abs(Math.sin(rad));
+      return labelBoxFromCenter(cx, cy, w * c + h * s, w * s + h * c);
+    }
+
+    /**
+     * Plotly annotation textangle is applied as SVG rotate(angle), where
+     * positive angles are clockwise in screen space (y down). Use atan2 on
+     * pixel deltas directly — do NOT flip to mathematical y-up angles.
+     */
+    function contourTextAnglePx(px0, py0, px1, py1) {
+      let ang = Math.atan2(py1 - py0, px1 - px0) * 180 / Math.PI;
+      // Keep text upright / readable.
+      if (ang > 90) ang -= 180;
+      if (ang < -90) ang += 180;
+      return ang;
+    }
+
+    function annotationAvoidBoxes(annotations, map, fontSize) {
+      const boxes = [];
+      for (const ann of annotations || []) {
+        if (!ann || ann.x == null || ann.y == null) continue;
+        const fs = Number(ann.font?.size) || fontSize;
+        const { w, h } = estimateLabelBoxPx(ann.text, fs);
+        let px;
+        let py;
+        if (ann.xref === "paper" || ann.yref === "paper") {
+          // Skip paper-space badges (system label); handled by top inset gap.
+          continue;
+        }
+        [px, py] = map.toPx(Number(ann.x), Number(ann.y));
+        if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+        boxes.push(rotatedLabelBox(px, py, w, h, ann.textangle || 0));
+      }
+      return boxes;
+    }
+
+    /** Build display + pixel polylines for contour label geometry. */
+    function contourPolylinePixels(seg, tempC, result, band, map) {
+      const inset = Math.max(1e-4, 0.02 * (band.upper - band.lower));
+      if (!seg || seg.length < 2) return null;
+      const nativeX = [];
+      const nativeY = [];
+      for (const p of seg) {
+        if (!p || p.length < 2) continue;
+        if (!pointInWaterBand(p[0], p[1], band, inset)) continue;
+        nativeX.push(p[0]);
+        nativeY.push(p[1]);
+      }
+      if (nativeX.length < 2) return null;
+      const mapped = mapPlotXY(nativeX, nativeY, tempC, result);
+      const dxs = [];
+      const dys = [];
+      const dpx = [];
+      const dpy = [];
+      for (let i = 0; i < mapped.x.length; i++) {
+        const x = mapped.x[i];
+        const y = mapped.y[i];
+        if (x == null || y == null || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+        const [px, py] = map.toPx(x, y);
+        dxs.push(x);
+        dys.push(y);
+        dpx.push(px);
+        dpy.push(py);
+      }
+      if (dpx.length < 2) return null;
+      const cum = [0];
+      let total = 0;
+      for (let i = 1; i < dpx.length; i++) {
+        total += Math.hypot(dpx[i] - dpx[i - 1], dpy[i] - dpy[i - 1]);
+        cum.push(total);
+      }
+      if (total < 12) return null; // too short in px to label reliably
+      return { x: dxs, y: dys, px: dpx, py: dpy, cum, total };
+    }
+
+    function pointAtPixelArc(poly, target) {
+      const { x, y, px, py, cum, total } = poly;
+      const t = Math.max(0, Math.min(total, target));
+      let i = 1;
+      while (i < cum.length && cum[i] < t) i += 1;
+      const i0 = Math.max(1, Math.min(i, px.length - 1));
+      const span = cum[i0] - cum[i0 - 1];
+      const f = span > 0 ? (t - cum[i0 - 1]) / span : 0;
+      return {
+        x: x[i0 - 1] + f * (x[i0] - x[i0 - 1]),
+        y: y[i0 - 1] + f * (y[i0] - y[i0 - 1]),
+        px: px[i0 - 1] + f * (px[i0] - px[i0 - 1]),
+        py: py[i0 - 1] + f * (py[i0] - py[i0 - 1]),
+        i0,
+      };
+    }
+
+    /**
+     * Sample label candidates along the longest in-band polyline.
+     * Arc length and tangent are both in pixel space so orientation matches
+     * the drawn stroke (axis aspect + pe/Eh/log fO₂ remap).
+     */
+    function sampleContourLabelCandidates(segments, tempC, result, band, map) {
+      const fracs = [0.28, 0.36, 0.42, 0.46, 0.50, 0.54, 0.58, 0.64, 0.72];
+      let best = null;
+      for (const seg of segments || []) {
+        const poly = contourPolylinePixels(seg, tempC, result, band, map);
+        if (poly && (!best || poly.total > best.total)) best = poly;
+      }
+      if (!best) return [];
+      const { total } = best;
+      // Tangent baseline ≥ ~10 px so noisy short chords do not jitter the angle.
+      const tanDelta = Math.max(10, total * 0.04);
+      const out = [];
+      for (const frac of fracs) {
+        const mid = pointAtPixelArc(best, frac * total);
+        const a = pointAtPixelArc(best, Math.max(0, frac * total - tanDelta));
+        const b = pointAtPixelArc(best, Math.min(total, frac * total + tanDelta));
+        if (Math.hypot(b.px - a.px, b.py - a.py) < 4) continue;
+        const ang = contourTextAnglePx(a.px, a.py, b.px, b.py);
+        out.push({
+          frac,
+          x: mid.x,
+          y: mid.y,
+          px: mid.px,
+          py: mid.py,
+          ang,
+          len: total,
+        });
+      }
+      return out;
+    }
+
+    /**
+     * Place one label per contour level: prefer mid-arc, keep labels in a
+     * compact cluster across levels, and avoid collisions (contour + others).
+     * Labels are drawn inline with the stroke (no halo box); callers gap the
+     * contour polyline through each label via the returned ``gaps``.
+     */
+    function placeTotalsContourLabels(levelJobs, tempC, result, band, fontSize, avoidAnns) {
+      const map = makeLabelPlotMapper(result);
+      const placed = annotationAvoidBoxes(avoidAnns, map, fontSize);
+      const jobs = [];
+      for (const job of levelJobs) {
+        const samples = sampleContourLabelCandidates(
+          job.segments, tempC, result, band, map,
+        );
+        if (!samples.length) continue;
+        jobs.push({ ...job, samples });
+      }
+      jobs.sort((a, b) => a.level - b.level);
+      if (!jobs.length) return { annotations: [], gaps: [] };
+
+      // Place middle levels first so the cluster grows from a readable spine.
+      const mid = Math.floor(jobs.length / 2);
+      const order = [];
+      const seen = new Set();
+      for (let d = 0; d < jobs.length; d++) {
+        for (const i of [mid + d, mid - d]) {
+          if (i >= 0 && i < jobs.length && !seen.has(i)) {
+            seen.add(i);
+            order.push(i);
+          }
+        }
+      }
+
+      const diag = Math.hypot(map.pw, map.ph) || 1;
+      let clusterX = map.pw * 0.5;
+      let clusterY = map.ph * 0.5;
+      let nCluster = 0;
+      const annotations = [];
+      const gaps = [];
+      const lineColor = normalizeHexColor(state.totalsContourColor, CONTOUR_COLOR_DEFAULT);
+
+      for (const idx of order) {
+        const { text, samples, level } = jobs[idx];
+        const { w, h } = estimateLabelBoxPx(text, fontSize);
+        let best = null;
+        let bestScore = Infinity;
+        for (const s of samples) {
+          const box = rotatedLabelBox(s.px, s.py, w, h, s.ang);
+          if (!map.inBounds(box) || labelCollides(box, placed, 4)) continue;
+          const midPen = Math.abs(s.frac - 0.5);
+          const clusterDist = Math.hypot(s.px - clusterX, s.py - clusterY) / diag;
+          // Mid-arc + stay near the shared label ladder; slight preference for
+          // the geometric middle sample when scores tie.
+          const score = midPen * 1.35 + clusterDist * 2.8 + Math.abs(s.frac - 0.5) * 0.05;
+          if (score < bestScore) {
+            bestScore = score;
+            best = { s, box, w };
+          }
+        }
+        if (!best) {
+          // Last resort: any in-bounds non-colliding sample, closest to mid.
+          for (const s of samples) {
+            const box = rotatedLabelBox(s.px, s.py, w, h, s.ang);
+            if (!map.inBounds(box) || labelCollides(box, placed, 2)) continue;
+            const score = Math.abs(s.frac - 0.5);
+            if (score < bestScore) {
+              bestScore = score;
+              best = { s, box, w };
+            }
+          }
+        }
+        if (!best) continue;
+        placed.push(best.box);
+        clusterX = (clusterX * nCluster + best.s.px) / (nCluster + 1);
+        clusterY = (clusterY * nCluster + best.s.py) / (nCluster + 1);
+        nCluster += 1;
+        // Gap from glyph width (no collision pad) + small font-scaled clearance
+        // so the break stays consistent when Labels size changes.
+        const textW = estimateContourInlineWidthPx(text, fontSize);
+        const clearance = Math.max(1.5, fontSize * 0.12);
+        gaps.push({
+          level: Number(level),
+          px: best.s.px,
+          py: best.s.py,
+          halfPx: textW * 0.5 + clearance,
+        });
+        annotations.push({
+          x: best.s.x,
+          y: best.s.y,
+          text,
+          textangle: best.s.ang,
+          showarrow: false,
+          xanchor: "center",
+          yanchor: "middle",
+          font: {
+            size: fontSize,
+            color: lineColor,
+            family: "system-ui,Segoe UI,sans-serif",
+            weight: 600,
+          },
+          // Sit in the stroke break — no white label chip.
+          bgcolor: "rgba(0,0,0,0)",
+          bordercolor: "rgba(0,0,0,0)",
+          borderwidth: 0,
+          borderpad: 0,
+        });
+      }
+      return { annotations, gaps };
+    }
+
+    /** Inline contour digit width in px (no collision padding). Scales with font. */
+    function estimateContourInlineWidthPx(text, fontSize) {
+      const plain = String(text || "").replace(/<[^>]*>/g, "");
+      const fs = Math.max(8, Number(fontSize) || 11);
+      // Semi-condensed tabular digits at weight ~600.
+      return Math.max(fs * 1.1, plain.length * fs * 0.55);
+    }
+
+    function interpolatePolylineAtCum(runX, runY, cum, target) {
+      const total = cum[cum.length - 1] || 0;
+      const t = Math.max(0, Math.min(total, target));
+      let i = 1;
+      while (i < cum.length && cum[i] < t) i += 1;
+      const i0 = Math.max(1, Math.min(i, runX.length - 1));
+      const span = cum[i0] - cum[i0 - 1];
+      const f = span > 0 ? (t - cum[i0 - 1]) / span : 0;
+      return {
+        x: runX[i0 - 1] + f * (runX[i0] - runX[i0 - 1]),
+        y: runY[i0 - 1] + f * (runY[i0] - runY[i0 - 1]),
+      };
+    }
+
+    function mergeArcCuts(cuts, total) {
+      const norm = (cuts || [])
+        .map(([a, b]) => [Math.max(0, Math.min(total, a)), Math.max(0, Math.min(total, b))])
+        .filter(([a, b]) => b > a + 0.5)
+        .sort((u, v) => u[0] - v[0]);
+      const out = [];
+      for (const [a, b] of norm) {
+        if (!out.length || a > out[out.length - 1][1] + 0.5) out.push([a, b]);
+        else out[out.length - 1][1] = Math.max(out[out.length - 1][1], b);
+      }
+      return out;
+    }
+
+    /** Break display polylines through contour label centres (pixel-arc gaps). */
+    function gapContourPolyline(xs, ys, gaps, map) {
+      if (!gaps?.length || !xs?.length) return { x: xs, y: ys };
+      const outX = [];
+      const outY = [];
+      let runX = [];
+      let runY = [];
+
+      const flushRun = () => {
+        if (runX.length < 2) {
+          if (runX.length) {
+            outX.push(runX[0]);
+            outY.push(runY[0]);
+          }
+          runX = [];
+          runY = [];
+          return;
+        }
+        const pxs = [];
+        const pys = [];
+        const cum = [0];
+        let total = 0;
+        for (let i = 0; i < runX.length; i++) {
+          const [px, py] = map.toPx(runX[i], runY[i]);
+          pxs.push(px);
+          pys.push(py);
+          if (i > 0) {
+            total += Math.hypot(px - pxs[i - 1], py - pys[i - 1]);
+            cum.push(total);
+          }
+        }
+        const rawCuts = [];
+        for (const g of gaps) {
+          // Project label centre onto the polyline (closest point on each segment).
+          let bestD = Infinity;
+          let bestArc = 0;
+          for (let i = 1; i < pxs.length; i++) {
+            const x0 = pxs[i - 1], y0 = pys[i - 1];
+            const x1 = pxs[i], y1 = pys[i];
+            const dx = x1 - x0, dy = y1 - y0;
+            const len2 = dx * dx + dy * dy;
+            let f = 0;
+            if (len2 > 0) {
+              f = Math.max(0, Math.min(1, ((g.px - x0) * dx + (g.py - y0) * dy) / len2));
+            }
+            const cx = x0 + f * dx, cy = y0 + f * dy;
+            const d = Math.hypot(g.px - cx, g.py - cy);
+            if (d < bestD) {
+              bestD = d;
+              bestArc = cum[i - 1] + f * (cum[i] - cum[i - 1]);
+            }
+          }
+          if (bestD > g.halfPx + 20) continue;
+          rawCuts.push([bestArc - g.halfPx, bestArc + g.halfPx]);
+        }
+        const cuts = mergeArcCuts(rawCuts, total);
+        if (!cuts.length) {
+          outX.push(...runX);
+          outY.push(...runY);
+          runX = [];
+          runY = [];
+          return;
+        }
+
+        // Emit kept ranges with exact cut endpoints so gap width tracks font size
+        // even when polyline vertices are sparse.
+        const emitRange = (arc0, arc1) => {
+          if (!(arc1 > arc0 + 1e-6)) return;
+          const start = interpolatePolylineAtCum(runX, runY, cum, arc0);
+          outX.push(start.x);
+          outY.push(start.y);
+          for (let i = 0; i < runX.length; i++) {
+            if (cum[i] > arc0 + 1e-6 && cum[i] < arc1 - 1e-6) {
+              outX.push(runX[i]);
+              outY.push(runY[i]);
+            }
+          }
+          const end = interpolatePolylineAtCum(runX, runY, cum, arc1);
+          if (Math.hypot(end.x - outX[outX.length - 1], end.y - outY[outY.length - 1]) > 1e-9) {
+            outX.push(end.x);
+            outY.push(end.y);
+          }
+        };
+
+        let cursor = 0;
+        for (const [a, b] of cuts) {
+          if (a > cursor) emitRange(cursor, a);
+          if (outX.length && outX[outX.length - 1] != null) {
+            outX.push(null);
+            outY.push(null);
+          }
+          cursor = b;
+        }
+        if (cursor < total) emitRange(cursor, total);
+        runX = [];
+        runY = [];
+      };
+
+      for (let i = 0; i < xs.length; i++) {
+        if (xs[i] == null || ys[i] == null || !Number.isFinite(xs[i]) || !Number.isFinite(ys[i])) {
+          flushRun();
+          if (outX.length && outX[outX.length - 1] != null) {
+            outX.push(null);
+            outY.push(null);
+          }
+        } else {
+          runX.push(xs[i]);
+          runY.push(ys[i]);
+        }
+      }
+      flushRun();
+      return { x: outX, y: outY };
+    }
+
+    /** Corner badge naming the contoured element + molality units. */
+    function totalsContourElementAnnotation(result) {
+      if (!state.showTotalsContours || activeModeId !== "mineral-stability") return null;
+      if (state.showTotalsContourElementLabel === false) return null;
+      const keys = visibleTotalsContourKeys(result);
+      if (!keys.length) return null;
+      const key = keys[0];
+      const units = result?.totals_contours?.units || "mol/kgw";
+      const size = Math.min(
+        22, Math.max(10, Math.round(Number(state.totalsContourElementFontSize) || 13)),
+      );
+      return {
+        x: 1, y: 0,
+        xref: "paper", yref: "paper",
+        xanchor: "right", yanchor: "bottom",
+        xshift: -10, yshift: 10,
+        text: `Contours for <b>${escapeHtml(key)}</b> · log₁₀(${escapeHtml(units)})`,
+        showarrow: false,
+        font: {
+          size,
+          color: "#0f172a",
+          family: "system-ui,Segoe UI,sans-serif",
+          weight: 600,
+        },
+        bgcolor: "rgba(255,255,255,0.92)",
+        bordercolor: "#cbd5e1",
+        borderwidth: 1,
+        borderpad: Math.max(3, Math.round(size * 0.3)),
+      };
+    }
+
+    function totalsContourOverlay(result, avoidAnnotations = []) {
+      const traces = [];
+      const annotations = [];
+      if (!state.showTotalsContours || activeModeId !== "mineral-stability") {
+        return { traces, annotations };
+      }
+      const byKey = totalsContourByKey(result);
+      const width = Math.min(3, Math.max(0.25, Number(state.totalsContourWidth) || 1));
+      const fontSize = Math.min(20, Math.max(8, Number(state.totalsContourFontSize) || 11));
+      const dashOk = ["solid", "dash", "dot", "dashdot", "longdash"];
+      const dash = dashOk.includes(state.totalsContourDash) ? state.totalsContourDash : "dot";
+      const lineColor = normalizeHexColor(state.totalsContourColor, CONTOUR_COLOR_DEFAULT);
+      const tempC = result.temp_c;
+      const band = waterBandBounds(result);
+      // Do not clip contours to the water band here: server chords must keep
+      // shared endpoints for stitching, and white O₂/H₂ masks (drawn after)
+      // hide any stroke past the true gas lines — same idea as the heatmap.
+      const labelJobs = [];
+      const levelPolylines = [];
+      for (const key of visibleTotalsContourKeys(result)) {
+        for (const entry of byKey[key] || []) {
+          const level = Number(entry.level);
+          const xs = [];
+          const ys = [];
+          for (const seg of entry.segments || []) {
+            if (!seg || seg.length < 2) continue;
+            const sx = seg.map(p => p[0]);
+            const sy = seg.map(p => p[1]);
+            const mapped = mapPlotXY(sx, sy, tempC, result);
+            if (xs.length) { xs.push(null); ys.push(null); }
+            xs.push(...mapped.x);
+            ys.push(...mapped.y);
+          }
+          if (!xs.length) continue;
+          levelPolylines.push({ level, xs, ys });
+          const levelText = formatContourLevelLabel(level);
+          if (levelText) {
+            labelJobs.push({
+              level,
+              text: levelText,
+              segments: entry.segments || [],
+            });
+          }
+        }
+      }
+      const placed = placeTotalsContourLabels(
+        labelJobs, tempC, result, band, fontSize, avoidAnnotations,
+      );
+      annotations.push(...placed.annotations);
+      const map = makeLabelPlotMapper(result);
+      const gapsByLevel = new Map();
+      for (const g of placed.gaps || []) {
+        const arr = gapsByLevel.get(g.level) || [];
+        arr.push(g);
+        gapsByLevel.set(g.level, arr);
+      }
+      for (const { level, xs, ys } of levelPolylines) {
+        const gapped = gapContourPolyline(xs, ys, gapsByLevel.get(level) || [], map);
+        traces.push({
+          type: "scatter",
+          mode: "lines",
+          x: gapped.x,
+          y: gapped.y,
+          line: { color: lineColor, width, dash },
+          hoverinfo: "skip",
+          showlegend: false,
+        });
+      }
+      const elemAnn = totalsContourElementAnnotation(result);
+      if (elemAnn) annotations.push(elemAnn);
+      return { traces, annotations };
+    }
+
+    function syncFillModeControls(result = runtime.lastResult) {
+      const heatmap = isTotalsHeatmapMode(result) || (
+        activeModeId === "mineral-stability" && state.fillMode === "heatmap"
+      );
+      const catWrap = $("categoryFillControls");
+      const hmWrap = $("heatmapFillControls");
+      if (catWrap) catWrap.hidden = !!heatmap && activeModeId === "mineral-stability";
+      if (hmWrap) hmWrap.hidden = !(activeModeId === "mineral-stability" && state.fillMode === "heatmap");
+      document.querySelectorAll('input[name="fillMode"]').forEach(r => {
+        r.checked = r.value === (state.fillMode || "category");
+      });
+      const sel = $("heatmapKey");
+      const keys = totalsHeatmapKeys(result);
+      if (sel) {
+        const cur = activeHeatmapKey(result);
+        sel.innerHTML = keys.length
+          ? keys.map(k => `<option value="${k}">${k}</option>`).join("")
+          : `<option value="">No totals in result</option>`;
+        if (cur) sel.value = cur;
+      }
+      syncHeatmapColorscalePicker();
+      const hopVal = $("heatmapOpacityVal");
+      if (hopVal) hopVal.textContent = `${Math.round((state.heatmapOpacity ?? 1) * 100)}%`;
+      const hopEl = $("heatmapOpacity");
+      if (hopEl && document.activeElement !== hopEl) {
+        hopEl.value = String(Math.round((state.heatmapOpacity ?? 1) * 100));
+      }
+      const rev = $("heatmapReverseScale");
+      if (rev) rev.checked = !!state.heatmapReverseScale;
+      const showCb = $("heatmapShowColorbar");
+      if (showCb) showCb.checked = state.heatmapShowColorbar !== false;
+      const cbs = $("heatmapColorbarSize");
+      if (cbs && document.activeElement !== cbs) {
+        cbs.value = String(state.heatmapColorbarSize ?? 100);
+      }
+      const cbf = $("heatmapColorbarFontSize");
+      if (cbf && document.activeElement !== cbf) {
+        cbf.value = String(state.heatmapColorbarFontSize ?? 15);
+      }
+      const legendControls = [cbs, cbf].filter(Boolean);
+      legendControls.forEach(el => { el.disabled = state.heatmapShowColorbar === false; });
+      $("heatmapColorbarSizeDec") && ($("heatmapColorbarSizeDec").disabled = state.heatmapShowColorbar === false);
+      $("heatmapColorbarSizeInc") && ($("heatmapColorbarSizeInc").disabled = state.heatmapShowColorbar === false);
+      $("heatmapColorbarFontSizeDec") && ($("heatmapColorbarFontSizeDec").disabled = state.heatmapShowColorbar === false);
+      $("heatmapColorbarFontSizeInc") && ($("heatmapColorbarFontSizeInc").disabled = state.heatmapShowColorbar === false);
+    }
+
+    function syncTotalsContourKeyList(result = runtime.lastResult) {
+      const sel = $("totalsContourKey");
+      if (!sel) return;
+      const byKey = totalsContourByKey(result);
+      const keys = Object.keys(byKey);
+      let cur = normalizeTotalKey(state.totalsContourKey || "");
+      if (!keys.length) {
+        const hint = result?.totals_contours_requested
+          ? "No contour geometry"
+          : "Compute contours first";
+        sel.innerHTML = `<option value="">${hint}</option>`;
+        sel.disabled = true;
+        return;
+      }
+      if (!keys.includes(cur)) cur = keys[0];
+      state.totalsContourKey = cur;
+      sel.disabled = state.showTotalsContours === false;
+      sel.innerHTML = keys.map(k => `<option value="${k}">${k}</option>`).join("");
+      sel.value = cur;
+    }
+
+    function syncTotalsContourComputeControls() {
+      const on = !!state.totalsContours;
+      const stepEl = $("totalsContourLogStep");
+      const row = $("totalsContourLogStepRow");
+      if (stepEl) {
+        stepEl.disabled = !on;
+        stepEl.value = String(state.totalsContourLogStep ?? 2);
+      }
+      if (row) row.style.opacity = on ? "1" : "0.45";
+      const cb = $("totalsContours");
+      if (cb) cb.checked = on;
+    }
+
     function buildDiagramSpec(result, view = null) {
       const forThumb = !!view?.forThumb;
       const forExport = !!view?.forExport || forThumb;
@@ -8205,6 +9992,7 @@
       const fillOpacity = forThumb
         ? 1
         : Math.min(1, Math.max(0.1, Number(state.fillOpacity) || 1));
+      const heatmapMode = !forThumb && isTotalsHeatmapMode(result);
       const vectorMode = usesVectorDisplay(result);
       const vectorLayer = vectorMode ? activeVectorLayer(result, view) : null;
       const layer = activeLayer(result, null, view);
@@ -8221,14 +10009,11 @@
       const hoverTpl = `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<extra></extra>`;
       const baseHoverTpl = `pH=%{x:.2f}<br>${yLabel}=%{y:.3f}<br>%{customdata}<br><span style="color:#666;font-size:0.9em">base grid sample</span><extra></extra>`;
 
-      if (vectorMode && vectorLayer) {
+      if (heatmapMode) {
+        const ht = totalsHeatmapTrace(result, x, y);
+        if (ht) traces.push(ht);
+      } else if (vectorMode && vectorLayer) {
         if (!labelsOnly) traces.push(...vectorFillTraces(vectorLayer, aqueousSet, result.temp_c));
-        if (showBoundaries) {
-          const bt = boundaryLineTrace(vectorLayer.boundaries, result.temp_c);
-          if (bt) traces.push(bt);
-          const st = stabilityLimitTrace(result.display?.stability_limits, result.temp_c);
-          if (st) traces.push(st);
-        }
       } else if (!labelsOnly) {
         traces.push({
           type: "heatmap", x, y,
@@ -8239,9 +10024,6 @@
           opacity: fillOpacity,
           hoverinfo: "skip",
         });
-      if (showBoundaries) traces.push(boundaryTrace(plotResult));
-      } else if (showBoundaries && !vectorMode) {
-        traces.push(boundaryTrace(plotResult));
       }
 
       if (!forExport) {
@@ -8257,6 +10039,35 @@
           customdata: buildHoverCustomData(hGrid, hNames, result),
           hovertemplate: vectorMode ? baseHoverTpl : hoverTpl,
         });
+      }
+
+      // Phase labels first so contour labels can avoid those boxes.
+      // Thumbnails keep name labels (category fills) but skip contour overlays.
+      const showPhaseLabels = forThumb ? true : state.showPhaseLabels !== false;
+      const phaseAnns = showPhaseLabels
+        ? componentAnnotations(plotResult, vectorLayer)
+        : [];
+      const contourOverlay = forThumb
+        ? { traces: [], annotations: [] }
+        : totalsContourOverlay(result, phaseAnns);
+      traces.push(...contourOverlay.traces);
+
+      // After heatmap + contours: white O₂/H₂ masks cut color/dashes cleanly at gas lines
+      // (avoids stair gaps from nulling cells and contour paint past the limit).
+      if (!forThumb && activeModeId === "mineral-stability"
+          && (heatmapMode || state.showTotalsContours)) {
+        traces.push(...waterBandMaskTraces(result));
+      }
+
+      if (showBoundaries) {
+        if (vectorMode && vectorLayer) {
+          const bt = boundaryLineTrace(vectorLayer.boundaries, result.temp_c);
+          if (bt) traces.push(bt);
+          const st = stabilityLimitTrace(result.display?.stability_limits, result.temp_c);
+          if (st) traces.push(st);
+        } else if (!vectorMode) {
+          traces.push(boundaryTrace(plotResult));
+        }
       }
 
       const ax = {
@@ -8282,7 +10093,11 @@
         showlegend: false,
         xaxis: xAxis,
         yaxis: yAxis,
-        annotations: componentAnnotations(plotResult, vectorLayer),
+        // Heatmap replaces category *fills* only — keep phase/species name labels.
+        annotations: [
+          ...phaseAnns,
+          ...contourOverlay.annotations,
+        ],
       };
       const sysAnn = systemLabelAnnotation(result);
       if (sysAnn) layout.annotations.push(sysAnn);
@@ -8582,6 +10397,8 @@
       if (runtime.cfg.default_knobs_mode) {
         state.knobsMode = normalizeKnobsMode(state.knobsMode || runtime.cfg.default_knobs_mode);
       }
+      // Contour compute stays opt-in unless the server default is explicitly on.
+      state.totalsContours = !!runtime.cfg.totals_contours_default;
     }
 
     function afterStateLoad() {
