@@ -1001,6 +1001,12 @@
       gap: 0.4rem; font-size: 0.68rem; color: var(--muted);
       text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0.2rem;
     }
+    /* Keep unit label casing (µmol must not become MMOL via uppercase). */
+    #unitHead {
+      text-transform: none;
+      letter-spacing: 0.02em;
+      text-align: center;
+    }
     .species-list { display: flex; flex-direction: column; gap: 0.4rem; }
     .species-row {
       display: grid;
@@ -2649,7 +2655,8 @@
     };
     const CANONICAL_UNITS = new Set(Object.keys(MOL_SCALE));
 
-    const UNIT_DECIMALS = { "mol/kgw": 6, "mmol/kgw": 4, "umol/kgw": 2 };
+    // Enough decimals for TOTAL_CONC_MIN_MOL_KGW (1e-10 mol/kgw) in each unit.
+    const UNIT_DECIMALS = { "mol/kgw": 10, "mmol/kgw": 7, "umol/kgw": 4 };
 
     function normalizeUnit(unit) {
       if (unit === "µmol/kgw" || unit === "μmol/kgw") return "umol/kgw";
@@ -3233,6 +3240,7 @@
       };
       state.o2LimitAtm = Number(req.o2_limit_atm ?? state.o2LimitAtm);
       state.h2LimitAtm = Number(req.h2_limit_atm ?? state.h2LimitAtm);
+      clampComputeInputs();
       state.adaptiveBoundaries = !!req.adaptive_boundaries;
       state.knobsMode = normalizeKnobsMode(req.knobs_mode || state.knobsMode);
       state.solutionMode = normalizeUiSolutionMode(req.solution_mode || state.solutionMode);
@@ -4743,6 +4751,28 @@
       };
     }
 
+    /**
+     * Pixel box (plot area) covered by the horizontal heatmap colorbar.
+     * Contour labels avoid this so they cannot paint over the legend.
+     */
+    function heatmapColorbarAvoidBox(result, map) {
+      if (state.heatmapShowColorbar === false) return null;
+      if (activeModeId !== "mineral-stability") return null;
+      if (!(state.fillMode === "heatmap" || isTotalsHeatmapMode(result))) return null;
+      const key = activeHeatmapKey(result);
+      if (!key || !totalsHeatmapGrid(result, key)) return null;
+      const cb = heatmapColorbarLayout(result, key);
+      const padX = Math.max(6, Number(cb.xpad) || 0);
+      const padY = Math.max(6, Number(cb.ypad) || 0);
+      const titleH = (cb.title?.font?.size || 12) * 1.5;
+      const tickH = (cb.tickfont?.size || 12) * 1.2;
+      const left = (cb.x - cb.len) * map.pw - padX;
+      const right = cb.x * map.pw + padX;
+      const top = (1 - cb.y) * map.ph - padY;
+      const bottom = top + titleH + cb.thickness + tickH + padY + 4;
+      return { l: left, r: right, t: top, b: bottom };
+    }
+
     function systemLabelAnnotation(result) {
       if (!state.showSystemLabel) return null;
       const text = chemicalSystemLabelText(result);
@@ -5425,6 +5455,7 @@
       state.mineralCategoryMode ??= defaultCat;
       state.layerAqueous ??= true;
       state.layerElements ??= false;
+      clampComputeInputs();
     }
 
     function selectedDatabase() {
@@ -5520,13 +5551,18 @@
           <input type="number" step="any" inputmode="decimal" value="${roundForUnit(t.value, state.units)}" aria-label="${t.species} concentration" />
           <button class="rm" title="Remove ${t.species}">×</button>`;
         const num = row.querySelector("input");
+        {
+          const b = concBoundsInUnit();
+          num.min = String(b.min);
+          num.max = String(b.max);
+        }
         num.addEventListener("input", () => {
           const v = parseNumberInput(num.value);
           if (v == null) {
             commit();
             return;
           }
-          state.totals[i].value = roundForUnit(v, state.units);
+          state.totals[i].value = roundForUnit(clampConcValue(v), state.units);
           commit();
         });
         num.addEventListener("blur", () => {
@@ -5535,7 +5571,7 @@
             num.value = roundForUnit(state.totals[i].value, state.units);
             return;
           }
-          state.totals[i].value = roundForUnit(v, state.units);
+          state.totals[i].value = roundForUnit(clampConcValue(v), state.units);
           num.value = state.totals[i].value;
           commit();
         });
@@ -5546,7 +5582,7 @@
         list.appendChild(row);
       });
       $("elemCount").textContent = state.totals.length;
-      $("unitHead").textContent = `concentration (${unitDisplay(state.units)})`;
+      syncUnitHead();
     }
 
     function normalizeKnobsMode(mode) {
@@ -5730,15 +5766,37 @@
       }
     }
 
+    function unitLabel(unit) {
+      const u = normalizeUnit(unit || state.units || "mmol/kgw");
+      const labels = runtime.cfg?.unit_labels || {};
+      return labels[u] || unitDisplay(u);
+    }
+
+    function syncUnitHead() {
+      const el = $("unitHead");
+      if (!el) return;
+      el.textContent = `concentration (${unitLabel(state.units)})`;
+    }
+
     function fillUnitOptions() {
       const sel = $("units");
-      const opts = runtime.cfg?.unit_options || ["mmol/kgw"];
+      if (!sel) return;
+      const opts = runtime.cfg?.unit_options || ["mol/kgw", "mmol/kgw", "umol/kgw"];
       const labels = runtime.cfg?.unit_labels || {};
       sel.innerHTML = opts.map(u => {
-        const label = labels[u] || unitDisplay(u);
-        return `<option value="${u}">${label}</option>`;
+        const canonical = normalizeUnit(u);
+        const label = labels[canonical] || unitDisplay(canonical);
+        return `<option value="${canonical}">${label}</option>`;
       }).join("");
-      sel.value = normalizeUnit(state.units || runtime.cfg?.default_units || "mmol/kgw");
+      const next = normalizeUnit(state.units || runtime.cfg?.default_units || "mmol/kgw");
+      sel.value = next;
+      if (sel.value !== next && opts.length) {
+        sel.value = normalizeUnit(opts.includes("mmol/kgw") ? "mmol/kgw" : opts[0]);
+        state.units = sel.value;
+      } else {
+        state.units = next;
+      }
+      syncUnitHead();
     }
 
     function canonicalSpeciesName(name) {
@@ -5874,9 +5932,149 @@
         axis === "eh" ? "Eh max (V)" : axis === "log_fo2" ? "log fO₂ max" : "pe max";
       document.querySelectorAll("#yAxisSeg button").forEach(b =>
         b.classList.toggle("active", b.dataset.axis === state.y.axis));
+      syncNumericInputAttrs();
     }
     function adaptiveFactor() {
       return (runtime.cfg && runtime.cfg.adaptive_refine_factor) || 5;
+    }
+
+    /** Absolute compute bounds from /api/config (fallback matches server defaults). */
+    function inputLimits() {
+      const L = runtime.cfg?.limits || {};
+      return {
+        tempMin: Number(L.temp_c_min ?? 0),
+        tempMax: Number(L.temp_c_max ?? 300),
+        phMin: Number(L.ph_abs_min ?? 0),
+        phMax: Number(L.ph_abs_max ?? 14),
+        peMin: Number(L.pe_abs_min ?? -40),
+        peMax: Number(L.pe_abs_max ?? 40),
+        logFo2Min: Number(L.log_fo2_abs_min ?? -120),
+        logFo2Max: Number(L.log_fo2_abs_max ?? 10),
+        gasMin: Number(L.gas_limit_atm_min ?? 1e-12),
+        gasMax: Number(L.gas_limit_atm_max ?? 300),
+        totalMinMol: Number(L.total_conc_min_mol_kgw ?? 1e-10),
+        totalMaxMol: Number(L.total_conc_max_mol_kgw ?? 1),
+      };
+    }
+
+    function clampNum(v, lo, hi, fallback) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.min(hi, Math.max(lo, n));
+    }
+
+    function concToMol(v, unit = state.units) {
+      const u = normalizeUnit(unit);
+      const scale = MOL_SCALE[u];
+      const n = Number(v);
+      if (scale == null || !Number.isFinite(n)) return null;
+      return n * scale;
+    }
+
+    function concFromMol(mol, unit = state.units) {
+      const u = normalizeUnit(unit);
+      const scale = MOL_SCALE[u];
+      if (scale == null || !Number.isFinite(mol)) return null;
+      return mol / scale;
+    }
+
+    function concBoundsInUnit(unit = state.units) {
+      const L = inputLimits();
+      return {
+        min: concFromMol(L.totalMinMol, unit),
+        max: concFromMol(L.totalMaxMol, unit),
+      };
+    }
+
+    /** Clamp a concentration in the current (or given) unit using mol/kgw bounds. */
+    function clampConcValue(v, unit = state.units) {
+      const L = inputLimits();
+      const mol = concToMol(v, unit);
+      const fallback = concFromMol(L.totalMinMol, unit);
+      if (mol == null) return fallback;
+      const clamped = Math.min(L.totalMaxMol, Math.max(L.totalMinMol, mol));
+      return concFromMol(clamped, unit);
+    }
+
+    /** Keep min < max after absolute clamping (API requires a strict range). */
+    function ensureStrictRange(lo, hi, absMin, absMax, eps) {
+      let a = lo;
+      let b = hi;
+      if (a < b) return [a, b];
+      if (a >= absMax) {
+        b = absMax;
+        a = Math.max(absMin, absMax - eps);
+      } else {
+        b = Math.min(absMax, a + eps);
+      }
+      if (!(a < b)) {
+        a = absMin;
+        b = Math.min(absMax, absMin + eps);
+      }
+      return [a, b];
+    }
+
+    function clampComputeInputs() {
+      const L = inputLimits();
+      state.tempC = clampNum(state.tempC, L.tempMin, L.tempMax, DEFAULT_STATE.tempC);
+      let phMin = roundPh(clampNum(state.ph.min, L.phMin, L.phMax, DEFAULT_STATE.ph.min));
+      let phMax = roundPh(clampNum(state.ph.max, L.phMin, L.phMax, DEFAULT_STATE.ph.max));
+      [phMin, phMax] = ensureStrictRange(phMin, phMax, L.phMin, L.phMax, 0.1);
+      state.ph.min = roundPh(phMin);
+      state.ph.max = roundPh(phMax);
+
+      let peMin = roundPe(clampNum(state.y.peMin, L.peMin, L.peMax, DEFAULT_STATE.y.peMin));
+      let peMax = roundPe(clampNum(state.y.peMax, L.peMin, L.peMax, DEFAULT_STATE.y.peMax));
+      [peMin, peMax] = ensureStrictRange(peMin, peMax, L.peMin, L.peMax, 0.1);
+      state.y.peMin = roundPe(peMin);
+      state.y.peMax = roundPe(peMax);
+
+      let fo2Min = roundLogFO2(
+        clampNum(state.y.logFo2Min, L.logFo2Min, L.logFo2Max, DEFAULT_STATE.y.logFo2Min)
+      );
+      let fo2Max = roundLogFO2(
+        clampNum(state.y.logFo2Max, L.logFo2Min, L.logFo2Max, DEFAULT_STATE.y.logFo2Max)
+      );
+      [fo2Min, fo2Max] = ensureStrictRange(fo2Min, fo2Max, L.logFo2Min, L.logFo2Max, 1);
+      state.y.logFo2Min = roundLogFO2(fo2Min);
+      state.y.logFo2Max = roundLogFO2(fo2Max);
+
+      state.o2LimitAtm = clampNum(
+        state.o2LimitAtm, L.gasMin, L.gasMax, DEFAULT_STATE.o2LimitAtm
+      );
+      state.h2LimitAtm = clampNum(
+        state.h2LimitAtm, L.gasMin, L.gasMax, DEFAULT_STATE.h2LimitAtm
+      );
+      state.totals = (state.totals || []).map(t => ({
+        ...t,
+        value: roundForUnit(clampConcValue(t.value), state.units),
+      }));
+    }
+
+    function syncNumericInputAttrs() {
+      const L = inputLimits();
+      const setRange = (id, min, max) => {
+        const el = $(id);
+        if (!el) return;
+        el.min = String(min);
+        el.max = String(max);
+      };
+      setRange("tempC", L.tempMin, L.tempMax);
+      setRange("phMin", L.phMin, L.phMax);
+      setRange("phMax", L.phMin, L.phMax);
+      setRange("o2LimitAtm", L.gasMin, L.gasMax);
+      setRange("h2LimitAtm", L.gasMin, L.gasMax);
+      if (state.y.axis === "log_fo2") {
+        setRange("yMin", L.logFo2Min, L.logFo2Max);
+        setRange("yMax", L.logFo2Min, L.logFo2Max);
+      } else if (state.y.axis === "eh") {
+        const t = state.tempC;
+        setRange("yMin", peToEh(L.peMin, t), peToEh(L.peMax, t));
+        setRange("yMax", peToEh(L.peMin, t), peToEh(L.peMax, t));
+      } else {
+        setRange("yMin", L.peMin, L.peMax);
+        setRange("yMax", L.peMin, L.peMax);
+      }
     }
 
     function gridLevelsBounds() {
@@ -6157,7 +6355,9 @@
       });
       bindNumericField("tempC", {
         onCommit: v => {
-          state.tempC = v;
+          const L = inputLimits();
+          state.tempC = clampNum(v, L.tempMin, L.tempMax, state.tempC);
+          clampComputeInputs();
           fillInputs();
           commit();
         },
@@ -6167,26 +6367,30 @@
         },
       });
       $("units").addEventListener("change", e => {
-        const newUnit = normalizeUnit(e.target.value);
-        const oldUnit = normalizeUnit(state.units);
-        if (oldUnit !== newUnit) {
-          state.totals = state.totals.map(t => {
-            const v = convertConc(t.value, oldUnit, newUnit);
-            return { ...t, value: v != null ? v : t.value };
-          });
-        }
-        state.units = newUnit;
-        $("unitHead").textContent = `concentration (${unitDisplay(state.units)})`;
+        // Keep numeric totals as typed; only the unit label/meaning changes.
+        state.units = normalizeUnit(e.target.value);
+        clampComputeInputs();
+        syncUnitHead();
         renderSpecies();
         commit();
       });
 
       bindNumericField("phMin", {
-        onCommit: v => { state.ph.min = roundPh(v); commit(); },
+        onCommit: v => {
+          state.ph.min = roundPh(v);
+          clampComputeInputs();
+          fillInputs();
+          commit();
+        },
         onEmptyBlur: () => { $("phMin").value = roundPh(state.ph.min); },
       });
       bindNumericField("phMax", {
-        onCommit: v => { state.ph.max = roundPh(v); commit(); },
+        onCommit: v => {
+          state.ph.max = roundPh(v);
+          clampComputeInputs();
+          fillInputs();
+          commit();
+        },
         onEmptyBlur: () => { $("phMax").value = roundPh(state.ph.max); },
       });
       bindNumericField("yMin", {
@@ -6194,6 +6398,8 @@
           if (state.y.axis === "eh") state.y.peMin = roundPe(ehToPe(v, state.tempC));
           else if (state.y.axis === "log_fo2") state.y.logFo2Min = roundLogFO2(v);
           else state.y.peMin = roundPe(v);
+          clampComputeInputs();
+          fillInputs();
           commit();
         },
         onEmptyBlur: () => {
@@ -6209,6 +6415,8 @@
           if (state.y.axis === "eh") state.y.peMax = roundPe(ehToPe(v, state.tempC));
           else if (state.y.axis === "log_fo2") state.y.logFo2Max = roundLogFO2(v);
           else state.y.peMax = roundPe(v);
+          clampComputeInputs();
+          fillInputs();
           commit();
         },
         onEmptyBlur: () => {
@@ -6220,11 +6428,21 @@
         },
       });
       bindNumericField("o2LimitAtm", {
-        onCommit: v => { state.o2LimitAtm = v; commit(); },
+        onCommit: v => {
+          state.o2LimitAtm = v;
+          clampComputeInputs();
+          fillInputs();
+          commit();
+        },
         onEmptyBlur: () => { $("o2LimitAtm").value = state.o2LimitAtm; },
       });
       bindNumericField("h2LimitAtm", {
-        onCommit: v => { state.h2LimitAtm = v; commit(); },
+        onCommit: v => {
+          state.h2LimitAtm = v;
+          clampComputeInputs();
+          fillInputs();
+          commit();
+        },
         onEmptyBlur: () => { $("h2LimitAtm").value = state.h2LimitAtm; },
       });
       $("gridLevels").addEventListener("input", e => {
@@ -6878,6 +7096,7 @@
     }
 
     function fillInputs() {
+      syncNumericInputAttrs();
       // Never overwrite the field the user is typing in — Android/iOS number
       // inputs often clear one digit at a time, and rewriting snaps the value back.
       const focused = document.activeElement;
@@ -6976,6 +7195,8 @@
           return;
         }
         onCommit(v);
+        // Rewrite after clamp (fillInputs skips the focused field during blur).
+        if (typeof onEmptyBlur === "function") onEmptyBlur();
       });
     }
 
@@ -7789,6 +8010,8 @@
       if (!state.layerSolids && state.layerAqueous) state.displayMode = "aqueous";
       else if (state.layerSolids && !state.layerAqueous) state.displayMode = "solid";
 
+      clampComputeInputs();
+      fillInputs();
       const t = state.tempC;
       const uiSolution = normalizeUiSolutionMode(state.solutionMode || "dummy_titration");
       state.solutionMode = uiSolution;
@@ -9622,6 +9845,8 @@
     function placeTotalsContourLabels(levelJobs, tempC, result, band, fontSize, avoidAnns) {
       const map = makeLabelPlotMapper(result);
       const placed = annotationAvoidBoxes(avoidAnns, map, fontSize);
+      const cbBox = heatmapColorbarAvoidBox(result, map);
+      if (cbBox) placed.push(cbBox);
       const jobs = [];
       for (const job of levelJobs) {
         const samples = sampleContourLabelCandidates(

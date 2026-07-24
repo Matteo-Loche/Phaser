@@ -62,10 +62,11 @@ def totals_to_mmol_kgw(totals: dict[str, float], unit: str) -> dict[str, float]:
     return {name: to_mmol_kgw(val, unit) for name, val in totals.items() if val > 0}
 
 
+# Enough decimals to represent TOTAL_CONC_MIN_MOL_KGW (1e-10 mol/kgw) in each unit.
 _DISPLAY_DECIMALS: dict[str, int] = {
-    "mol/kgw": 6,
-    "mmol/kgw": 4,
-    "umol/kgw": 2,
+    "mol/kgw": 10,
+    "mmol/kgw": 7,
+    "umol/kgw": 4,
 }
 
 

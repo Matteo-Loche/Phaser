@@ -1,12 +1,19 @@
 """Pydantic request/response models for the HTTP API."""
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .. import config
-from ..chemistry.units import is_valid_unit, normalize_unit
+from ..chemistry.units import convert_concentration, is_valid_unit, normalize_unit
+
+
+def _require_finite(value: float, name: str) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number.")
+    return float(value)
 
 
 class PhaseQuery(BaseModel):
@@ -21,17 +28,39 @@ class PhaseQuery(BaseModel):
 class ComputeRequest(BaseModel):
     db_id: str | None = None
     db_path: str | None = None  # optional; must match a registered database (prefer db_id)
-    temp_c: float = config.TEMP_C
-    ph_min: float = config.PH_MIN
-    ph_max: float = config.PH_MAX
-    ph_levels: int = Field(default=config.GRID_LEVELS, ge=config.MIN_GRID_LEVELS, le=config.MAX_GRID_LEVELS)
-    pe_min: float = config.PE_MIN
-    pe_max: float = config.PE_MAX
-    pe_levels: int = Field(default=config.GRID_LEVELS, ge=config.MIN_GRID_LEVELS, le=config.MAX_GRID_LEVELS)
+    temp_c: float = Field(
+        default=config.TEMP_C, ge=config.TEMP_C_MIN, le=config.TEMP_C_MAX
+    )
+    ph_min: float = Field(
+        default=config.PH_MIN, ge=config.PH_ABS_MIN, le=config.PH_ABS_MAX
+    )
+    ph_max: float = Field(
+        default=config.PH_MAX, ge=config.PH_ABS_MIN, le=config.PH_ABS_MAX
+    )
+    ph_levels: int = Field(
+        default=config.GRID_LEVELS, ge=config.MIN_GRID_LEVELS, le=config.MAX_GRID_LEVELS
+    )
+    pe_min: float = Field(
+        default=config.PE_MIN, ge=config.PE_ABS_MIN, le=config.PE_ABS_MAX
+    )
+    pe_max: float = Field(
+        default=config.PE_MAX, ge=config.PE_ABS_MIN, le=config.PE_ABS_MAX
+    )
+    pe_levels: int = Field(
+        default=config.GRID_LEVELS, ge=config.MIN_GRID_LEVELS, le=config.MAX_GRID_LEVELS
+    )
     # pe = pe/Eh family (bounds in pe_min/pe_max); log_fo2 = native fO₂ sweep.
     redox_axis: str = config.REDOX_AXIS_DEFAULT
-    log_fo2_min: float = config.LOG_FO2_MIN
-    log_fo2_max: float = config.LOG_FO2_MAX
+    log_fo2_min: float = Field(
+        default=config.LOG_FO2_MIN,
+        ge=config.LOG_FO2_ABS_MIN,
+        le=config.LOG_FO2_ABS_MAX,
+    )
+    log_fo2_max: float = Field(
+        default=config.LOG_FO2_MAX,
+        ge=config.LOG_FO2_ABS_MIN,
+        le=config.LOG_FO2_ABS_MAX,
+    )
     totals: dict[str, float]
     units: str = config.DEFAULT_UNITS
     phases: list[str] | None = None
@@ -40,9 +69,21 @@ class ComputeRequest(BaseModel):
     include_common_gases: bool = False
     gas_phases: list[str] | None = None
     adaptive_boundaries: bool = config.ADAPTIVE_BOUNDARIES_DEFAULT
-    adaptive_refine_factor: int | None = None
-    o2_limit_atm: float = config.O2_FUGACITY_LIMIT_ATM
-    h2_limit_atm: float = config.H2_FUGACITY_LIMIT_ATM
+    adaptive_refine_factor: int | None = Field(
+        default=None,
+        ge=config.ADAPTIVE_REFINE_FACTOR_MIN,
+        le=config.ADAPTIVE_REFINE_FACTOR_MAX,
+    )
+    o2_limit_atm: float = Field(
+        default=config.O2_FUGACITY_LIMIT_ATM,
+        ge=config.GAS_LIMIT_ATM_MIN,
+        le=config.GAS_LIMIT_ATM_MAX,
+    )
+    h2_limit_atm: float = Field(
+        default=config.H2_FUGACITY_LIMIT_ATM,
+        ge=config.GAS_LIMIT_ATM_MIN,
+        le=config.GAS_LIMIT_ATM_MAX,
+    )
     layer_solids: bool = True
     layer_aqueous: bool = True
     layer_elements: bool = False
@@ -52,6 +93,38 @@ class ComputeRequest(BaseModel):
     # Mineral Stability: root-find log10(TOT) isolines after the base grid.
     totals_contours: bool = config.TOTALS_CONTOURS_DEFAULT
     totals_contour_log_step: float = config.TOTALS_CONTOUR_LOG_STEP_DEFAULT
+
+    @field_validator(
+        "temp_c",
+        "ph_min",
+        "ph_max",
+        "pe_min",
+        "pe_max",
+        "log_fo2_min",
+        "log_fo2_max",
+        "o2_limit_atm",
+        "h2_limit_atm",
+        "totals_contour_log_step",
+    )
+    @classmethod
+    def _finite_scalars(cls, value: float, info) -> float:
+        return _require_finite(value, info.field_name)
+
+    @field_validator("totals")
+    @classmethod
+    def _validate_totals(cls, value: dict[str, float]) -> dict[str, float]:
+        if not isinstance(value, dict) or not value:
+            raise ValueError("totals must be a non-empty object of element → concentration.")
+        cleaned: dict[str, float] = {}
+        for key, raw in value.items():
+            name = str(key or "").strip()
+            if not name:
+                raise ValueError("totals keys must be non-empty species/element names.")
+            amount = _require_finite(raw, f"totals[{name}]")
+            if amount <= 0:
+                raise ValueError(f"totals[{name}] must be > 0.")
+            cleaned[name] = amount
+        return cleaned
 
     @field_validator("solution_mode")
     @classmethod
@@ -108,12 +181,30 @@ class ComputeRequest(BaseModel):
         return clamp_contour_log_step(value)
 
     @model_validator(mode="after")
-    def _at_least_one_layer(self) -> ComputeRequest:
+    def _validate_ranges_and_layers(self) -> ComputeRequest:
         if not (self.layer_solids or self.layer_aqueous):
             raise ValueError(
                 "Enable at least one layer family "
                 "(layer_solids or layer_aqueous)."
             )
+        if not (self.ph_min < self.ph_max):
+            raise ValueError("ph_min must be less than ph_max.")
+        if not (self.pe_min < self.pe_max):
+            raise ValueError("pe_min must be less than pe_max.")
+        if not (self.log_fo2_min < self.log_fo2_max):
+            raise ValueError("log_fo2_min must be less than log_fo2_max.")
+        # Concentration bounds are absolute mol/kgw (independent of request units).
+        lo = config.TOTAL_CONC_MIN_MOL_KGW
+        hi = config.TOTAL_CONC_MAX_MOL_KGW
+        for name, amount in self.totals.items():
+            mol = convert_concentration(amount, self.units, "mol/kgw")
+            if mol is None:
+                raise ValueError(f"Cannot convert totals[{name}] from {self.units!r}.")
+            if mol < lo or mol > hi:
+                raise ValueError(
+                    f"totals[{name}] must be between {lo:g} and {hi:g} mol/kgw "
+                    f"(got {mol:g} mol/kgw)."
+                )
         return self
 
 

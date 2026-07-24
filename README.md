@@ -1430,9 +1430,12 @@ Key fields in the JSON body:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C": 1.0}` |
+| `totals` | — | Required. Element totals, e.g. `{"Fe": 1.0, "C": 1.0}`; each value finite and, after unit conversion, in `1e−10`–`1` mol/kgw |
 | `ph_levels`, `pe_levels` | `GRID_LEVELS` | Grid resolution (both axes; clamped to `MIN_GRID_LEVELS`–`MAX_GRID_LEVELS`) |
-| `ph_min`, `ph_max`, `pe_min`, `pe_max` | config defaults | Axis bounds |
+| `temp_c` | `25` | Temperature (°C); absolute bounds `0`–`300` |
+| `ph_min`, `ph_max` | config defaults | pH axis; absolute `0`–`14`, with `ph_min < ph_max` |
+| `pe_min`, `pe_max` | config defaults | pe/Eh axis (stored as pe); absolute `−40`–`40`, with `pe_min < pe_max` |
+| `log_fo2_min`, `log_fo2_max` | config defaults | Native log fO₂ axis; absolute `−120`–`10`, with min `<` max |
 | `phases` | auto-discover | Selected solid phase names |
 | `system_elements` | from totals | Explicit element list for layers |
 | `db_id` | server default | Database from registry |
@@ -1443,8 +1446,8 @@ Key fields in the JSON body:
 | `totals_contour_log_step` | `2` | Spacing of contour levels in log₁₀(molality); clamped to `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN`–`_MAX` (0.5–6). Included in the browser cache key with `totals_contours` |
 | `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
 | `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
-| `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); see [Water window and gas lines](#16-water-window-and-gas-lines) |
-| `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm) |
+| `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); absolute `1e−12`–`300` — see [Water window and gas lines](#16-water-window-and-gas-lines) |
+| `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm); same absolute pressure bounds as O₂ |
 | `layer_solids` | `true` | Pack and trace solid maps (`solid_subsets` for SI predominance, `mineral_subsets` for assemblage) |
 | `layer_aqueous` | `true` | Pack and trace aqueous species predominance maps |
 | `layer_elements` | `false` | When `true`, one map per element subset (ignored when the system has only one element); when `false`, one combined map per enabled family. At least one of `layer_solids` / `layer_aqueous` must be `true`. |
@@ -1553,6 +1556,9 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `GRID_LEVELS` / min / max | 100 / 50 / 200 | Default and clamp for `ph_levels` = `pe_levels` |
 | `MAX_GRID_POINTS` | 40000 | Cap on `ph_levels × pe_levels` |
 | `PH_MIN`/`PH_MAX`, `PE_MIN`/`PE_MAX`, `LOG_FO2_MIN`/`LOG_FO2_MAX` | 2–12, −14–20, −90–10 | Default axis bounds |
+| `TEMP_C_MIN`/`MAX`, `PH_ABS_*`, `PE_ABS_*`, `LOG_FO2_ABS_*` | 0–300, 0–14, −40–40, −120–10 | Absolute compute/UI clamps (also in `/api/config` → `limits`) |
+| `GAS_LIMIT_ATM_MIN`/`MAX` | 1e−12–300 atm | Gas-limit pressure ceiling |
+| `TOTAL_CONC_MIN_MOL_KGW` / `TOTAL_CONC_MAX_MOL_KGW` | `1e−10` / `1` | Per-total concentration bounds (mol/kgw; unit-independent) |
 | `SOLUTION_MODE_DEFAULT` | `dummy_titration` | Default Saturation frame |
 | `MINERAL_CATEGORY_MODE_DEFAULT` | `moles` | Default Mineral Stability category mode |
 | `PHASER_TOTALS_CONTOURS` | `false` | Default for per-job `totals_contours` (Mineral Stability isolines) |
@@ -1560,7 +1566,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN` / `_MAX` | `0.5` / `6` | Clamp for `totals_contour_log_step` |
 | `PHASER_CONTOUR_BANDS_PER_WORKER` | `2` | Interleaved pH-line strips per contour worker (one pool job/worker) |
 | `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode` |
-| `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides |
+| `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides (clamped to `GAS_LIMIT_ATM_*`) |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | Component-gas reference pressure |
 | `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | `true` | Skip PHREEQC outside water band |
 | `PHASER_SWEEP_WATER_MARGIN_CELLS` | `1.0` | Extra cells beyond analytic clip |

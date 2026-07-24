@@ -176,20 +176,40 @@ HOST = os.environ.get("PHASER_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PHASER_PORT", "8765"))
 
 TEMP_C = 25.0
+# Absolute compute/UI bounds (reject outside on API; clamp in the browser).
+TEMP_C_MIN = 0.0
+TEMP_C_MAX = 300.0
 WATER_MASS_KGW = 1.0
 
 # Default concentration entry in the UI.
 DEFAULT_UNITS = "mmol/kgw"
 DEFAULT_SPECIES_CONC = 1.0
+# Per-total concentration bounds in mol/kgw (unit-independent; convert before check).
+TOTAL_CONC_MIN_MOL_KGW = 1.0e-10
+TOTAL_CONC_MAX_MOL_KGW = 1.0
 
 # Default grid if client omits values.
 PH_MIN = 2.0
 PH_MAX = 12.0
+# Absolute pH window for API / UI (diagrams stay inside the aqueous scale).
+PH_ABS_MIN = 0.0
+PH_ABS_MAX = 14.0
 PE_MIN = -14.0
 PE_MAX = 20.0
+# Wide but finite pe window (Eh display uses the same pe storage).
+PE_ABS_MIN = -40.0
+PE_ABS_MAX = 40.0
 # Default log fO₂ axis bounds (native compute mode; independent of pe).
 LOG_FO2_MIN = -90.0
 LOG_FO2_MAX = 10.0
+LOG_FO2_ABS_MIN = -120.0
+LOG_FO2_ABS_MAX = 10.0
+# Gas-limit overlay pressures (atm).
+GAS_LIMIT_ATM_MIN = 1.0e-12
+GAS_LIMIT_ATM_MAX = 300.0
+# Optional adaptive refine factor when the client overrides the server default.
+ADAPTIVE_REFINE_FACTOR_MIN = 2
+ADAPTIVE_REFINE_FACTOR_MAX = 10
 # Compute redox frame: pe (also Eh display) or native log fO₂.
 REDOX_AXIS_PE = "pe"
 REDOX_AXIS_LOG_FO2 = "log_fo2"
@@ -343,6 +363,13 @@ JOB_WALL_TIMEOUT_SEC = int(os.environ.get("PHASER_JOB_WALL_TIMEOUT_SEC", "300"))
 # Override with PHASER_O2_LIMIT_ATM / PHASER_H2_LIMIT_ATM; UI can set per job.
 O2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_O2_LIMIT_ATM", "0.21"))
 H2_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_H2_LIMIT_ATM", "1.0"))
+# Keep env defaults inside absolute gas-limit bounds.
+O2_FUGACITY_LIMIT_ATM = min(
+    max(O2_FUGACITY_LIMIT_ATM, GAS_LIMIT_ATM_MIN), GAS_LIMIT_ATM_MAX
+)
+H2_FUGACITY_LIMIT_ATM = min(
+    max(H2_FUGACITY_LIMIT_ATM, GAS_LIMIT_ATM_MIN), GAS_LIMIT_ATM_MAX
+)
 COMPONENT_GAS_FUGACITY_LIMIT_ATM = float(os.environ.get("PHASER_COMPONENT_GAS_LIMIT_ATM", "1.0"))
 
 # PHREEQC numerical retry ladder depth (per-job; flip-retry is separate and always on
