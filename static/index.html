@@ -9049,24 +9049,26 @@
       };
     }
 
-    function hoverCellHtml(phase, speciesHtml, precipHtml = "") {
+    function hoverCellHtml(phase, speciesHtml, precipHtml = "", saturatedHtml = "") {
       const p = phase ? `<b>${phase}</b>` : "—";
       const aqTitle = "Aqueous (mol/kgw)";
       // Section titles a bit brighter/bolder than species/precip detail rows.
       const titleStyle = "color:#f1f5f9;font-size:0.95em;font-weight:600";
       const detailStyle = "color:#cbd5e1;font-size:0.92em;font-weight:400";
-      if (!precipHtml && !speciesHtml) return p;
-      // Saturation mode: phase + aqueous list (with unit on the section title).
-      if (!precipHtml) {
-        return `${p}<br>`
-          + `<span style="${titleStyle}">${aqTitle}</span><br>`
-          + `<span style="${detailStyle}">${speciesHtml}</span>`;
-      }
+      if (!precipHtml && !saturatedHtml && !speciesHtml) return p;
       const parts = [p];
-      parts.push(
-        `<span style="${titleStyle}">Precipitated</span><br>`
-        + `<span style="${detailStyle}">${precipHtml}</span>`
-      );
+      if (saturatedHtml) {
+        parts.push(
+          `<span style="${titleStyle}">Saturated</span><br>`
+          + `<span style="${detailStyle}">${saturatedHtml}</span>`
+        );
+      }
+      if (precipHtml) {
+        parts.push(
+          `<span style="${titleStyle}">Precipitated</span><br>`
+          + `<span style="${detailStyle}">${precipHtml}</span>`
+        );
+      }
       if (speciesHtml) {
         parts.push(
           `<span style="${titleStyle}">${aqTitle}</span><br>`
@@ -9116,12 +9118,30 @@
         .join("<br>");
     }
 
+    function fmtHoverSI(si) {
+      if (!Number.isFinite(si)) return "—";
+      if (Math.abs(si) >= 0.01) return String(Number(si.toPrecision(3)));
+      return si.toExponential(2);
+    }
+
+    function formatHoverSaturated(entries, n = 8) {
+      const pool = (entries || []).filter(e => Number.isFinite(e[1]) && e[1] >= 0);
+      if (!pool.length) return "";
+      return pool.slice(0, n)
+        .map(([sp, si]) => `${labelForPhase(sp)} (SI ${fmtHoverSI(si)})`)
+        .join("<br>");
+    }
+
     function buildHoverCustomData(hGrid, hNames, result) {
       const speciesGrid = result.hover_species;
       const precipGrid = result.hover_precip;
+      const saturatedGrid = result.hover_saturated;
       const showPrecip = result.diagram_kind === "assemblage"
         || !!precipGrid
         || resultMatchesMode("mineral-stability", result);
+      const showSaturated = result.diagram_kind === "predominance"
+        || (!!saturatedGrid && !showPrecip)
+        || resultMatchesMode("phase-diagram", result);
       const filterElems = hoverElementsFilter(result);
       return hGrid.map((row, iy) => row.map((v, ix) => {
         const phase = v < 0 ? "—" : labelForPhase(hNames[v]);
@@ -9131,7 +9151,10 @@
         const precip = showPrecip && precipGrid
           ? formatHoverPrecip(precipGrid[iy]?.[ix])
           : "";
-        return hoverCellHtml(phase, sp, precip);
+        const saturated = showSaturated && saturatedGrid
+          ? formatHoverSaturated(saturatedGrid[iy]?.[ix])
+          : "";
+        return hoverCellHtml(phase, sp, precip, saturated);
       }));
     }
 

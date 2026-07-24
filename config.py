@@ -328,6 +328,8 @@ TOP_AQ_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_TOP_AQ_SPECIES", "64"))
 # Top species kept PER ELEMENT at each grid point for context-filtered hover.
 # Bounded per element so subset filtering stays exact without bloating JSON.
 HOVER_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_HOVER_SPECIES_PER_ELEMENT", "8"))
+# Max solids with SI ≥ 0 packed per cell for Saturation hover (SI descending).
+HOVER_SATURATED_PHASES = int(os.environ.get("PHASER_HOVER_SATURATED_PHASES", "8"))
 # Trace mode uses fewer USER_PUNCH slots; corner/boundary species stay on explicit -mol.
 BOUNDARY_TRACE_TOP_AQ_SPECIES = int(
     os.environ.get("PHASER_TRACE_TOP_AQ_SPECIES", "4")

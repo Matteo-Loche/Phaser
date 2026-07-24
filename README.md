@@ -1310,6 +1310,7 @@ Shared behaviour:
    - `solid_subsets` / `mineral_subsets` — category maps (`aqueous_names` lists categories rendered grey in solid/mineral view). Co-stability / moles-tie joins (`"A + B"`) count as solids via `label_is_solid`, so they are **not** in `aqueous_names`.
    - `aqueous_subsets` — aqueous species predominance maps
 6. Packs **`hover_species`** — per grid cell, top `HOVER_SPECIES_PER_ELEMENT` (default 8) species **per element**, stored as `[name, element_moles, element]` so the client can filter to any active element subset and truncate for display.
+7. **Saturation** also packs **`hover_saturated`** — per cell, solids with SI ≥ 0 as `[label, si]` (SI descending, capped by `HOVER_SATURATED_PHASES`, default 8). Uses the full SI map already returned by the engine; no extra PHREEQC punch.
 
 Mineral packs also set **`mineral_category_mode`** (`moles` | `costability`) and always include **`totals_heatmap`** via `pack_totals_heatmap`:
 
@@ -1346,7 +1347,7 @@ Hover uses an invisible heatmap over the base grid. At each point the tooltip sh
 
 Species molalities in hover are PHREEQC's per-element moles (`stoichiometry × species molality`), matching the `SYS` ranking used for predominance.
 
-**Mineral Stability** packs an extra **`hover_precip`** grid: every solid with precipitated moles > 0 at that point (`[label, moles]`, moles descending). The tooltip lists those solids under *Precipitated* and the aqueous ranking under *Aqueous*.
+**Saturation** tooltips show the active category, then **Saturated** (all selected solids with SI ≥ 0, with SI values), then **Aqueous**. **Mineral Stability** packs **`hover_precip`** instead (solids with precipitated moles > 0 as `[label, moles]`) under *Precipitated*, plus the aqueous ranking.
 
 ---
 
@@ -1577,6 +1578,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH slots while tracing |
 | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH slots on base sweep |
 | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `8` | Species packed for hover |
+| `PHASER_HOVER_SATURATED_PHASES` | `8` | Max SI≥0 solids packed per cell for Saturation hover |
 | `PHASER_TRACE_CHUNK_MULTIPLIER` / `PHASER_TRACE_MIN_CELLS_PER_CHUNK` | `16` / `4` | Trace worker chunking |
 | `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Base-grid `pool.map` chunksize |
 | `PHASER_MAX_WORKERS` | `8` | ProcessPool size per sweep |

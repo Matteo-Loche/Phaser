@@ -20,6 +20,7 @@ from ..phreeqc.dummy_medium import EXCLUDED_SPECIES
 
 SOLID_SUFFIX = "(s)"
 HOVER_SPECIES_PER_ELEMENT = config.HOVER_SPECIES_PER_ELEMENT
+HOVER_SATURATED_PHASES = config.HOVER_SATURATED_PHASES
 
 
 def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEMENT) -> list[list]:
@@ -134,6 +135,53 @@ def pack_hover_precip_grid(
         if ix is None or iy is None:
             continue
         grid[iy][ix] = precip_hover_entries(row, collision_names=collision_names)
+    return grid
+
+
+def saturated_hover_entries(
+    row: dict,
+    *,
+    collision_names: frozenset[str] = frozenset(),
+    limit: int = HOVER_SATURATED_PHASES,
+) -> list[list]:
+    """Solids with SI ≥ 0 as ``[label, si]`` for Saturation hover (SI desc)."""
+    raw = row.get("si") or {}
+    if not raw or not row.get("converged"):
+        return []
+    out: list[list] = []
+    for name, si_val in raw.items():
+        if si_val != si_val:
+            continue
+        si = float(si_val)
+        if si < 0.0:
+            continue
+        phase = str(name)
+        if is_gas(phase):
+            continue
+        out.append([solid_label(phase, collision_names), si])
+    out.sort(key=lambda e: e[1], reverse=True)
+    if limit > 0:
+        out = out[:limit]
+    return out
+
+
+def pack_hover_saturated_grid(
+    rows: list[dict],
+    *,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+    collision_names: frozenset[str] = frozenset(),
+) -> list[list[list]]:
+    """Per-cell list of saturated solids (SI ≥ 0) for Saturation hover."""
+    grid: list[list[list]] = [[[] for _ in range(ph_levels)] for _ in range(pe_levels)]
+    for row in rows:
+        ix = ph_lookup.get(round(float(row["ph"]), 12))
+        iy = pe_lookup.get(round(float(row["pe"]), 12))
+        if ix is None or iy is None:
+            continue
+        grid[iy][ix] = saturated_hover_entries(row, collision_names=collision_names)
     return grid
 
 
@@ -510,6 +558,14 @@ def pack_grid_results(
             pe_lookup=pe_lookup,
             pe_levels=params.pe_levels,
             ph_levels=params.ph_levels,
+        ),
+        "hover_saturated": pack_hover_saturated_grid(
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
+            pe_levels=params.pe_levels,
+            ph_levels=params.ph_levels,
+            collision_names=collisions,
         ),
         "n_converged": sum(1 for r in rows if r.get("converged")),
         "n_total": len(rows),
