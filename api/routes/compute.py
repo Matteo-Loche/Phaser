@@ -2,18 +2,24 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 
 from ... import config
 from ...services.compute import (
-    create_job,
     delete_job,
     get_job,
     get_job_result,
-    run_compute_job,
+    queue_snapshot,
+    try_admit_compute_job,
 )
 from ..models import ComputeRequest
 
 router = APIRouter(tags=["compute"])
+
+
+@router.get("/api/queue")
+def get_queue():
+    return queue_snapshot()
 
 
 @router.post("/api/compute")
@@ -24,8 +30,16 @@ def start_compute(body: ComputeRequest):
     if n_pts > config.MAX_GRID_POINTS:
         raise HTTPException(400, f"Grid too large ({n_pts} > {config.MAX_GRID_POINTS}).")
 
-    job_id = create_job()
-    run_compute_job(job_id, body)
+    job_id = try_admit_compute_job(body)
+    if job_id is None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": "Server compute queue is full.",
+                "error_code": "queue_full",
+            },
+        )
+
     job = get_job(job_id) or {}
     return {
         "job_id": job_id,

@@ -14,6 +14,8 @@ _hits: dict[str, deque[float]] = defaultdict(deque)
 _cooldown_until: dict[str, float] = {}
 _violation_strikes: dict[str, int] = {}
 _last_violation_at: dict[str, float] = {}
+# Last compute attempt (monotonic) per IP — enforces COMPUTE_MIN_INTERVAL_SEC.
+_last_compute_attempt: dict[str, float] = {}
 
 _BUCKET_LIMIT_ATTR = {
     "api": "RATE_LIMIT_API_PER_MIN",
@@ -119,6 +121,19 @@ def _start_cooldown(bucket: str, ip: str, now: float) -> int:
     return int(max(1, duration))
 
 
+def _compute_min_interval_remaining(ip: str, now: float) -> int | None:
+    gap = float(config.COMPUTE_MIN_INTERVAL_SEC)
+    if gap <= 0:
+        return None
+    last = _last_compute_attempt.get(ip)
+    if last is None:
+        return None
+    remain = last + gap - now
+    if remain <= 0:
+        return None
+    return int(max(1, remain))
+
+
 def limit_detail_message(
     bucket: str,
     *,
@@ -131,6 +146,11 @@ def limit_detail_message(
         return (
             f"{label.title()} temporarily blocked after repeated burst limits. "
             f"Try again in {retry_after} s."
+        )
+    if reason == "min_interval":
+        return (
+            f"Please wait at least {int(config.COMPUTE_MIN_INTERVAL_SEC)} s "
+            f"between compute requests. Try again in {retry_after} s."
         )
     return (
         f"Rate limit exceeded ({limit} requests per "
@@ -151,12 +171,18 @@ def check_rate_limit(
     now = time.monotonic()
     window = float(config.RATE_LIMIT_WINDOW_SEC)
     keyed = [(bucket, f"{bucket}:{ip}", limit_for_bucket(bucket)) for bucket in buckets]
+    is_compute = request.method == "POST" and request.url.path == "/api/compute"
 
     with _lock:
         for bucket in buckets:
             remaining = _cooldown_remaining(bucket, ip, now)
             if remaining is not None:
                 return False, bucket, remaining, "cooldown"
+
+        if is_compute:
+            gap_remain = _compute_min_interval_remaining(ip, now)
+            if gap_remain is not None:
+                return False, "compute", gap_remain, "min_interval"
 
         for bucket, key, limit in keyed:
             retry_after = _retry_after(_hits[key], limit, now, window)
@@ -170,5 +196,8 @@ def check_rate_limit(
             q = _hits[key]
             _retry_after(q, limit, now, window)
             q.append(now)
+
+        if is_compute:
+            _last_compute_attempt[ip] = now
 
     return True, None, None, None

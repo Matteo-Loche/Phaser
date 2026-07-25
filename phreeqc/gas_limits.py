@@ -7,17 +7,27 @@ refined along cell edges with the same Brent root-finder as phase boundaries.
 from __future__ import annotations
 
 import math
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 from scipy.optimize import brentq
 
 from .. import config
-from .boundary_trace import PointEvaluator, _edge_coords
-from .engine import GridJobParams
-from .sweep import _point_key
+from .engine import GridJobParams, point_key
+
+if TYPE_CHECKING:
+    from .boundary_trace import PointEvaluator
 
 _WATER_GASES = ("O2(g)", "H2(g)")
+
+
+def water_stability_limits_enabled(params: GridJobParams) -> bool:
+    """Whether analytic O₂/H₂ water-stability overlays apply for this job.
+
+    Always on for current solution modes (both impose redox via O₂(g) fugacity).
+    """
+    del params
+    return True
 
 
 def log_k_o2_water(*, temp_c: float = 25.0) -> float:
@@ -31,6 +41,31 @@ def log_k_o2_water(*, temp_c: float = 25.0) -> float:
 def log_f_o2(*, ph: float, pe: float, temp_c: float) -> float:
     """log10(fugacity O2 in atm) from pe/pH."""
     return 4.0 * (pe + ph - log_k_o2_water(temp_c=temp_c))
+
+
+def is_log_fo2_redox(params: GridJobParams) -> bool:
+    return getattr(params, "redox_axis", config.REDOX_AXIS_PE) == config.REDOX_AXIS_LOG_FO2
+
+
+def target_log_fo2(*, ph: float, y: float, params: GridJobParams) -> float:
+    """O2(g) pin value: native log fO₂ when that is the sweep axis, else from pe."""
+    if is_log_fo2_redox(params):
+        return float(y)
+    return log_f_o2(ph=ph, pe=y, temp_c=params.temp_c)
+
+
+def water_log_fo2_window(params: GridJobParams) -> tuple[float, float]:
+    """``(lower, upper)`` bounds on log10(fO₂) for the water-stability band.
+
+    Both limits are horizontal in (pH, log fO₂):
+    * upper (O₂): ``log fO₂ <= log10(fO2_limit)``
+    * lower (H₂): ``log fO₂ >= 4·(-log10(fH2_limit)/2 − K_O2)``
+    """
+    upper = math.log10(params.o2_limit_atm)
+    lower = 4.0 * (
+        -math.log10(params.h2_limit_atm) / 2.0 - log_k_o2_water(temp_c=params.temp_c)
+    )
+    return lower, upper
 
 
 def log_f_h2(*, ph: float, pe: float, temp_c: float) -> float:
@@ -75,13 +110,95 @@ def water_gas_outside_labels(params: GridJobParams) -> tuple[str, str]:
     )
 
 
+def synthetic_gas_label_set(params: GridJobParams) -> frozenset[str]:
+    """Category labels assigned to water-band masked (synthetic) grid points."""
+    return frozenset(water_gas_outside_labels(params))
+
+
+def water_band_active(params: GridJobParams) -> bool:
+    """Whether the sweep should skip PHREEQC outside the O₂/H₂ band."""
+    return bool(params.sweep_skip_outside_water and water_stability_limits_enabled(params))
+
+
+def split_water_band_points(
+    points: list[tuple[float, float]],
+    params: GridJobParams,
+    *,
+    cell_ph: float,
+    cell_pe: float,
+) -> tuple[list[tuple[float, float]], list[tuple[tuple[float, float], str]]]:
+    """Partition grid points into inside-band PHREEQC targets and outside synthetics.
+
+    Second coordinate is pe (pe-mode) or log10(fO₂) (log_fo2-mode).
+    """
+    if not water_band_active(params):
+        return points, []
+    o2_lab, h2_lab = water_gas_outside_labels(params)
+    inside: list[tuple[float, float]] = []
+    outside: list[tuple[tuple[float, float], str]] = []
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        margin = config.SWEEP_WATER_MARGIN_CELLS * cell_pe
+        for ph, y in points:
+            if y > hi + margin:
+                outside.append(((ph, y), o2_lab))
+            elif y < lo - margin:
+                outside.append(((ph, y), h2_lab))
+            else:
+                inside.append((ph, y))
+        return inside, outside
+    lo, hi = water_gas_sum_window(params)
+    margin = config.SWEEP_WATER_MARGIN_CELLS * (cell_ph + cell_pe)
+    for ph, pe in points:
+        s = ph + pe
+        if s > hi + margin:
+            outside.append(((ph, pe), o2_lab))
+        elif s < lo - margin:
+            outside.append(((ph, pe), h2_lab))
+        else:
+            inside.append((ph, pe))
+    return inside, outside
+
+
+def make_synthetic_water_result(
+    ph: float, pe: float, label: str
+) -> "GridPointResult":
+    """Synthetic row for a masked outside-water point (no PHREEQC run)."""
+    from .engine import GridPointResult
+
+    gas_key = "O2(g)" if label.startswith("O2(g)") else "H2(g)"
+    return GridPointResult(
+        ph=ph,
+        pe=pe,
+        converged=True,
+        synthetic_label=label,
+        gas_domain={gas_key: label},
+        knobs_level=0,
+    )
+
+
+def pair_traceable(cat_a: str, cat_b: str, params: GridJobParams) -> bool:
+    """False for edges involving synthetic water-gas categories (analytic lines only)."""
+    syn = synthetic_gas_label_set(params)
+    return not ({cat_a, cat_b} & syn)
+
+
 def water_gas_scalar_grids(
     fine_ph: np.ndarray,
     fine_pe: np.ndarray,
     params: GridJobParams,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Signed-distance scalars for O₂/H₂ limits on the fine raster (pe × pH)."""
+    """Signed-distance scalars for O₂/H₂ limits on the fine raster (y × pH).
+
+    Second axis is pe or log10(fO₂) depending on ``params.redox_axis``.
+    """
     pe_grid, ph_grid = np.meshgrid(fine_pe, fine_ph, indexing="ij")
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        o2 = pe_grid - hi
+        h2 = lo - pe_grid
+        inside = (o2 <= 0.0) & (h2 <= 0.0)
+        return o2, h2, inside
     k_o2 = log_k_o2_water(temp_c=params.temp_c)
     log_o2_lim = math.log10(params.o2_limit_atm)
     log_h2_lim = math.log10(params.h2_limit_atm)
@@ -89,6 +206,30 @@ def water_gas_scalar_grids(
     h2 = -2.0 * (pe_grid + ph_grid) - log_h2_lim
     inside = (o2 <= 0.0) & (h2 <= 0.0)
     return o2, h2, inside
+
+
+def water_gas_domain_labels_for_params(
+    *,
+    ph: float,
+    y: float,
+    params: GridJobParams,
+) -> dict[str, str]:
+    """Outside-water labels at a grid point (y = pe or log fO₂)."""
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        out: dict[str, str] = {}
+        if y > hi:
+            out["O2(g)"] = f"O2(g) > {params.o2_limit_atm:g} atm"
+        if y < lo:
+            out["H2(g)"] = f"H2(g) > {params.h2_limit_atm:g} atm"
+        return out
+    return water_gas_domain_labels(
+        ph=ph,
+        pe=y,
+        temp_c=params.temp_c,
+        o2_limit_atm=params.o2_limit_atm,
+        h2_limit_atm=params.h2_limit_atm,
+    )
 
 
 def water_gas_sum_window(params: GridJobParams) -> tuple[float, float]:
@@ -110,8 +251,18 @@ def water_gas_boundary_segments(
     pe_min: float,
     pe_max: float,
 ) -> list[dict[str, Any]]:
-    """Clipped O₂/H₂ lines as boundary vectors for the display frame."""
+    """Clipped O₂/H₂ lines as boundary vectors for the display frame.
+
+    In pe-mode the lines are diagonal (slope −1). In log_fo2-mode they are
+    horizontal at constant log10(fO₂).
+    """
     segments: list[dict[str, Any]] = []
+    if is_log_fo2_redox(params):
+        lo, hi = water_log_fo2_window(params)
+        for y in (hi, lo):
+            if pe_min - 1e-9 <= y <= pe_max + 1e-9:
+                segments.append({"x": [ph_min, ph_max], "y": [y, y]})
+        return segments
     for gas, limit_atm in (
         ("O2(g)", params.o2_limit_atm),
         ("H2(g)", params.h2_limit_atm),
@@ -212,6 +363,8 @@ def _trace_component_gas_edges(
 ) -> list[dict[str, Any]]:
     from dataclasses import asdict
 
+    from .boundary_trace import _edge_coords
+
     def row_at(ii: int, jj: int) -> dict:
         r = base_ij[(ii, jj)]
         return r if isinstance(r, dict) else asdict(r)
@@ -277,39 +430,42 @@ def trace_gas_limit_segments(
         return []
 
     segments: list[dict[str, Any]] = []
-    ph_lo, ph_hi = float(base_ph[0]), float(base_ph[-1])
-    pe_lo, pe_hi = float(base_pe[0]), float(base_pe[-1])
-    for gas, limit_atm in (
-        ("O2(g)", params.o2_limit_atm),
-        ("H2(g)", params.h2_limit_atm),
-    ):
-        line = _water_gas_limit_line(
-            gas, temp_c=params.temp_c, limit_atm=limit_atm,
-            ph0=ph_lo, ph1=ph_hi, pe0=pe_lo, pe1=pe_hi,
-        )
-        if line is None:
-            continue
-        x0, y0, x1, y1 = line
-        segments.append({
-            "kind": "gas_limit",
-            "gas": gas,
-            "limit_atm": limit_atm,
-            "style": "water",
-            "x": [x0, x1],
-            "y": [y0, y1],
-        })
+    if water_stability_limits_enabled(params):
+        ph_lo, ph_hi = float(base_ph[0]), float(base_ph[-1])
+        pe_lo, pe_hi = float(base_pe[0]), float(base_pe[-1])
+        for gas, limit_atm in (
+            ("O2(g)", params.o2_limit_atm),
+            ("H2(g)", params.h2_limit_atm),
+        ):
+            line = _water_gas_limit_line(
+                gas, temp_c=params.temp_c, limit_atm=limit_atm,
+                ph0=ph_lo, ph1=ph_hi, pe0=pe_lo, pe1=pe_hi,
+            )
+            if line is None:
+                continue
+            x0, y0, x1, y1 = line
+            segments.append({
+                "kind": "gas_limit",
+                "gas": gas,
+                "limit_atm": limit_atm,
+                "style": "water",
+                "x": [x0, x1],
+                "y": [y0, y1],
+            })
 
     component_gases = tuple(
         g for g in params.trace_gas_phases if g not in _WATER_GASES
     )
     if component_gases and base_ij is not None:
+        from .boundary_trace import PointEvaluator as _PointEvaluator
+
         if evaluator is None:
             from dataclasses import asdict
             seed: dict[tuple[float, float], dict] = {}
             for r in base_ij.values():
                 d = r if isinstance(r, dict) else asdict(r)
-                seed[_point_key(float(d["ph"]), float(d["pe"]))] = d
-            evaluator = PointEvaluator(params, seed)
+                seed[point_key(float(d["ph"]), float(d["pe"]))] = d
+            evaluator = _PointEvaluator(params, seed)
         for gas in component_gases:
             for j in range(n_pe - 1):
                 for i in range(n_ph - 1):

@@ -47,7 +47,14 @@ def layer_signature_fn(params: GridJobParams) -> Callable[[dict], tuple]:
         )
         eligible_by_subset.append((sset, elig))
 
+    n_parts = (len(eligible_by_subset) if params.layer_solids else 0) + (
+        len(eligible_by_subset) if params.layer_aqueous else 0
+    )
+
     def signature(row: dict) -> tuple:
+        synth = row.get("synthetic_label")
+        if synth:
+            return (synth,) * n_parts if n_parts else (synth,)
         if not row.get("converged"):
             return ("__none__",)
         parts: list[str] = []
@@ -91,11 +98,15 @@ def run_adaptive_boundary_sweep(
     max_workers: int | None = None,
     progress_cb=None,
     refine_factor: int | None = None,
+    job_id: str | None = None,
 ) -> tuple[GridJobParams, dict[str, Any], list[GridPointResult], dict[str, Any] | None]:
     """Full base grid sweep + boundary tracing.
 
     Returns ``(base_params, stats, base_rows, trace_bundle)``.
     """
+    from ..services.job_control import check_abort
+
+    check_abort(job_id)
     base_ph, base_pe = build_grid(params)
     n_ph = params.ph_levels
     n_pe = params.pe_levels
@@ -113,23 +124,32 @@ def run_adaptive_boundary_sweep(
             progress_cb(done, total, phase)
 
     base_points = [(float(p), float(e)) for e in base_pe for p in base_ph]
+    from .sweep import partition_points_for_sweep
+
+    _, _, mask_stats = partition_points_for_sweep(params, base_points)
     base_rows = run_point_sweep(
         params,
         base_points,
         max_workers=max_workers,
         progress_cb=(lambda d, _t: report(d, base_total, "grid")) if progress_cb else None,
+        job_id=job_id,
     )
+    check_abort(job_id)
+    # Category map / cell prep sits between the grid pool and the trace pool;
+    # keep abort responsive during this gap (and before workers respawn).
     base_by_key = {_point_key(r.ph, r.pe): r for r in base_rows}
 
     signature = layer_signature_fn(params)
     categories = np.empty((n_pe, n_ph), dtype=object)
     base_result_ij: dict[tuple[int, int], GridPointResult] = {}
     for j in range(n_pe):
+        check_abort(job_id)
         for i in range(n_ph):
             row = base_by_key[_point_key(float(base_ph[i]), float(base_pe[j]))]
             categories[j, i] = signature(asdict(row))
             base_result_ij[(i, j)] = row
 
+    check_abort(job_id)
     cells = boundary_base_cells(categories)
 
     from .gas_limits import trace_gas_limit_segments
@@ -154,6 +174,7 @@ def run_adaptive_boundary_sweep(
             "n_gas_segments": len(gas_segments),
             "refinement_method": "trace",
             "display_mode": "traced",
+            "n_skipped_water": mask_stats.get("n_skipped_water", 0),
         }
         trace_bundle = {
             "method": "traced",
@@ -181,6 +202,7 @@ def run_adaptive_boundary_sweep(
         progress_cb=(
             (lambda d, t: report(d, t, "boundaries")) if progress_cb else None
         ),
+        job_id=job_id,
     )
     report(n_progress, n_progress, "boundaries")
 
@@ -201,5 +223,6 @@ def run_adaptive_boundary_sweep(
         "n_gas_segments": trace_stats.n_gas_segments,
         "refinement_method": "trace",
         "display_mode": "traced",
+        "n_skipped_water": mask_stats.get("n_skipped_water", 0),
     }
     return params, stats, base_rows, trace_bundle

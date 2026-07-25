@@ -6,12 +6,17 @@ from ..phreeqc.engine import element_from_total_key
 
 
 def species_for_database(db_elements: list[str]) -> list[str]:
-    """Master-species labels valid for a given database (element must be present)."""
+    """Bare element symbols for the chemical-system picker (e.g. ``C``, not ``C(4)``).
+
+    Preference order follows ``KNOWN_TOTALS`` (mapped to parent elements), then any
+    remaining database elements alphabetically as returned by the catalog.
+    """
     db_set = set(db_elements)
     ordered: list[str] = []
     for name in config.KNOWN_TOTALS:
-        if element_from_total_key(name) in db_set and name not in ordered:
-            ordered.append(name)
+        elem = element_from_total_key(name)
+        if elem in db_set and elem not in ordered:
+            ordered.append(elem)
     for elem in db_elements:
         if elem not in ordered:
             ordered.append(elem)
@@ -19,5 +24,5 @@ def species_for_database(db_elements: list[str]) -> list[str]:
 
 
 def species_suggestions(db_elements: list[str]) -> list[str]:
-    """Master-species labels for the 'add species' picker (redox totals + elements)."""
+    """Master-species labels for the 'add species' picker (general elements only)."""
     return species_for_database(db_elements)

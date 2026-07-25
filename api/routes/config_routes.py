@@ -50,9 +50,31 @@ def get_config():
             "ph_max": config.PH_MAX,
             "pe_min": config.PE_MIN,
             "pe_max": config.PE_MAX,
+            "log_fo2_min": config.LOG_FO2_MIN,
+            "log_fo2_max": config.LOG_FO2_MAX,
+            "redox_axis": config.REDOX_AXIS_DEFAULT,
             "grid_levels": config.GRID_LEVELS,
+            "min_grid_levels": config.MIN_GRID_LEVELS,
+            "max_grid_levels": config.MAX_GRID_LEVELS,
             "o2_limit_atm": config.O2_FUGACITY_LIMIT_ATM,
             "h2_limit_atm": config.H2_FUGACITY_LIMIT_ATM,
+        },
+        # Absolute bounds enforced by ComputeRequest and mirrored in the UI.
+        "limits": {
+            "temp_c_min": config.TEMP_C_MIN,
+            "temp_c_max": config.TEMP_C_MAX,
+            "ph_abs_min": config.PH_ABS_MIN,
+            "ph_abs_max": config.PH_ABS_MAX,
+            "pe_abs_min": config.PE_ABS_MIN,
+            "pe_abs_max": config.PE_ABS_MAX,
+            "log_fo2_abs_min": config.LOG_FO2_ABS_MIN,
+            "log_fo2_abs_max": config.LOG_FO2_ABS_MAX,
+            "gas_limit_atm_min": config.GAS_LIMIT_ATM_MIN,
+            "gas_limit_atm_max": config.GAS_LIMIT_ATM_MAX,
+            "total_conc_min_mol_kgw": config.TOTAL_CONC_MIN_MOL_KGW,
+            "total_conc_max_mol_kgw": config.TOTAL_CONC_MAX_MOL_KGW,
+            "adaptive_refine_factor_min": config.ADAPTIVE_REFINE_FACTOR_MIN,
+            "adaptive_refine_factor_max": config.ADAPTIVE_REFINE_FACTOR_MAX,
         },
         "known_totals": list(config.KNOWN_TOTALS),
         "unit_options": list(config.UNIT_OPTIONS),
@@ -65,11 +87,37 @@ def get_config():
         "max_grid_points": config.MAX_GRID_POINTS,
         "max_workers": config.MAX_WORKERS,
         "max_concurrent_jobs": config.MAX_CONCURRENT_JOBS,
+        "max_queue": config.MAX_QUEUE,
+        "compute_min_interval_sec": config.COMPUTE_MIN_INTERVAL_SEC,
+        "default_solution_mode": config.SOLUTION_MODE_DEFAULT,
+        "solution_modes": [
+            {"id": mode_id, **config.SOLUTION_MODE_META[mode_id]}
+            for mode_id in config.PREDOMINANCE_SOLUTION_MODES
+        ],
+        "assemblage_solution_modes": [
+            {"id": mode_id, **config.SOLUTION_MODE_META[mode_id]}
+            for mode_id in config.ASSEMBLAGE_SOLUTION_MODE_ORDER
+        ],
+        "default_mineral_category_mode": config.MINERAL_CATEGORY_MODE_DEFAULT,
+        "mineral_category_modes": [
+            {"id": mode_id, **config.MINERAL_CATEGORY_MODE_META[mode_id]}
+            for mode_id in config.MINERAL_CATEGORY_MODES
+        ],
         "adaptive_boundaries_default": config.ADAPTIVE_BOUNDARIES_DEFAULT,
         "adaptive_refine_factor": config.ADAPTIVE_REFINE_FACTOR,
+        "totals_contours_default": config.TOTALS_CONTOURS_DEFAULT,
+        "totals_contour_log_step": config.TOTALS_CONTOUR_LOG_STEP_DEFAULT,
+        "totals_contour_log_step_min": config.TOTALS_CONTOUR_LOG_STEP_MIN,
+        "totals_contour_log_step_max": config.TOTALS_CONTOUR_LOG_STEP_MAX,
         "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
+        "default_knobs_mode": config.KNOBS_MODE_DEFAULT,
+        "knobs_modes": [
+            {"id": mode_id, **config.KNOBS_MODE_META[mode_id]}
+            for mode_id in config.KNOBS_MODES
+        ],
         "job_result_ttl_sec": config.JOB_RESULT_TTL_SEC,
         "job_queue_ttl_sec": config.JOB_QUEUE_TTL_SEC,
+        "job_wall_timeout_sec": config.JOB_WALL_TIMEOUT_SEC,
         "rate_limits": {
             "enabled": config.RATE_LIMIT_ENABLED,
             "window_sec": config.RATE_LIMIT_WINDOW_SEC,
@@ -90,6 +138,7 @@ def get_config():
             "build_id": config.BUILD_ID,
             "repository_url": config.REPOSITORY_URL,
             "issues_url": config.ISSUES_URL,
+            "documentation_url": config.DOCUMENTATION_URL,
             "license_name": config.LICENSE_NAME,
             "license_url": config.LICENSE_URL,
             "doi_url": config.DOI_URL,

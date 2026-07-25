@@ -2,18 +2,21 @@
 
 Clean 2-category cells use edge ``brentq`` and a single dividing line. 3-category
 cells emit convex fill regions bounded by oriented lines: a genuine triple point
-(three crossings) or a diagonal band (four crossings). 2-category saddles (four
-edge crossings) split on two crossing lines. Unresolved 4-category cells and
-lost brackets share one sampled sub-grid per cell. Stability limits (converged
-vs failed) are traced separately. Solid/aqueous category pairs that share a
-name are disambiguated upstream via the ``(s)`` suffix (see ``diagram.packer``).
+(three crossings) or a diagonal band (four crossings). Triple points are the
+geometric intersection of straight pair-boundary lines (neighbor chords through
+the edge zeros) — a classic Y — with a soft 2D scalar root only as fallback.
+2-category saddles (four edge crossings) split on two crossing lines. Unresolved
+4-category cells and lost brackets share one sampled sub-grid per cell.
+Stability limits (converged vs failed) are traced separately. Solid/aqueous
+category pairs that share a name are disambiguated upstream via the ``(s)``
+suffix (see ``diagram.packer``).
 """
 from __future__ import annotations
 
 import math
 import os
 from collections import Counter, defaultdict
-from concurrent.futures import ProcessPoolExecutor
+from ..services.job_control import check_abort, managed_process_pool, iter_futures_abortable
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any, Callable
 
@@ -23,8 +26,8 @@ from skimage.measure import find_contours
 
 from .. import config
 from ..diagram.packer import label_is_solid, phase_from_label, subset_key
-from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc
-from .sweep import _point_key
+from .dummy_medium import EXCLUDED_SPECIES
+from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc, point_key
 
 # Floor for absent aqueous species so log(m_A)-log(m_B) brackets at dominance edges
 # even when a species is below top-N at a far cell corner.
@@ -50,6 +53,7 @@ class TraceStats:
     n_brentq_si: int = 0
     n_brentq_aq: int = 0
     n_brentq_conv: int = 0
+    n_brentq_mol: int = 0
     n_stability_segments: int = 0
     n_cells_complex_fallback: int = 0
     n_crossing_cache_hits: int = 0
@@ -62,11 +66,36 @@ class TraceStats:
 _CROSSING_UNCACHED = object()
 
 
-def _crossing_cache_key(
+def _edge_grid_nodes(i: int, j: int, edge: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Grid-node indices (ph_idx, pe_idx) at the start and end of a cell edge."""
+    corners = ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1))
+    return corners[edge], corners[(edge + 1) % 4]
+
+
+def _canonical_edge_crossing_key(
     i: int, j: int, edge: int, cat_a: str, cat_b: str
-) -> tuple[int, int, int, str, str]:
-    lo, hi = sorted((cat_a, cat_b))
-    return (i, j, edge, lo, hi)
+) -> tuple[tuple[int, int], tuple[int, int], str, str, bool]:
+    """Cache key for a physical grid edge and category pair.
+
+    Returns ``(n_lo, n_hi, lo_cat, hi_cat, forward)`` where ``n_lo <= n_hi``
+    lexicographically and *forward* is True when the local edge direction runs
+    from ``n_lo`` to ``n_hi`` (so ``t_local == t_canonical``).
+    """
+    n0, n1 = _edge_grid_nodes(i, j, edge)
+    lo_c, hi_c = sorted((cat_a, cat_b))
+    if n0 <= n1:
+        return n0, n1, lo_c, hi_c, True
+    return n1, n0, lo_c, hi_c, False
+
+
+def _canonical_convergence_key(
+    i: int, j: int, edge: int
+) -> tuple[tuple[int, int], tuple[int, int], bool]:
+    """Canonical node-pair key for converged↔failed edge crossings."""
+    n0, n1 = _edge_grid_nodes(i, j, edge)
+    if n0 <= n1:
+        return n0, n1, True
+    return n1, n0, False
 
 
 def _merge_stats(dest: TraceStats, src: TraceStats) -> None:
@@ -77,27 +106,52 @@ def _merge_stats(dest: TraceStats, src: TraceStats) -> None:
 class PointEvaluator:
     """Cached on-demand PHREEQC evaluation."""
 
-    def __init__(self, params: GridJobParams, seed_rows: dict[tuple[float, float], dict]):
+    def __init__(
+        self,
+        params: GridJobParams,
+        seed_rows: dict[tuple[float, float], dict],
+        *,
+        trust_seed_cache: bool = False,
+    ):
         self._params = params
         self._cache: dict[tuple[float, float], dict] = dict(seed_rows)
-        self._full: set[tuple[float, float]] = set()
+        # Boundary tracing seeds base-grid corners then re-evaluates with richer
+        # trace punch params — leave ``_full`` empty so ``eval`` refreshes.
+        # Totals contours seed ``aq_total_by_key`` from the same params; trusting
+        # the cache avoids a wasted PHREEQC call on every bracketing corner.
+        self._full: set[tuple[float, float]] = (
+            set(seed_rows.keys()) if trust_seed_cache else set()
+        )
         self.n_evals = 0
         self._pq = init_phreeqc(params.dll_path, params.db_path)
-        self._crossing_t: dict[tuple[int, int, int, str, str], float | None] = {}
+        self._crossing_t: dict[
+            tuple[tuple[int, int], tuple[int, int], str, str], float | None
+        ] = {}
+        self._convergence_crossing_t: dict[
+            tuple[tuple[int, int], tuple[int, int]], float | None
+        ] = {}
         # Solid phases identify solid<->aqueous edges (where the aqueous side is
         # labelled by its dominant species, not the literal string "aqueous").
         self.solid_phases: frozenset[str] = frozenset(params.phases)
         # Phase names shared with an aqueous species; their solid form is the
         # "(s)"-suffixed label, so a bare name always denotes the aqueous side.
         self.collisions: frozenset[str] = frozenset(params.solid_aqueous_collisions)
+        # Pair-root resolver (SI predominance by default; mineral stability swaps).
+        self.resolve_pair = _resolve_pair_scalar
 
     def crossing_t_lookup(
         self, i: int, j: int, edge: int, cat_a: str, cat_b: str
     ) -> float | None | object:
-        key = _crossing_cache_key(i, j, edge, cat_a, cat_b)
+        n_lo, n_hi, lo_c, hi_c, forward = _canonical_edge_crossing_key(
+            i, j, edge, cat_a, cat_b
+        )
+        key = (n_lo, n_hi, lo_c, hi_c)
         if key not in self._crossing_t:
             return _CROSSING_UNCACHED
-        return self._crossing_t[key]
+        t_canon = self._crossing_t[key]
+        if t_canon is None:
+            return None
+        return t_canon if forward else 1.0 - t_canon
 
     def store_crossing_t(
         self,
@@ -108,10 +162,45 @@ class PointEvaluator:
         cat_b: str,
         t: float | None,
     ) -> None:
-        self._crossing_t[_crossing_cache_key(i, j, edge, cat_a, cat_b)] = t
+        n_lo, n_hi, lo_c, hi_c, forward = _canonical_edge_crossing_key(
+            i, j, edge, cat_a, cat_b
+        )
+        key = (n_lo, n_hi, lo_c, hi_c)
+        if t is None:
+            t_canon = None
+        elif forward:
+            t_canon = t
+        else:
+            t_canon = 1.0 - t
+        self._crossing_t[key] = t_canon
+
+    def convergence_crossing_t_lookup(
+        self, i: int, j: int, edge: int
+    ) -> float | None | object:
+        n_lo, n_hi, forward = _canonical_convergence_key(i, j, edge)
+        key = (n_lo, n_hi)
+        if key not in self._convergence_crossing_t:
+            return _CROSSING_UNCACHED
+        t_canon = self._convergence_crossing_t[key]
+        if t_canon is None:
+            return None
+        return t_canon if forward else 1.0 - t_canon
+
+    def store_convergence_crossing_t(
+        self, i: int, j: int, edge: int, t: float | None
+    ) -> None:
+        n_lo, n_hi, forward = _canonical_convergence_key(i, j, edge)
+        key = (n_lo, n_hi)
+        if t is None:
+            t_canon = None
+        elif forward:
+            t_canon = t
+        else:
+            t_canon = 1.0 - t
+        self._convergence_crossing_t[key] = t_canon
 
     def eval(self, ph: float, pe: float) -> dict:
-        key = _point_key(ph, pe)
+        key = point_key(ph, pe)
         if key not in self._cache or key not in self._full:
             row = evaluate_point(self._pq, ph=ph, pe=pe, params=self._params)
             self._cache[key] = asdict(row)
@@ -267,8 +356,9 @@ def _resolve_pair_scalar(
     converged<->failed edge bounding ``none`` regions (the stability limit,
     reused so fills stay smooth).
 
-    Solid vs aqueous is decided structurally from the label (the ``(s)`` suffix
-    on names shared with an aqueous complex), so names like ``FeO`` never need a
+    Solid vs aqueous is decided structurally from the label via
+    ``label_is_solid`` (``(s)`` suffix, bare non-collision solid, or
+    co-stability ``"A + B"`` joins), so names like ``FeO`` never need a
     saturation-index guess.
     """
     if cat_a == "none" or cat_b == "none":
@@ -298,9 +388,13 @@ def collect_trace_species(
     for key in base_ij:
         r = base_ij[key]
         row = r if isinstance(r, dict) else asdict(r)
-        names.update((row.get("aq_molality_by_species") or {}).keys())
+        names.update(
+            sp
+            for sp in (row.get("aq_molality_by_species") or {})
+            if sp not in EXCLUDED_SPECIES
+        )
         for sp in (row.get("dominant_aq_by_element") or {}).values():
-            if sp and sp not in ("none", "aqueous"):
+            if sp and sp not in ("none", "aqueous") and sp not in EXCLUDED_SPECIES:
                 names.add(sp)
     for spec in specs:
         for i, j in cells:
@@ -351,7 +445,7 @@ def _find_crossing_brentq(
 ) -> float | None:
     row0 = evaluator.eval(ph0, pe0)
     row1 = evaluator.eval(ph1, pe1)
-    scalar_fn, kind = _resolve_pair_scalar(
+    scalar_fn, kind = evaluator.resolve_pair(
         cat_a, cat_b, evaluator.solid_phases, evaluator.collisions
     )
     if scalar_fn is None:
@@ -371,7 +465,9 @@ def _find_crossing_brentq(
     try:
         t_cross = float(brentq(f, 0.0, 1.0, xtol=tol, rtol=tol))
         if stats:
-            if kind in ("si", "aq_solid"):
+            if kind in ("mol", "mol_set"):
+                stats.n_brentq_mol += 1
+            elif kind in ("si", "aq_solid"):
                 stats.n_brentq_si += 1
             elif kind == "aq":
                 stats.n_brentq_aq += 1
@@ -468,17 +564,19 @@ def _edge_crossing_t(
     base_pe: np.ndarray,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> float | None:
-    """Parametric crossing along one edge, cached per (cell, edge, cat pair)."""
+    """Parametric crossing along one edge, cached per physical edge and cat pair."""
     cached = evaluator.crossing_t_lookup(i, j, edge, cat_a, cat_b)
     if cached is not _CROSSING_UNCACHED:
         if stats is not None:
             stats.n_crossing_cache_hits += 1
         return cached  # type: ignore[return-value]
     ph0, pe0, ph1, pe1 = _edge_coords(i, j, edge, base_ph, base_pe)
+    edge_tol = stability_tol if "none" in (cat_a, cat_b) else tol
     t = _find_crossing_brentq(
-        evaluator, cat_a, cat_b, ph0, pe0, ph1, pe1, tol=tol, stats=stats
+        evaluator, cat_a, cat_b, ph0, pe0, ph1, pe1, tol=edge_tol, stats=stats
     )
     evaluator.store_crossing_t(i, j, edge, cat_a, cat_b, t)
     return t
@@ -509,15 +607,16 @@ def _traced_cell(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]] | None:
     """Exact dividing-line geometry (+ optional boundary segment) for a 2-cat cell.
 
     The two edge crossings define a straight dividing line. We emit it in *local*
     fine-node coordinates (0..factor) together with the category on each side, so
-    the display can build a continuous signed-distance field and recover smooth,
-    sub-grid fills that coincide exactly with the boundary line. Returns ``None``
-    if a bracket is lost or the cell is a saddle (caller falls back to sampling).
+    the display can clip the cell rectangle with the same divide used for the
+    world-space boundary segment. Returns ``None`` if a bracket is lost or the
+    cell is a saddle (caller falls back to sampling).
     """
     pts_local: list[tuple[float, float]] = []
     pts_world: list[tuple[float, float]] = []
@@ -527,7 +626,8 @@ def _traced_cell(
         if ca == cb:
             continue
         t = _edge_crossing_t(
-            evaluator, ca, cb, i, j, edge, base_ph, base_pe, tol=tol, stats=stats
+            evaluator, ca, cb, i, j, edge, base_ph, base_pe,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if t is None:
             return None
@@ -607,6 +707,7 @@ def _collect_edge_crossings(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> dict[int, tuple[tuple[float, float], tuple[float, float]]] | None:
     """Edge crossings keyed by edge index -> (local_xy, world_xy)."""
@@ -617,13 +718,33 @@ def _collect_edge_crossings(
         if ca == cb:
             continue
         t = _edge_crossing_t(
-            evaluator, ca, cb, i, j, edge, base_ph, base_pe, tol=tol, stats=stats
+            evaluator, ca, cb, i, j, edge, base_ph, base_pe,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if t is None:
             return None
         ph0, pe0, ph1, pe1 = _edge_coords(i, j, edge, base_ph, base_pe)
         out[edge] = (_edge_local_point(edge, t, factor), _interp_point(t, ph0, pe0, ph1, pe1))
     return out
+
+
+def _intersect_lines(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    p4: tuple[float, float],
+) -> tuple[float, float] | None:
+    """Intersection of infinite lines (p1–p2) and (p3–p4), or None if parallel."""
+    x1, y1 = p1
+    x2, y2 = p2
+    x3, y3 = p3
+    x4, y4 = p4
+    den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+    if abs(den) < 1e-18:
+        return None
+    a = x1 * y2 - y1 * x2
+    b = x3 * y4 - y3 * x4
+    return (a * (x3 - x4) - (x1 - x2) * b) / den, (a * (y3 - y4) - (y1 - y2) * b) / den
 
 
 def _find_interior_point_2d(
@@ -640,11 +761,11 @@ def _find_interior_point_2d(
     tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[float, float] | None:
-    """Locate a point where two independent pair-scalars vanish (triple point)."""
-    fn_ab, _ = _resolve_pair_scalar(
+    """Fallback: locate a point where two pair-scalars vanish (PHREEQC 2D root)."""
+    fn_ab, _ = evaluator.resolve_pair(
         cat_a, cat_b, evaluator.solid_phases, evaluator.collisions
     )
-    fn_ac, _ = _resolve_pair_scalar(
+    fn_ac, _ = evaluator.resolve_pair(
         cat_a, cat_c, evaluator.solid_phases, evaluator.collisions
     )
     if fn_ab is None or fn_ac is None:
@@ -764,6 +885,142 @@ def _ray_segments_from_point(
     for _edge, (_loc, (wx, wy)) in crossings.items():
         segs.append({"x": [tx, wx], "y": [ty, wy]})
     return segs
+
+
+def _neighbor_of_edge(i: int, j: int, edge: int) -> tuple[int, int, int]:
+    """Return ``(ni, nj, neighbor_shared_edge)`` across cell edge ``edge``."""
+    if edge == 0:
+        return i, j - 1, 2
+    if edge == 1:
+        return i + 1, j, 3
+    if edge == 2:
+        return i, j + 1, 0
+    return i - 1, j, 1
+
+
+def _pair_line_from_neighbor(
+    evaluator: PointEvaluator,
+    corners: tuple[str, str, str, str],
+    i: int,
+    j: int,
+    edge: int,
+    cat_fn: Callable[[dict], str],
+    base_ij: dict[tuple[int, int], Any],
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    factor: int,
+    *,
+    tol: float,
+    stability_tol: float,
+    stats: TraceStats | None = None,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Straight pair-boundary line from a neighboring 2-category chord.
+
+    The neighbor's two edge zeros define the classic straight dividing line for
+    that category pair (same geometry already drawn for 2-cat cells).
+    """
+    ca = corners[edge]
+    cb = corners[(edge + 1) % 4]
+    pair = frozenset((ca, cb))
+    ni, nj, _n_edge = _neighbor_of_edge(i, j, edge)
+    if ni < 0 or nj < 0 or ni >= len(base_ph) - 1 or nj >= len(base_pe) - 1:
+        return None
+    try:
+        n_corners = _corner_cats(ni, nj, cat_fn, base_ij)
+    except (KeyError, TypeError, ValueError):
+        return None
+    if len(set(n_corners)) != 2:
+        return None
+    # Neighbor must be the same pair (both corners from {ca, cb}).
+    if frozenset(n_corners) != pair:
+        return None
+    n_cross = _collect_edge_crossings(
+        evaluator, n_corners, ni, nj, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
+    )
+    if not n_cross or len(n_cross) != 2:
+        return None
+    pts = [(float(w[0]), float(w[1])) for _loc, w in n_cross.values()]
+    if (pts[0][0] - pts[1][0]) ** 2 + (pts[0][1] - pts[1][1]) ** 2 <= 1e-24:
+        return None
+    return pts[0], pts[1]
+
+
+def _geometric_triple_point(
+    evaluator: PointEvaluator,
+    corners: tuple[str, str, str, str],
+    i: int,
+    j: int,
+    crossings: dict[int, tuple[tuple[float, float], tuple[float, float]]],
+    cat_fn: Callable[[dict], str],
+    base_ij: dict[tuple[int, int], Any],
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    factor: int,
+    *,
+    tol: float,
+    stability_tol: float,
+    stats: TraceStats | None = None,
+) -> tuple[float, float] | None:
+    """Classic Y hub: intersection of straight pair-boundary lines.
+
+    Each mixed edge contributes the line of its neighboring 2-category chord.
+    Any two non-parallel lines intersect at the triple point; prefer an
+    intersection that lies inside the cell.
+    """
+    lines: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for edge in crossings:
+        line = _pair_line_from_neighbor(
+            evaluator,
+            corners,
+            i,
+            j,
+            edge,
+            cat_fn,
+            base_ij,
+            base_ph,
+            base_pe,
+            factor,
+            tol=tol,
+            stability_tol=stability_tol,
+            stats=stats,
+        )
+        if line is not None:
+            lines.append(line)
+    if len(lines) < 2:
+        return None
+
+    ph_lo, ph_hi, pe_lo, pe_hi = _cell_pe_ph_bounds(i, j, base_ph, base_pe)
+    margin_ph = 0.02 * max(ph_hi - ph_lo, 1e-15)
+    margin_pe = 0.02 * max(pe_hi - pe_lo, 1e-15)
+    best: tuple[float, float] | None = None
+    best_pen = math.inf
+    for a in range(len(lines)):
+        for b in range(a + 1, len(lines)):
+            hit = _intersect_lines(lines[a][0], lines[a][1], lines[b][0], lines[b][1])
+            if hit is None:
+                continue
+            ph, pe = float(hit[0]), float(hit[1])
+            # Soft interior preference; allow slight overshoot then clamp score.
+            pen = 0.0
+            if ph < ph_lo + margin_ph:
+                pen += (ph_lo + margin_ph - ph) ** 2
+            elif ph > ph_hi - margin_ph:
+                pen += (ph - (ph_hi - margin_ph)) ** 2
+            if pe < pe_lo + margin_pe:
+                pen += (pe_lo + margin_pe - pe) ** 2
+            elif pe > pe_hi - margin_pe:
+                pen += (pe - (pe_hi - margin_pe)) ** 2
+            if not (ph_lo <= ph <= ph_hi and pe_lo <= pe <= pe_hi):
+                pen += 1.0
+            if pen < best_pen:
+                best_pen = pen
+                best = (ph, pe)
+    if best is None:
+        return None
+    if not (ph_lo <= best[0] <= ph_hi and pe_lo <= best[1] <= pe_hi):
+        return None
+    return best
 
 
 def _line_constraint(
@@ -914,22 +1171,24 @@ def _trace_triple_cell(
     base_pe: np.ndarray,
     factor: int,
     *,
+    cat_fn: Callable[[dict], str],
+    base_ij: dict[tuple[int, int], Any],
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[dict[tuple[int, int], str], list[dict[str, Any]], dict[str, Any] | None] | None:
     """3-category cell: edge brentq plus convex per-category fill regions.
 
-    Three crossings => a genuine triple point (located by a 2D scalar root, or
-    the crossing centroid when a category is ``none`` and one scalar is the
-    convergence step). Four crossings => the doubled category forms a band, which
-    needs no interior point. Both yield convex line-bounded regions so fills are
-    smooth and coincide with the boundary segments.
+    Three crossings => classic Y hub from geometric intersection of the straight
+    pair-boundary lines (neighbor 2-cat chords). Soft 2D scalar root is only a
+    fallback when neighbors do not supply two lines. Four crossings => band.
     """
     distinct = list(dict.fromkeys(corners))
     if len(distinct) != 3:
         return None
     crossings = _collect_edge_crossings(
-        evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+        evaluator, corners, i, j, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
     )
     if not crossings:
         return None
@@ -950,49 +1209,96 @@ def _trace_triple_cell(
         sum(w[0] for _, w in crossings.values()) / len(crossings),
         sum(w[1] for _, w in crossings.values()) / len(crossings),
     )
-    T_world: tuple[float, float] | None = None
-    # Try each category as the reference for the 2x2 scalar system.
-    for ref, other_a, other_b in (
-        (distinct[0], distinct[1], distinct[2]),
-        (distinct[1], distinct[0], distinct[2]),
-        (distinct[2], distinct[0], distinct[1]),
-    ):
-        T_world = _find_interior_point_2d(
-            evaluator,
-            ref,
-            other_a,
-            other_b,
-            ph_lo,
-            ph_hi,
-            pe_lo,
-            pe_hi,
-            x0,
-            tol=tol,
-            stats=stats,
-        )
-        if T_world is not None:
-            break
-    # Crossing centroid: an always-interior junction estimate. Used when the 2D
-    # solve cannot converge (a category is ``none``, so one pair-scalar is the
-    # convergence step) and as a guard when the solver clamps T onto a cell edge
-    # (degenerate: it collapses a sector and leaves a fill gap).
-    T_loc = (
-        None
-        if T_world is None
-        else _world_to_local_xy(T_world[0], T_world[1], i, j, base_ph, base_pe, factor)
+    T_world = _geometric_triple_point(
+        evaluator,
+        corners,
+        i,
+        j,
+        crossings,
+        cat_fn,
+        base_ij,
+        base_ph,
+        base_pe,
+        factor,
+        tol=tol,
+        stability_tol=stability_tol,
+        stats=stats,
+    )
+    if T_world is None:
+        # Fallback when neighbors are missing / not simple 2-cat chords.
+        for ref, other_a, other_b in (
+            (distinct[0], distinct[1], distinct[2]),
+            (distinct[1], distinct[0], distinct[2]),
+            (distinct[2], distinct[0], distinct[1]),
+        ):
+            T_world = _find_interior_point_2d(
+                evaluator,
+                ref,
+                other_a,
+                other_b,
+                ph_lo,
+                ph_hi,
+                pe_lo,
+                pe_hi,
+                x0,
+                tol=tol,
+                stats=stats,
+            )
+            if T_world is not None:
+                break
+    if T_world is None:
+        # Last resort: crossing centroid keeps fills contiguous vs stair fallback.
+        T_world = x0
+    T_loc = _world_to_local_xy(
+        T_world[0], T_world[1], i, j, base_ph, base_pe, factor
     )
     margin = 0.05 * factor
-    if T_loc is None or not (
-        margin <= T_loc[0] <= factor - margin and margin <= T_loc[1] <= factor - margin
+    if not (
+        margin <= T_loc[0] <= factor - margin
+        and margin <= T_loc[1] <= factor - margin
     ):
         T_world = x0
         T_loc = _world_to_local_xy(
             T_world[0], T_world[1], i, j, base_ph, base_pe, factor
         )
+
     regions = _triple_regions(corners, T_loc, crossings, factor)
+    if not regions:
+        return None
     node_cats = _regions_node_cats(regions, factor)
     segments = _ray_segments_from_point(T_world, crossings)
     return node_cats, segments, {"i": i, "j": j, "regions": regions}
+
+
+def _saddle_regions(
+    corners: tuple[str, str, str, str],
+    crossings: dict[int, tuple[tuple[float, float], tuple[float, float]]],
+    factor: int,
+) -> list[dict[str, Any]]:
+    """2-category checkerboard cell: one triangle per corner (4 regions).
+
+    Each corner is cut off by the line joining the crossings on its two adjacent
+    edges — same local construction as the singleton wedges of ``_band_regions``.
+    Without these region fills, saddle cells fall through to discrete fallback
+    masks and show white staircase seams next to smoothly traced neighbors.
+    """
+    regions: list[dict[str, Any]] = []
+    for k in range(4):
+        e_prev, e_cur = (k - 1) % 4, k
+        if e_prev not in crossings or e_cur not in crossings:
+            return []
+        (px, py) = crossings[e_prev][0]
+        (qx, qy) = crossings[e_cur][0]
+        cx, cy = _CORNER_LOCAL[k]
+        regions.append(
+            {
+                "cat": corners[k],
+                "lines": [
+                    _line_constraint(px, py, qx, qy, cx * factor, cy * factor),
+                ],
+            }
+        )
+    return regions
 
 
 def _saddle_node_cats(
@@ -1044,13 +1350,19 @@ def _trace_saddle_cell(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
-) -> tuple[dict[tuple[int, int], str], list[dict[str, Any]]] | None:
+) -> tuple[
+    dict[tuple[int, int], str],
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+] | None:
     """2-category cell with four edge crossings (saddle topology)."""
     if len(set(corners)) != 2:
         return None
     crossings = _collect_edge_crossings(
-        evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+        evaluator, corners, i, j, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
     )
     if crossings is None or len(crossings) != 4:
         return None
@@ -1070,7 +1382,11 @@ def _trace_saddle_cell(
             "y": [crossings[1][1][1], crossings[3][1][1]],
         },
     ]
-    return node_cats, segments
+    regions = _saddle_regions(corners, crossings, factor)
+    region_rec = (
+        {"i": i, "j": j, "regions": regions} if regions else None
+    )
+    return node_cats, segments, region_rec
 
 
 def _classify_cell(
@@ -1084,6 +1400,7 @@ def _classify_cell(
     factor: int,
     *,
     tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> tuple[
     dict[str, Any] | None,
@@ -1105,9 +1422,17 @@ def _classify_cell(
     if len(distinct) <= 1:
         return None, None, [], None, False
 
+    from .gas_limits import synthetic_gas_label_set
+
+    if distinct & synthetic_gas_label_set(evaluator._params):
+        return None, None, [], None, False
+
     if len(distinct) == 3:
         triple = _trace_triple_cell(
-            evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+            evaluator, corners, i, j, base_ph, base_pe, factor,
+            cat_fn=cat_fn,
+            base_ij=base_ij,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if triple is not None:
             node_cats, segments, region_rec = triple
@@ -1117,13 +1442,14 @@ def _classify_cell(
 
     if len(distinct) == 2:
         saddle = _trace_saddle_cell(
-            evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+            evaluator, corners, i, j, base_ph, base_pe, factor,
+            tol=tol, stability_tol=stability_tol, stats=stats,
         )
         if saddle is not None:
-            node_cats, segments = saddle
+            node_cats, segments, region_rec = saddle
             if stats is not None:
                 stats.n_cells_saddle_traced += 1
-            return None, node_cats, segments, None, False
+            return None, node_cats, segments, region_rec, False
 
     if len(distinct) > 2:
         if stats is not None:
@@ -1131,7 +1457,8 @@ def _classify_cell(
         return None, None, [], None, True
 
     traced = _traced_cell(
-        evaluator, corners, i, j, base_ph, base_pe, factor, tol=tol, stats=stats
+        evaluator, corners, i, j, base_ph, base_pe, factor,
+        tol=tol, stability_tol=stability_tol, stats=stats,
     )
     if traced is None:
         return None, None, [], None, True
@@ -1202,7 +1529,7 @@ def _trace_stability_cell(
     base_pe: np.ndarray,
     base_ij: dict[tuple[int, int], Any],
     *,
-    tol: float,
+    stability_tol: float,
     stats: TraceStats | None = None,
 ) -> list[dict[str, Any]]:
     """Trace converged / failed transition edges (stability limit)."""
@@ -1217,9 +1544,16 @@ def _trace_stability_cell(
         if c0 == c1:
             continue
         ph0, pe0, ph1, pe1 = _edge_coords(i, j, edge, base_ph, base_pe)
-        t = _find_convergence_crossing(
-            evaluator, ph0, pe0, ph1, pe1, tol=tol, stats=stats
-        )
+        cached = evaluator.convergence_crossing_t_lookup(i, j, edge)
+        if cached is not _CROSSING_UNCACHED:
+            if stats is not None:
+                stats.n_crossing_cache_hits += 1
+            t = cached  # type: ignore[assignment]
+        else:
+            t = _find_convergence_crossing(
+                evaluator, ph0, pe0, ph1, pe1, tol=stability_tol, stats=stats
+            )
+            evaluator.store_convergence_crossing_t(i, j, edge, t)
         if t is None:
             continue
         x, y = _interp_point(t, ph0, pe0, ph1, pe1)
@@ -1238,13 +1572,23 @@ def _corner_seed(
     cells: list[tuple[int, int]],
     base_ij: dict[tuple[int, int], Any],
 ) -> dict[tuple[int, int], dict]:
+    """Seed grid nodes for traced cells plus a 1-cell halo.
+
+    The halo lets triple-point geometry read neighboring 2-category chords even
+    when that neighbor is not in the same worker chunk.
+    """
     needed: set[tuple[int, int]] = set()
     for i, j in cells:
-        for di, dj in ((0, 0), (1, 0), (1, 1), (0, 1)):
-            needed.add((i + di, j + dj))
+        for dj in (-1, 0, 1):
+            for di in (-1, 0, 1):
+                for cj in (0, 1):
+                    for ci in (0, 1):
+                        needed.add((i + di + ci, j + dj + cj))
     out: dict[tuple[int, int], dict] = {}
     for key in needed:
-        r = base_ij[key]
+        r = base_ij.get(key)
+        if r is None:
+            continue
         out[key] = r if isinstance(r, dict) else asdict(r)
     return out
 
@@ -1258,15 +1602,21 @@ def _trace_cells_batch(
     corner_ij: dict[tuple[int, int], dict],
     *,
     tol: float,
+    stability_tol: float,
     factor: int,
+    specs: list[LayerSpec] | None = None,
+    resolve_pair: Callable | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], TraceStats]:
     """Trace all layers + stability limits for a batch of cells (one worker)."""
     seed: dict[tuple[float, float], dict] = {}
     for row in corner_ij.values():
-        seed[_point_key(float(row["ph"]), float(row["pe"]))] = row
+        seed[point_key(float(row["ph"]), float(row["pe"]))] = row
 
     evaluator = PointEvaluator(trace_params, seed)
-    specs = layer_specs(trace_params, db_path)
+    if resolve_pair is not None:
+        evaluator.resolve_pair = resolve_pair
+    if specs is None:
+        specs = layer_specs(trace_params, db_path)
     stats = TraceStats()
     # Per layer: clean-cell dividing lines (smooth fills), sampled fallback nodes,
     # and exact boundary segments (lines).
@@ -1296,6 +1646,7 @@ def _trace_cells_batch(
                 corner_ij,
                 factor,
                 tol=tol,
+                stability_tol=stability_tol,
                 stats=stats,
             )
             if need_fallback:
@@ -1334,7 +1685,8 @@ def _trace_cells_batch(
     for i, j in cells:
         stability.extend(
             _trace_stability_cell(
-                evaluator, i, j, base_ph, base_pe, corner_ij, tol=tol, stats=stats
+                evaluator, i, j, base_ph, base_pe, corner_ij,
+                stability_tol=stability_tol, stats=stats,
             )
         )
 
@@ -1362,33 +1714,97 @@ def _trace_cells_batch(
     return layers_out, stability, stats
 
 
-def _trace_worker_init(dll_path: str, db_path: str) -> None:
-    global _WORKER_PQ
+_WORKER_PQ = None
+_WORKER_TRACE_PARAMS: GridJobParams | None = None
+_WORKER_BASE_PH: np.ndarray | None = None
+_WORKER_BASE_PE: np.ndarray | None = None
+_WORKER_TOL: float = 0.0
+_WORKER_STABILITY_TOL: float = 0.0
+_WORKER_FACTOR: int = 1
+_WORKER_TRACE_MODE: str = "predominance"
+
+
+def _normalize_trace_mode(trace_mode: str) -> str:
+    """Map legacy mineral aliases; leave predominance unchanged.
+
+    ``mineral_si`` is a historical alias for ``mineral_costability`` (post-precip
+    moles joins under EQUI) — not free-SI co-stability.
+    """
+    mode = str(trace_mode or "predominance")
+    if mode in ("mineral", "mineral_moles"):
+        return "mineral_moles"
+    if mode in ("mineral_si", "mineral_costability"):
+        return "mineral_costability"
+    return mode
+
+
+def _trace_worker_init(
+    dll_path: str,
+    db_path: str,
+    trace_params_dict: dict[str, Any],
+    base_ph: list[float],
+    base_pe: list[float],
+    tol: float,
+    stability_tol: float,
+    factor: int,
+    trace_mode: str = "predominance",
+) -> None:
+    global _WORKER_PQ, _WORKER_TRACE_PARAMS, _WORKER_BASE_PH, _WORKER_BASE_PE
+    global _WORKER_TOL, _WORKER_STABILITY_TOL, _WORKER_FACTOR, _WORKER_TRACE_MODE
     _WORKER_PQ = init_phreeqc(dll_path, db_path)
+    _WORKER_TRACE_PARAMS = grid_job_params_from_dict(trace_params_dict)
+    _WORKER_BASE_PH = np.asarray(base_ph, dtype=float)
+    _WORKER_BASE_PE = np.asarray(base_pe, dtype=float)
+    _WORKER_TOL = float(tol)
+    _WORKER_STABILITY_TOL = float(stability_tol)
+    _WORKER_FACTOR = int(factor)
+    _WORKER_TRACE_MODE = _normalize_trace_mode(trace_mode)
+
+
+def _trace_mode_plugins(trace_mode: str, params: GridJobParams, db_path: str):
+    """Return ``(specs, resolve_pair)`` for predominance or mineral-stability."""
+    mode = _normalize_trace_mode(trace_mode)
+    if mode in ("mineral_moles", "mineral_costability"):
+        from .mineral_stability_trace import (
+            mineral_layer_specs,
+            mineral_resolve_pair_for_mode,
+        )
+
+        category_mode = (
+            "costability" if mode == "mineral_costability" else "moles"
+        )
+        return (
+            mineral_layer_specs(params, db_path, category_mode=category_mode),
+            mineral_resolve_pair_for_mode(category_mode),
+        )
+    return layer_specs(params, db_path), _resolve_pair_scalar
 
 
 def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
     """Process-pool entry: trace a chunk of boundary cells."""
     cells: list[tuple[int, int]] = job["cells"]
-    trace_params = grid_job_params_from_dict(job["trace_params"])
-    db_path = job["db_path"]
-    base_ph = np.asarray(job["base_ph"], dtype=float)
-    base_pe = np.asarray(job["base_pe"], dtype=float)
     corner_ij = {
         tuple(int(p) for p in k.split(",")): v for k, v in job["corner_ij"].items()
     }
-    tol = job["tol"]
-    factor = int(job["factor"])
+    assert _WORKER_TRACE_PARAMS is not None
+    assert _WORKER_BASE_PH is not None
+    assert _WORKER_BASE_PE is not None
 
+    specs, resolve_pair = _trace_mode_plugins(
+        _WORKER_TRACE_MODE, _WORKER_TRACE_PARAMS, _WORKER_TRACE_PARAMS.db_path
+    )
     layers_out, stability, stats = _trace_cells_batch(
         cells,
-        trace_params,
-        db_path,
-        base_ph,
-        base_pe,
+        _WORKER_TRACE_PARAMS,
+        _WORKER_TRACE_PARAMS.db_path,
+        _WORKER_BASE_PH,
+        _WORKER_BASE_PE,
         corner_ij,
-        tol=tol,
-        factor=factor,
+        tol=_WORKER_TOL,
+        stability_tol=_WORKER_STABILITY_TOL,
+        factor=_WORKER_FACTOR,
+        specs=specs,
+        resolve_pair=resolve_pair,
     )
     return {
         "layers": layers_out,
@@ -1397,34 +1813,48 @@ def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _morton_code(i: int, j: int) -> int:
+    """2D Morton (Z-order) key for grid cell lower-left index ``(i, j)``."""
+    code = 0
+    for bit in range(16):
+        code |= ((i >> bit) & 1) << (2 * bit + 1)
+        code |= ((j >> bit) & 1) << (2 * bit)
+    return code
+
+
+def _sort_cells_morton(cells: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    return sorted(cells, key=lambda ij: _morton_code(ij[0], ij[1]))
+
+
 def _chunk_cells(
     cells: list[tuple[int, int]],
     *,
     workers: int,
-    multiplier: int | None = None,
-    min_cells_per_chunk: int | None = None,
 ) -> list[list[tuple[int, int]]]:
-    """Split cells into many small chunks for dynamic pool load-balancing."""
+    """Split mixed cells into worker chunks (Morton order, contiguous blocks)."""
     if not cells:
         return []
-    mult = multiplier if multiplier is not None else config.TRACE_CHUNK_MULTIPLIER
-    min_chunk = (
-        min_cells_per_chunk
-        if min_cells_per_chunk is not None
-        else config.TRACE_MIN_CELLS_PER_CHUNK
-    )
+    mult = config.TRACE_CHUNK_MULTIPLIER
+    min_chunk = config.TRACE_MIN_CELLS_PER_CHUNK
     if workers <= 1 or len(cells) <= min_chunk:
         return [cells]
 
+    ordered = _sort_cells_morton(cells)
+
     target_chunks = workers * max(1, mult)
-    max_chunks = max(1, len(cells) // min_chunk)
-    n_chunks = min(target_chunks, max_chunks, len(cells))
+    max_chunks = max(1, len(ordered) // min_chunk)
+    n_chunks = min(target_chunks, max_chunks, len(ordered))
     n_chunks = max(n_chunks, workers)
 
-    chunks: list[list[tuple[int, int]]] = [[] for _ in range(n_chunks)]
-    for idx, cell in enumerate(cells):
-        chunks[idx % n_chunks].append(cell)
-    return [c for c in chunks if c]
+    base, extra = divmod(len(ordered), n_chunks)
+    chunks: list[list[tuple[int, int]]] = []
+    start = 0
+    for ci in range(n_chunks):
+        size = base + (1 if ci < extra else 0)
+        if size:
+            chunks.append(ordered[start : start + size])
+            start += size
+    return chunks
 
 
 def run_boundary_trace(
@@ -1436,15 +1866,33 @@ def run_boundary_trace(
     base_ij: dict[tuple[int, int], GridPointResult],
     cells: list[tuple[int, int]],
     tolerance: float | None = None,
+    stability_tolerance: float | None = None,
     refine_factor: int | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
     max_workers: int | None = None,
+    job_id: str | None = None,
+    trace_mode: str = "predominance",
 ) -> tuple[dict[str, Any], TraceStats]:
-    """Trace boundaries across all plottable layers for mixed base cells."""
+    """Trace boundaries across all plottable layers for mixed base cells.
+
+    ``trace_mode``:
+      - ``"predominance"`` (default): SI solid + aqueous layers (unchanged)
+      - ``"mineral_moles"`` (alias ``"mineral"``): assemblage argmax-moles fills
+      - ``"mineral_costability"`` (alias ``"mineral_si"``): assemblage
+        post-precip co-stability (all moles > 0 joined)
+    """
+    check_abort(job_id)
     tol = tolerance or config.BOUNDARY_TRACE_TOLERANCE
+    stability_tol = stability_tolerance or config.BOUNDARY_TRACE_STABILITY_TOLERANCE
     factor = refine_factor or config.ADAPTIVE_REFINE_FACTOR
-    specs = layer_specs(params, db_path)
-    species = collect_trace_species(params, base_ij, cells, specs)
+    mode = _normalize_trace_mode(trace_mode)
+    specs, resolve_pair = _trace_mode_plugins(mode, params, db_path)
+    if mode in ("mineral_moles", "mineral_costability"):
+        from .mineral_stability_trace import collect_mineral_trace_species
+
+        species = collect_mineral_trace_species(params, base_ij, cells, specs)
+    else:
+        species = collect_trace_species(params, base_ij, cells, specs)
     trace_params = replace(
         params,
         aq_species_molality=species,
@@ -1464,8 +1912,12 @@ def run_boundary_trace(
             base_pe,
             corner_ij,
             tol=tol,
+            stability_tol=stability_tol,
             factor=factor,
+            specs=specs,
+            resolve_pair=resolve_pair,
         )
+        check_abort(job_id)
         if progress_cb:
             progress_cb(1, 1)
     else:
@@ -1473,57 +1925,79 @@ def run_boundary_trace(
         for chunk in chunks:
             corner_ij = _corner_seed(chunk, base_ij)
             serial_corner = {f"{i},{j}": v for (i, j), v in corner_ij.items()}
-            jobs.append(
-                {
-                    "cells": chunk,
-                    "trace_params": asdict(trace_params),
-                    "db_path": db_path,
-                    "base_ph": base_ph.tolist(),
-                    "base_pe": base_pe.tolist(),
-                    "corner_ij": serial_corner,
-                    "tol": tol,
-                    "factor": factor,
-                }
-            )
+            jobs.append({"cells": chunk, "corner_ij": serial_corner})
 
         layers_out = {}
         stability: list[dict[str, Any]] = []
         stats = TraceStats()
         done = 0
-        with ProcessPoolExecutor(
+        with managed_process_pool(
+            job_id,
             max_workers=workers,
             initializer=_trace_worker_init,
-            initargs=(params.dll_path, params.db_path),
+            initargs=(
+                params.dll_path,
+                params.db_path,
+                asdict(trace_params),
+                base_ph.tolist(),
+                base_pe.tolist(),
+                tol,
+                stability_tol,
+                factor,
+                mode,
+            ),
         ) as pool:
-            for result in pool.map(_trace_worker_job, jobs):
-                chunk_stats = TraceStats(**result["stats"])
-                _merge_stats(stats, chunk_stats)
-                for layer_id, data in result["layers"].items():
-                    if layer_id not in layers_out:
-                        layers_out[layer_id] = {
-                            "node_fi": [],
-                            "node_fj": [],
-                            "node_cat": [],
-                            "cell_lines": [],
-                            "cell_regions": [],
-                            "boundaries": [],
-                        }
-                    layers_out[layer_id]["node_fi"].extend(data["node_fi"])
-                    layers_out[layer_id]["node_fj"].extend(data["node_fj"])
-                    layers_out[layer_id]["node_cat"].extend(data["node_cat"])
-                    layers_out[layer_id]["cell_lines"].extend(
-                        data.get("cell_lines", [])
-                    )
-                    layers_out[layer_id]["cell_regions"].extend(
-                        data.get("cell_regions", data.get("cell_wedges", []))
-                    )
-                    layers_out[layer_id]["boundaries"].extend(
-                        data.get("boundaries", [])
-                    )
-                stability.extend(result["stability"])
-                done += 1
-                if progress_cb:
-                    progress_cb(done, len(chunks))
+            try:
+                futures = {
+                    pool.submit(_trace_worker_job, job): idx
+                    for idx, job in enumerate(jobs)
+                }
+                completed: list[dict[str, Any] | None] = [None] * len(jobs)
+                for future, idx in iter_futures_abortable(futures, job_id=job_id):
+                    completed[idx] = future.result(timeout=0.1)
+                    done += 1
+                    if progress_cb:
+                        progress_cb(done, len(chunks))
+
+                # Preserve the old deterministic Morton-chunk merge order even
+                # though progress is counted as chunks complete.
+                for result in completed:
+                    if result is None:
+                        continue
+                    chunk_stats = TraceStats(**result["stats"])
+                    _merge_stats(stats, chunk_stats)
+                    for layer_id, data in result["layers"].items():
+                        if layer_id not in layers_out:
+                            layers_out[layer_id] = {
+                                "node_fi": [],
+                                "node_fj": [],
+                                "node_cat": [],
+                                "cell_lines": [],
+                                "cell_regions": [],
+                                "boundaries": [],
+                            }
+                        layers_out[layer_id]["node_fi"].extend(data["node_fi"])
+                        layers_out[layer_id]["node_fj"].extend(data["node_fj"])
+                        layers_out[layer_id]["node_cat"].extend(data["node_cat"])
+                        layers_out[layer_id]["cell_lines"].extend(
+                            data.get("cell_lines", [])
+                        )
+                        layers_out[layer_id]["cell_regions"].extend(
+                            data.get("cell_regions", data.get("cell_wedges", []))
+                        )
+                        layers_out[layer_id]["boundaries"].extend(
+                            data.get("boundaries", [])
+                        )
+                    stability.extend(result["stability"])
+            except Exception as exc:
+                from ..services.job_control import JobAborted
+
+                if isinstance(exc, JobAborted):
+                    raise
+                check_abort(job_id)
+                raise RuntimeError(
+                    f"Boundary-trace worker pool failed ({type(exc).__name__}): {exc}"
+                ) from exc
 
         stats.n_stability_segments = len(stability)
 
@@ -1531,21 +2005,29 @@ def run_boundary_trace(
 
     from .gas_limits import trace_gas_limit_segments
 
+    gas_eval = PointEvaluator(
+        trace_params,
+        {
+            point_key(float(r.ph), float(r.pe)): asdict(r)
+            for r in base_ij.values()
+        },
+    )
+    gas_eval.resolve_pair = resolve_pair
     gas_segments = trace_gas_limit_segments(
         trace_params,
         base_ph=base_ph,
         base_pe=base_pe,
         base_ij=base_ij,
-        evaluator=PointEvaluator(trace_params, {
-            _point_key(float(r.ph), float(r.pe)): asdict(r) for r in base_ij.values()
-        }),
+        evaluator=gas_eval,
         tolerance=tol,
     )
     stats.n_gas_segments = len(gas_segments)
 
     trace_bundle: dict[str, Any] = {
         "method": "traced",
+        "trace_mode": mode,
         "tolerance": tol,
+        "stability_tolerance": stability_tol,
         "refine_factor": factor,
         "top_aq_species_per_element": trace_params.top_aq_species_per_element,
         "aq_species": list(species),
@@ -1568,6 +2050,7 @@ def run_boundary_trace(
             "n_brentq_si": stats.n_brentq_si,
             "n_brentq_aq": stats.n_brentq_aq,
             "n_brentq_conv": stats.n_brentq_conv,
+            "n_brentq_mol": stats.n_brentq_mol,
             "n_stability_segments": stats.n_stability_segments,
             "n_gas_segments": stats.n_gas_segments,
             "n_cells_complex_fallback": stats.n_cells_complex_fallback,

@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -13,12 +14,25 @@ from .. import config
 from ..api.dependencies import resolve_db_record
 from ..api.models import ComputeRequest
 from ..chemistry.units import is_valid_unit, normalize_unit, totals_to_mmol_kgw
-from ..diagram.packer import count_layer_pack_steps, effective_layer_elements, pack_grid_results
+from ..diagram.packer import (
+    count_layer_pack_steps,
+    effective_layer_elements,
+    pack_grid_results,
+    pack_mineral_grid_results,
+)
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
-from ..diagram.vectors import pack_traced_display
+from ..diagram.vectors import pack_traced_display, pack_traced_mineral_display
 from ..phreeqc.engine import GridJobParams, validate_phreeqc_setup
 from ..phreeqc.adaptive import run_adaptive_boundary_sweep
+from ..phreeqc.mineral_stability_trace import run_adaptive_mineral_stability_sweep
 from ..phreeqc.sweep import run_grid_sweep
+from .job_control import (
+    JobAborted,
+    check_abort,
+    clear_job_control,
+    register_cancel_event,
+    request_abort,
+)
 
 _jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = threading.Lock()
@@ -45,6 +59,102 @@ def _age_seconds(since: datetime | None, now: datetime) -> float | None:
     if since is None:
         return None
     return (now - since).total_seconds()
+
+
+def _wall_timeout_message(limit_sec: int | None = None) -> str:
+    limit = int(limit_sec if limit_sec is not None else config.JOB_WALL_TIMEOUT_SEC)
+    return f"Job exceeded wall-clock limit ({limit}s)."
+
+
+def _mark_job_terminal_error(
+    job_id: str,
+    *,
+    error: str,
+    error_code: str,
+    wall_timeout_sec: int | None = None,
+) -> bool:
+    """Mark a running job as terminal error. Caller may hold ``_jobs_lock`` or not."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return False
+        if job.get("status") not in ("running", "queued"):
+            # Already terminal — keep first error_code (e.g. timed_out).
+            return False
+        payload: dict[str, Any] = {
+            "status": "error",
+            "error": error,
+            "error_code": error_code,
+            "queue_position": None,
+            "finished_at": _utcnow().isoformat(),
+        }
+        if wall_timeout_sec is not None:
+            payload["wall_timeout_sec"] = int(wall_timeout_sec)
+        job.update(payload)
+        return True
+
+
+def abort_running_job(
+    job_id: str,
+    *,
+    reason: str,
+    error_code: str,
+    wall_timeout_sec: int | None = None,
+) -> bool:
+    """Hard-abort a job: signal cancel, kill ProcessPool children, mark error."""
+    request_abort(job_id, reason=reason, error_code=error_code)
+    return _mark_job_terminal_error(
+        job_id,
+        error=reason,
+        error_code=error_code,
+        wall_timeout_sec=wall_timeout_sec,
+    )
+
+
+def running_jobs_past_deadline(
+    now: datetime | None = None,
+    *,
+    limit_sec: int | None = None,
+) -> list[str]:
+    """Return job_ids of ``running`` jobs whose ``started_at`` exceeds the wall limit.
+
+    Only jobs with ``wall_timeout_armed`` (PHREEQC compute in progress) are
+    considered. Setup, packing, and stats are outside the wall clock.
+    """
+    now = now or _utcnow()
+    limit = int(limit_sec if limit_sec is not None else config.JOB_WALL_TIMEOUT_SEC)
+    overdue: list[str] = []
+    with _jobs_lock:
+        for job_id, job in _jobs.items():
+            if job.get("status") != "running":
+                continue
+            if not job.get("wall_timeout_armed"):
+                continue
+            started = _parse_dt(job.get("compute_started_at") or job.get("started_at"))
+            age = _age_seconds(started, now)
+            if age is not None and age > limit:
+                overdue.append(job_id)
+    return overdue
+
+
+def enforce_wall_timeouts(now: datetime | None = None) -> list[str]:
+    """Abort every running job past the wall-clock deadline. Returns aborted ids."""
+    limit = int(config.JOB_WALL_TIMEOUT_SEC)
+    reason = _wall_timeout_message(limit)
+    aborted: list[str] = []
+    for job_id in running_jobs_past_deadline(now, limit_sec=limit):
+        if abort_running_job(
+            job_id,
+            reason=reason,
+            error_code="timed_out",
+            wall_timeout_sec=limit,
+        ):
+            aborted.append(job_id)
+        else:
+            # Job may already be marked; still ensure pool kill.
+            request_abort(job_id, reason=reason, error_code="timed_out")
+            aborted.append(job_id)
+    return aborted
 
 
 def _prune_jobs_locked(now: datetime | None = None) -> int:
@@ -80,6 +190,7 @@ def _prune_jobs_locked(now: datetime | None = None) -> int:
 
 def _reaper_loop() -> None:
     while not _reaper_stop.wait(config.JOB_REAPER_INTERVAL_SEC):
+        enforce_wall_timeouts()
         with _jobs_lock:
             _prune_jobs_locked()
 
@@ -89,6 +200,7 @@ def start_job_reaper() -> None:
     if _reaper_started:
         return
     _reaper_started = True
+    _reaper_stop.clear()
     threading.Thread(target=_reaper_loop, daemon=True, name="phaser-job-reaper").start()
 
 
@@ -126,6 +238,7 @@ def _try_dispatch() -> None:
                 _jobs[job_id]["queue_wait_ms"] = (started - created).total_seconds() * 1000.0
             else:
                 _jobs[job_id]["queue_wait_ms"] = 0.0
+            register_cancel_event(job_id)
             _refresh_queue_positions_locked()
             to_start.append((job_id, body))
 
@@ -134,6 +247,7 @@ def _try_dispatch() -> None:
             target=_run_job_wrapper,
             args=(job_id, body),
             daemon=True,
+            name=f"phaser-job-{job_id[:8]}",
         ).start()
 
 
@@ -148,9 +262,47 @@ def create_job() -> str:
             "queue_position": len(_pending) + 1,
             "queue_size": len(_pending) + 1,
             "created_at": now,
+            # Touched on status/result reads; not used by the reaper (TTL uses created_at / finished_at).
             "last_seen_at": now,
         }
         _prune_jobs_locked()
+    return job_id
+
+
+def _queue_depth_locked() -> tuple[int, int, int, int, bool]:
+    """Return (running, queued, depth, max_queue, full). Caller must hold _jobs_lock."""
+    running = int(_running_count)
+    queued = len(_pending)
+    depth = running + queued
+    max_queue = int(config.MAX_QUEUE)
+    full = depth >= max_queue if max_queue > 0 else False
+    return running, queued, depth, max_queue, full
+
+
+def try_admit_compute_job(body: ComputeRequest) -> str | None:
+    """Create and enqueue a job if the queue has capacity. Returns job_id or None if full."""
+    with _jobs_lock:
+        _prune_jobs_locked()
+        _running, _queued, _depth, _max_queue, full = _queue_depth_locked()
+        if full:
+            return None
+        job_id = str(uuid.uuid4())
+        now = _utcnow().isoformat()
+        _jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "progress": 0.0,
+            "queue_position": len(_pending) + 1,
+            "queue_size": len(_pending) + 1,
+            "created_at": now,
+            "last_seen_at": now,
+        }
+        _pending.append((job_id, body))
+        _jobs[job_id]["queue_position"] = len(_pending)
+        _jobs[job_id]["queue_size"] = len(_pending)
+        _jobs[job_id]["queue_position_at_start"] = _running_count + (len(_pending) - 1)
+        _refresh_queue_positions_locked()
+    _try_dispatch()
     return job_id
 
 
@@ -160,7 +312,14 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         if job:
             job["last_seen_at"] = _utcnow().isoformat()
         _prune_jobs_locked()
-    return dict(job) if job else None
+        if not job:
+            return None
+        # Public view: omit non-JSON internals if any were attached.
+        return {
+            k: v
+            for k, v in job.items()
+            if not str(k).startswith("_")
+        }
 
 
 def get_job_result(job_id: str) -> dict[str, Any] | None:
@@ -179,22 +338,46 @@ def delete_job(job_id: str) -> bool:
         job = _jobs.get(job_id)
         if not job:
             return False
+        status = job.get("status")
 
-        if job.get("status") == "queued":
+        if status == "queued":
             _pending = deque((jid, body) for jid, body in _pending if jid != job_id)
             _refresh_queue_positions_locked()
+            clear_job_control(job_id)
             return _jobs.pop(job_id, None) is not None
 
-        if job.get("status") == "running":
-            # Let the worker finish; result will be discarded on delete after completion.
+        if status == "running":
+            # Hard-abort outside the lock so pool terminate cannot deadlock.
+            pass
+        else:
+            clear_job_control(job_id)
             return _jobs.pop(job_id, None) is not None
 
+    # running: kill workers, mark cancelled, drop record (slot frees in wrapper finally)
+    abort_running_job(
+        job_id,
+        reason="Job cancelled by client.",
+        error_code="cancelled",
+    )
+    with _jobs_lock:
+        clear_job_control(job_id)
         return _jobs.pop(job_id, None) is not None
 
 
 def run_compute_job(job_id: str, body: ComputeRequest) -> None:
+    """Enqueue an existing job. Prefer ``try_admit_compute_job`` for new work.
+
+    Refuses to enqueue when the queue is full so callers cannot bypass
+    ``MAX_QUEUE`` via ``create_job`` + ``run_compute_job``.
+    """
     with _jobs_lock:
         if job_id not in _jobs:
+            return
+        _r, _q, _d, _m, full = _queue_depth_locked()
+        if full:
+            # Drop the unused stub; admission belongs on try_admit_compute_job.
+            _jobs.pop(job_id, None)
+            clear_job_control(job_id)
             return
         _pending.append((job_id, body))
         _jobs[job_id]["queue_position"] = len(_pending)
@@ -210,12 +393,54 @@ def _run_job_wrapper(job_id: str, body: ComputeRequest) -> None:
     global _running_count
     t0 = time.perf_counter()
     try:
-        if get_job(job_id) is not None:
+        with _jobs_lock:
+            alive = job_id in _jobs
+        if alive:
             _run_job(job_id, body, started_at_perf=t0)
     finally:
         with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["wall_timeout_armed"] = False
+        clear_job_control(job_id)
+        with _jobs_lock:
             _running_count = max(0, _running_count - 1)
         _try_dispatch()
+
+
+@contextmanager
+def _wall_timeout_guard(job_id: str):
+    """Arm the wall clock only around PHREEQC grid + tracing + contours.
+
+    Setup (DB/catalog), packing, and stats recording stay outside the limit so a
+    finished compute cannot time out while the diagram is being packed. Client
+    DELETE abort still works via ``check_abort`` in packing progress ticks.
+    """
+    limit = max(1, int(config.JOB_WALL_TIMEOUT_SEC))
+    timer = threading.Timer(
+        limit,
+        lambda: abort_running_job(
+            job_id,
+            reason=_wall_timeout_message(limit),
+            error_code="timed_out",
+            wall_timeout_sec=limit,
+        ),
+    )
+    timer.daemon = True
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is not None:
+            job["wall_timeout_armed"] = True
+            job["compute_started_at"] = _utcnow().isoformat()
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.cancel()
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+            if job is not None:
+                job["wall_timeout_armed"] = False
 
 
 def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> None:
@@ -223,6 +448,7 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
     adapt_stats: dict[str, Any] = {}
     n_phreeqc_runs: int | None = None
     try:
+        check_abort(job_id)
         db_rec = resolve_db_record(db_id=body.db_id, db_path=body.db_path)
         db = db_rec.path
         dll = config.IPHREEQC_DLL
@@ -236,15 +462,29 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
         validate_phreeqc_setup(dll, db)
 
         from ..db.catalog_store import (
+            list_accepted_totals,
             list_collisions,
             list_gas_phases,
             list_trace_gas_phases,
             phase_names_by_subset_map,
             require_ready,
         )
-
         db_key = require_ready(db_rec)
-        sys_tuple = system_elements_from_totals(body.totals, body.system_elements)
+        from ..phreeqc.catalog import bare_system_tot_keys
+        from ..phreeqc.dummy_medium import EXCLUDED_ELEMENTS
+
+        sys_tuple = tuple(
+            e
+            for e in system_elements_from_totals(body.totals, body.system_elements)
+            if e not in EXCLUDED_ELEMENTS
+        )
+        # Bare element TOT only (Fe, C, …) — valence masters are usually empty
+        # once solids buffer the system.
+        tot_keys = (
+            bare_system_tot_keys(sys_tuple, list_accepted_totals(db_key))
+            if config.is_assemblage_mode(body.solution_mode)
+            else ()
+        )
         layer_elements = effective_layer_elements(sys_tuple, body.layer_elements)
         if body.gas_phases:
             trace_gases = tuple(body.gas_phases)
@@ -256,6 +496,11 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
         if not is_valid_unit(input_units):
             raise ValueError(f"Unsupported concentration unit: {body.units!r}")
         totals_mmol = totals_to_mmol_kgw(body.totals, input_units)
+        redox_axis = body.redox_axis
+        if redox_axis == config.REDOX_AXIS_LOG_FO2:
+            y_min, y_max = body.log_fo2_min, body.log_fo2_max
+        else:
+            y_min, y_max = body.pe_min, body.pe_max
         params = GridJobParams(
             db_path=db,
             dll_path=dll,
@@ -263,9 +508,10 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             ph_min=body.ph_min,
             ph_max=body.ph_max,
             ph_levels=body.ph_levels,
-            pe_min=body.pe_min,
-            pe_max=body.pe_max,
+            pe_min=y_min,
+            pe_max=y_max,
             pe_levels=body.pe_levels,
+            redox_axis=redox_axis,
             totals=totals_mmol,
             phases=phase_names,
             system_elements=sys_tuple,
@@ -279,33 +525,92 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
             layer_solids=body.layer_solids,
             layer_aqueous=body.layer_aqueous,
             layer_elements=layer_elements,
+            solution_mode=body.solution_mode,
+            knobs_mode=config.normalize_knobs_mode(body.knobs_mode),
+            tot_keys=tot_keys,
         )
 
         def progress(done: int, total: int, phase: str = "compute"):
+            check_abort(job_id)
             with _jobs_lock:
-                if job_id in _jobs:
+                if job_id in _jobs and _jobs[job_id].get("status") == "running":
                     _jobs[job_id]["progress"] = done / total if total else 0.0
                     _jobs[job_id]["phase"] = phase
 
-        if body.adaptive_boundaries:
-            pack_params, adapt_stats, base_results, trace_bundle = (
-                run_adaptive_boundary_sweep(
+        assemblage = config.is_assemblage_mode(body.solution_mode)
+        category_mode = body.mineral_category_mode
+        totals_contours_payload = None
+
+        # Wall clock covers PHREEQC work only (grid → boundary trace → contours).
+        with _wall_timeout_guard(job_id):
+            if body.adaptive_boundaries:
+                if assemblage:
+                    pack_params, adapt_stats, base_results, trace_bundle = (
+                        run_adaptive_mineral_stability_sweep(
+                            params,
+                            max_workers=config.MAX_WORKERS,
+                            progress_cb=progress,
+                            refine_factor=body.adaptive_refine_factor,
+                            job_id=job_id,
+                            category_mode=category_mode,
+                        )
+                    )
+                else:
+                    pack_params, adapt_stats, base_results, trace_bundle = (
+                        run_adaptive_boundary_sweep(
+                            params,
+                            max_workers=config.MAX_WORKERS,
+                            progress_cb=progress,
+                            refine_factor=body.adaptive_refine_factor,
+                            job_id=job_id,
+                        )
+                    )
+                compute_mode = "adaptive"
+            else:
+                results, mask_stats = run_grid_sweep(
                     params,
                     max_workers=config.MAX_WORKERS,
                     progress_cb=progress,
-                    refine_factor=body.adaptive_refine_factor,
+                    job_id=job_id,
                 )
-            )
-            compute_mode = "adaptive"
-        else:
-            results = run_grid_sweep(
-                params, max_workers=config.MAX_WORKERS, progress_cb=progress
-            )
-            pack_params = params
-            adapt_stats = {}
-            base_results = results
-            trace_bundle = None
-            compute_mode = "uniform"
+                pack_params = params
+                adapt_stats = dict(mask_stats)
+                base_results = results
+                trace_bundle = None
+                compute_mode = "uniform"
+            check_abort(job_id)
+
+            # Contour root-find (process-pooled PointEvaluator); keep inside wall.
+            if (
+                assemblage
+                and body.totals_contours
+                and pack_params.tot_keys
+            ):
+                from ..phreeqc.sweep import build_grid
+                from ..phreeqc.totals_contours import (
+                    clamp_contour_log_step,
+                    find_totals_contours,
+                )
+
+                progress(0, 1, "contours")
+                ph_arr, pe_arr = build_grid(pack_params)
+
+                def contour_progress(done: int, total: int) -> None:
+                    progress(done, total, "contours")
+
+                totals_contours_payload = find_totals_contours(
+                    ph=ph_arr,
+                    pe=pe_arr,
+                    results=base_results,
+                    keys=pack_params.tot_keys,
+                    log_step=clamp_contour_log_step(body.totals_contour_log_step),
+                    job_id=job_id,
+                    progress_cb=contour_progress,
+                    params=pack_params,
+                    max_workers=config.MAX_WORKERS,
+                )
+                progress(1, 1, "contours")
+                check_abort(job_id)
 
         rows = [asdict(r) for r in base_results]
         pack_layers = count_layer_pack_steps(pack_params)
@@ -316,31 +621,66 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
 
         def pack_tick(_step: int, _total: int) -> None:
             nonlocal pack_done
+            check_abort(job_id)
             pack_done += 1
             progress(min(pack_done, pack_total), pack_total, "packing")
 
         pack_done = 0
         progress(0, pack_total, "packing")
-        packed = pack_grid_results(
-            pack_params, rows, db_path=db, progress_cb=pack_tick
-        )
-        packed["compute_mode"] = compute_mode
-        if adapt_stats:
-            packed["adaptive_stats"] = adapt_stats
-        if trace_bundle:
-            packed["display"] = pack_traced_display(
+        if assemblage:
+            packed = pack_mineral_grid_results(
                 pack_params,
                 rows,
-                trace_bundle,
+                category_mode=category_mode,
                 db_path=db,
                 progress_cb=pack_tick,
             )
+        else:
+            packed = pack_grid_results(
+                pack_params, rows, db_path=db, progress_cb=pack_tick
+            )
+        packed["compute_mode"] = compute_mode
+        packed["totals_contours_requested"] = bool(assemblage and body.totals_contours)
+        packed["totals_contour_log_step"] = float(
+            body.totals_contour_log_step
+            if body.totals_contour_log_step is not None
+            else config.TOTALS_CONTOUR_LOG_STEP_DEFAULT
+        )
+        if totals_contours_payload is not None:
+            packed["totals_contours"] = totals_contours_payload
+        # User-facing input snapshot for the composition overlay (display units).
+        packed["input_totals"] = {
+            str(k): float(v) for k, v in (body.totals or {}).items() if float(v) > 0
+        }
+        packed["input_units"] = input_units
+        if adapt_stats:
+            packed["adaptive_stats"] = adapt_stats
+        if trace_bundle:
+            if assemblage:
+                packed["display"] = pack_traced_mineral_display(
+                    pack_params,
+                    rows,
+                    trace_bundle,
+                    category_mode=category_mode,
+                    db_path=db,
+                    progress_cb=pack_tick,
+                )
+            else:
+                packed["display"] = pack_traced_display(
+                    pack_params,
+                    rows,
+                    trace_bundle,
+                    db_path=db,
+                    progress_cb=pack_tick,
+                )
         progress(pack_total, pack_total, "packing")
 
         with _jobs_lock:
             if job_id not in _jobs:
                 return
             job = _jobs[job_id]
+            if job.get("status") != "running":
+                return
             job.update(
                 {
                     "status": "done",
@@ -369,10 +709,39 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
                 n_phreeqc_runs=n_phreeqc_runs,
                 queue_position_at_start=queue_position_at_start,
                 queue_wait_ms=queue_wait_ms,
+                mode_id=(
+                    "mineral-stability" if assemblage else "phase-diagram"
+                ),
             )
+    except JobAborted as exc:
+        limit = int(config.JOB_WALL_TIMEOUT_SEC) if exc.error_code == "timed_out" else None
+        _mark_job_terminal_error(
+            job_id,
+            error=str(exc.reason or exc),
+            error_code=exc.error_code,
+            wall_timeout_sec=limit,
+        )
     except Exception as exc:
+        # Pool death after hard abort often surfaces as BrokenProcessPool/OSError.
+        try:
+            check_abort(job_id)
+        except JobAborted as aborted:
+            limit = (
+                int(config.JOB_WALL_TIMEOUT_SEC)
+                if aborted.error_code == "timed_out"
+                else None
+            )
+            _mark_job_terminal_error(
+                job_id,
+                error=str(aborted.reason or aborted),
+                error_code=aborted.error_code,
+                wall_timeout_sec=limit,
+            )
+            return
         with _jobs_lock:
             if job_id not in _jobs:
+                return
+            if _jobs[job_id].get("status") != "running":
                 return
             _jobs[job_id].update(
                 {
@@ -382,3 +751,53 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
                     "finished_at": _utcnow().isoformat(),
                 }
             )
+
+
+def _reset_runtime_state_for_tests() -> None:
+    """Clear in-memory job queues (unit tests only)."""
+    global _pending, _running_count
+    with _jobs_lock:
+        for job_id in list(_jobs.keys()):
+            clear_job_control(job_id)
+        _jobs.clear()
+        _pending = deque()
+        _running_count = 0
+
+
+def queue_snapshot() -> dict[str, Any]:
+    """Public admission snapshot: running + queued depth vs MAX_QUEUE."""
+    with _jobs_lock:
+        running, queued, depth, max_queue, full = _queue_depth_locked()
+    return {
+        "running": running,
+        "queued": queued,
+        "depth": depth,
+        "max_queue": max_queue,
+        "full": full,
+    }
+
+
+def runtime_snapshot_for_tests() -> dict[str, Any]:
+    """Queue / running-slot snapshot for assertions (unit tests only)."""
+    with _jobs_lock:
+        snap = {
+            "running_count": _running_count,
+            "pending": [job_id for job_id, _ in _pending],
+            "jobs": {
+                job_id: {
+                    "status": job.get("status"),
+                    "error_code": job.get("error_code"),
+                }
+                for job_id, job in _jobs.items()
+            },
+        }
+    public = queue_snapshot()
+    snap.update(
+        {
+            "queued_count": public["queued"],
+            "depth": public["depth"],
+            "max_queue": public["max_queue"],
+            "full": public["full"],
+        }
+    )
+    return snap

@@ -1,27 +1,42 @@
 """Multiprocessing grid sweep for phase diagrams."""
 from __future__ import annotations
 
-import os
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from itertools import product
+from typing import Any
 
 import numpy as np
 
 from .. import config
-from .engine import GridJobParams, GridPointResult, evaluate_point, init_phreeqc
+from ..services.job_control import check_abort, managed_process_pool, pool_map_abortable
+from .engine import (
+    GridJobParams,
+    GridPointResult,
+    evaluate_point,
+    grid_job_params_from_dict,
+    init_phreeqc,
+    point_key,
+)
+
+_WORKER_PQ = None
+_WORKER_PARAMS: GridJobParams | None = None
 
 
-def _worker_init(dll_path: str, db_path: str):
-    global _WORKER_PQ
+def _worker_init(dll_path: str, db_path: str, params_dict: dict) -> None:
+    global _WORKER_PQ, _WORKER_PARAMS
     _WORKER_PQ = init_phreeqc(dll_path, db_path)
+    _WORKER_PARAMS = grid_job_params_from_dict(params_dict)
 
 
-def _worker_eval(args: tuple[float, float, dict]) -> dict:
-    ph, pe, params_dict = args
-    params = GridJobParams(**params_dict)
-    result = evaluate_point(_WORKER_PQ, ph=ph, pe=pe, params=params)
+def _worker_eval(args: tuple[float, float]) -> dict:
+    ph, pe = args
+    result = evaluate_point(_WORKER_PQ, ph=ph, pe=pe, params=_WORKER_PARAMS)
     return asdict(result)
+
+
+def _worker_eval_chunk(chunk: list[tuple[float, float]]) -> list[dict]:
+    """Evaluate a batch of points in one IPC round-trip (abortable map unit)."""
+    return [_worker_eval(args) for args in chunk]
 
 
 def build_grid(params: GridJobParams) -> tuple[np.ndarray, np.ndarray]:
@@ -31,7 +46,35 @@ def build_grid(params: GridJobParams) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _point_key(ph: float, pe: float) -> tuple[float, float]:
-    return round(float(ph), 12), round(float(pe), 12)
+    return point_key(ph, pe)
+
+
+def _grid_cell_spacings(params: GridJobParams) -> tuple[float, float]:
+    cell_ph = (params.ph_max - params.ph_min) / max(params.ph_levels - 1, 1)
+    cell_pe = (params.pe_max - params.pe_min) / max(params.pe_levels - 1, 1)
+    return cell_ph, cell_pe
+
+
+def partition_points_for_sweep(
+    params: GridJobParams,
+    points: list[tuple[float, float]],
+) -> tuple[list[tuple[float, float]], list[GridPointResult], dict[str, int]]:
+    """Split points into PHREEQC targets and pre-built synthetic outside-water rows."""
+    from .gas_limits import make_synthetic_water_result, split_water_band_points
+
+    cell_ph, cell_pe = _grid_cell_spacings(params)
+    inside, outside = split_water_band_points(
+        points, params, cell_ph=cell_ph, cell_pe=cell_pe
+    )
+    synthetic = [
+        make_synthetic_water_result(ph, pe, label) for (ph, pe), label in outside
+    ]
+    stats = {
+        "n_skipped_water": len(outside),
+        "n_evaluated": len(inside),
+        "n_total": len(points),
+    }
+    return inside, synthetic, stats
 
 
 def run_point_sweep(
@@ -42,14 +85,25 @@ def run_point_sweep(
     progress_cb=None,
     progress_offset: int = 0,
     progress_total: int | None = None,
+    apply_water_mask: bool = True,
+    job_id: str | None = None,
 ) -> list[GridPointResult]:
     """Evaluate an explicit list of (pH, pe) points."""
+    from .gas_limits import water_band_active
+
+    check_abort(job_id)
+
+    synthetic: list[GridPointResult] = []
+    eval_points = points
+    if apply_water_mask and water_band_active(params):
+        eval_points, synthetic, _ = partition_points_for_sweep(params, points)
+
     unique: dict[tuple[float, float], tuple[float, float]] = {}
-    for ph, pe in points:
+    for ph, pe in eval_points:
         unique[_point_key(ph, pe)] = (float(ph), float(pe))
     tasks_list = list(unique.values())
-    total = progress_total if progress_total is not None else len(tasks_list)
-    if not tasks_list:
+    total = progress_total if progress_total is not None else len(points)
+    if not tasks_list and not synthetic:
         return []
 
     if len(params.phases) > config.MAX_PHASES_PER_JOB:
@@ -57,22 +111,46 @@ def run_point_sweep(
             f"{len(params.phases)} phases selected; limit is {config.MAX_PHASES_PER_JOB}."
         )
 
-    workers = max_workers if max_workers is not None else config.MAX_WORKERS
-    params_dict = asdict(params)
-    tasks = [(ph, pe, params_dict) for ph, pe in tasks_list]
+    results: list[GridPointResult] = list(synthetic)
+    if not tasks_list:
+        return results
 
-    results: list[GridPointResult] = []
+    workers = max_workers if max_workers is not None else config.MAX_WORKERS
+    chunksize = config.SWEEP_MAP_CHUNKSIZE
+    chunksize = max(1, int(chunksize))
+    params_dict = asdict(params)
+
     done = progress_offset
-    with ProcessPoolExecutor(
+    with managed_process_pool(
+        job_id,
         max_workers=workers,
         initializer=_worker_init,
-        initargs=(params.dll_path, params.db_path),
+        initargs=(params.dll_path, params.db_path, params_dict),
     ) as pool:
-        for row in pool.map(_worker_eval, tasks):
-            results.append(GridPointResult(**row))
-            done += 1
-            if progress_cb:
-                progress_cb(done, total)
+        # Batch points per future (same idea as SWEEP_MAP_CHUNKSIZE) but wait with
+        # a timeout so wall-timeout abort cannot hang forever inside pool.map.
+        chunks = [
+            tasks_list[i : i + chunksize]
+            for i in range(0, len(tasks_list), chunksize)
+        ]
+        max_in_flight = max(workers * 2, 4)
+
+        def _on_chunk(rows, _n):
+            nonlocal done
+            for row in rows:
+                results.append(GridPointResult(**row))
+                done += 1
+                if progress_cb:
+                    progress_cb(done, total)
+
+        pool_map_abortable(
+            pool,
+            _worker_eval_chunk,
+            chunks,
+            job_id=job_id,
+            max_in_flight=max_in_flight,
+            on_result=_on_chunk,
+        )
 
     return results
 
@@ -82,7 +160,9 @@ def run_grid_sweep(
     *,
     max_workers: int | None = None,
     progress_cb=None,
-) -> list[GridPointResult]:
+    map_chunksize: int | None = None,
+    job_id: str | None = None,
+) -> tuple[list[GridPointResult], dict[str, Any]]:
     ph_axis, pe_axis = build_grid(params)
     total = len(ph_axis) * len(pe_axis)
     if total > config.MAX_GRID_POINTS:
@@ -91,4 +171,13 @@ def run_grid_sweep(
             "Reduce ph_levels or pe_levels."
         )
     points = [(float(p), float(e)) for p, e in product(ph_axis, pe_axis)]
-    return run_point_sweep(params, points, max_workers=max_workers, progress_cb=progress_cb)
+    _, _, mask_stats = partition_points_for_sweep(params, points)
+    del map_chunksize  # reserved; run_point_sweep uses config.SWEEP_MAP_CHUNKSIZE
+    rows = run_point_sweep(
+        params,
+        points,
+        max_workers=max_workers,
+        progress_cb=progress_cb,
+        job_id=job_id,
+    )
+    return rows, mask_stats

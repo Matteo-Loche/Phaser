@@ -1,24 +1,26 @@
-"""Pack raw PHREEQC grid results into layered predominance diagrams.
+"""Pack raw PHREEQC grid results into layered predominance / mineral-stability diagrams.
 
-Category labels for solid-subset layers come from ``category_solid_subset``. When
-a phase name is also reported as an aqueous species, the precipitated solid is
-labelled ``<name>(s)`` so it stays distinct from the aqueous complex (see
-``solid_aqueous_collisions`` and ``solid_label``).
+Saturation predominance uses ``category_solid_subset`` (max SI). Mineral-stability
+assemblage jobs use ``pack_mineral_grid_results`` with precipitated-mole categories
+(``moles`` or ``costability``). When a phase name is also an aqueous species, the
+precipitated solid is labelled ``<name>(s)`` (see ``solid_aqueous_collisions``).
 """
 from __future__ import annotations
 
 from itertools import combinations
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import numpy as np
 
 from .. import config
 from ..phreeqc.engine import GridJobParams
 from ..phreeqc.catalog import is_gas
+from ..phreeqc.dummy_medium import EXCLUDED_SPECIES
 
 
 SOLID_SUFFIX = "(s)"
 HOVER_SPECIES_PER_ELEMENT = config.HOVER_SPECIES_PER_ELEMENT
+HOVER_SATURATED_PHASES = config.HOVER_SATURATED_PHASES
 
 
 def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEMENT) -> list[list]:
@@ -41,6 +43,8 @@ def top_species_entries(row: dict, *, per_element: int = HOVER_SPECIES_PER_ELEME
                 key=lambda kv: kv[1], reverse=True,
             )
             for sp, m in ranked[:per_element]:
+                if sp in EXCLUDED_SPECIES:
+                    continue
                 entries.append([sp, m, elem])
         entries.sort(key=lambda e: e[1], reverse=True)
         return entries
@@ -90,6 +94,97 @@ def pack_hover_species_grid(
     return grid
 
 
+def precip_hover_entries(
+    row: dict,
+    *,
+    collision_names: frozenset[str] = frozenset(),
+    eps: float = 1e-16,
+) -> list[list]:
+    """Non-zero precipitated solids as ``[label, moles]`` for hover (moles desc)."""
+    raw = row.get("phase_moles") or {}
+    if not raw or not row.get("converged"):
+        return []
+    out: list[list] = []
+    for name, moles in raw.items():
+        if moles != moles:
+            continue
+        m = float(moles)
+        if m <= eps:
+            continue
+        if is_gas(str(name)):
+            continue
+        out.append([solid_label(str(name), collision_names), m])
+    out.sort(key=lambda e: e[1], reverse=True)
+    return out
+
+
+def pack_hover_precip_grid(
+    rows: list[dict],
+    *,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+    collision_names: frozenset[str] = frozenset(),
+) -> list[list[list]]:
+    """Per-cell list of precipitated solids with moles > 0 (assemblage hover)."""
+    grid: list[list[list]] = [[[] for _ in range(ph_levels)] for _ in range(pe_levels)]
+    for row in rows:
+        ix = ph_lookup.get(round(float(row["ph"]), 12))
+        iy = pe_lookup.get(round(float(row["pe"]), 12))
+        if ix is None or iy is None:
+            continue
+        grid[iy][ix] = precip_hover_entries(row, collision_names=collision_names)
+    return grid
+
+
+def saturated_hover_entries(
+    row: dict,
+    *,
+    collision_names: frozenset[str] = frozenset(),
+    limit: int = HOVER_SATURATED_PHASES,
+) -> list[list]:
+    """Solids with SI ≥ 0 as ``[label, si]`` for Saturation hover (SI desc)."""
+    raw = row.get("si") or {}
+    if not raw or not row.get("converged"):
+        return []
+    out: list[list] = []
+    for name, si_val in raw.items():
+        if si_val != si_val:
+            continue
+        si = float(si_val)
+        if si < 0.0:
+            continue
+        phase = str(name)
+        if is_gas(phase):
+            continue
+        out.append([solid_label(phase, collision_names), si])
+    out.sort(key=lambda e: e[1], reverse=True)
+    if limit > 0:
+        out = out[:limit]
+    return out
+
+
+def pack_hover_saturated_grid(
+    rows: list[dict],
+    *,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+    collision_names: frozenset[str] = frozenset(),
+) -> list[list[list]]:
+    """Per-cell list of saturated solids (SI ≥ 0) for Saturation hover."""
+    grid: list[list[list]] = [[[] for _ in range(ph_levels)] for _ in range(pe_levels)]
+    for row in rows:
+        ix = ph_lookup.get(round(float(row["ph"]), 12))
+        iy = pe_lookup.get(round(float(row["pe"]), 12))
+        if ix is None or iy is None:
+            continue
+        grid[iy][ix] = saturated_hover_entries(row, collision_names=collision_names)
+    return grid
+
+
 def solid_label(phase: str, collision_names: frozenset[str]) -> str:
     """Display label for a precipitated solid.
 
@@ -113,9 +208,12 @@ def label_is_solid(
     """Whether a category label denotes a precipitated solid (not an aqueous complex).
 
     Structural, not a heuristic: a solid is either ``<phase>(s)`` (a colliding
-    name) or a bare phase name that is not a collision. A bare colliding name
-    therefore always means the aqueous species.
+    name), a co-stability / moles-tie ``"A + B"`` join, or a bare phase name
+    that is not a collision. A bare colliding name therefore always means the
+    aqueous species.
     """
+    if " + " in label:
+        return True
     if label.endswith(SOLID_SUFFIX) and label[: -len(SOLID_SUFFIX)] in solid_set:
         return True
     return label in solid_set and label not in collision_names
@@ -202,6 +300,9 @@ def category_solid_subset(
     job_phases: tuple[str, ...],
     collision_names: frozenset[str] = frozenset(),
 ) -> str:
+    synth = row.get("synthetic_label")
+    if synth:
+        return synth
     eligible = {p for p in job_phases if p in eligible_phases and not is_gas(p)}
     si = row.get("si") or {}
     finite = {p: si[p] for p in eligible if p in si and si[p] == si[p]}
@@ -219,6 +320,9 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
     that contains a subset element (even alongside others, e.g. ``FeHCO3+`` for
     ``Fe``) is a valid candidate. Mirrors ``category_solid_subset`` for
     aqueous-only predominance maps."""
+    synth = row.get("synthetic_label")
+    if synth:
+        return synth
     if not row.get("converged"):
         return "none"
     by_elem = row.get("aq_species_by_element")
@@ -226,6 +330,8 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
         best_sp, best_m = "none", -1.0
         for elem in subset:
             for sp, m in by_elem.get(elem, ()):
+                if sp in EXCLUDED_SPECIES:
+                    continue
                 if m > best_m:
                     best_m, best_sp = m, sp
         if best_sp != "none":
@@ -236,6 +342,8 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
     elem_map = row.get("aq_species_element") or {}
     best_sp, best_m = "none", -1.0
     for sp, m in mols.items():
+        if sp in EXCLUDED_SPECIES:
+            continue
         if elem_map.get(sp) in subset and m > best_m:
             best_m, best_sp = m, sp
     if best_sp != "none":
@@ -434,6 +542,7 @@ def pack_grid_results(
     return {
         "ph": ph.tolist(),
         "pe": pe.tolist(),
+        "redox_axis": getattr(params, "redox_axis", config.REDOX_AXIS_PE),
         "system_elements": list(params.system_elements),
         "layer_solids": params.layer_solids,
         "layer_aqueous": params.layer_aqueous,
@@ -450,7 +559,289 @@ def pack_grid_results(
             pe_levels=params.pe_levels,
             ph_levels=params.ph_levels,
         ),
+        "hover_saturated": pack_hover_saturated_grid(
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
+            pe_levels=params.pe_levels,
+            ph_levels=params.ph_levels,
+            collision_names=collisions,
+        ),
         "n_converged": sum(1 for r in rows if r.get("converged")),
         "n_total": len(rows),
         "temp_c": params.temp_c,
+        "solution_mode": params.solution_mode,
+        "diagram_kind": "predominance",
+    }
+
+
+MineralCategoryMode = Literal["moles", "costability"]
+
+
+def mineral_subset_category_fn(
+    *,
+    subset: tuple[str, ...],
+    eligible_phases: frozenset[str],
+    job_phases: tuple[str, ...],
+    collision_names: frozenset[str],
+    category_mode: MineralCategoryMode = "moles",
+) -> Callable[[dict], str]:
+    """Row → mineral-stability category for one element subset (packing / vectors)."""
+    from ..phreeqc.mineral_stability import (
+        category_costability_subset,
+        category_precip_subset,
+    )
+
+    if category_mode == "costability":
+
+        def cat_fn(row: dict) -> str:
+            return category_costability_subset(
+                row,
+                subset,
+                eligible_phases=eligible_phases,
+                job_phases=job_phases,
+                collision_names=collision_names,
+            )
+
+        return cat_fn
+
+    def cat_fn(row: dict) -> str:
+        return category_precip_subset(
+            row,
+            subset,
+            eligible_phases=eligible_phases,
+            job_phases=job_phases,
+            collision_names=collision_names,
+        )
+
+    return cat_fn
+
+
+def pack_mineral_subset_grid(
+    rows: list[dict],
+    *,
+    subset: tuple[str, ...],
+    eligible_phases: frozenset[str],
+    job_phases: tuple[str, ...],
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+    collision_names: frozenset[str] = frozenset(),
+    category_mode: MineralCategoryMode = "moles",
+) -> dict[str, Any]:
+    """Pack one mineral-stability subset layer (moles or post-precip costability)."""
+    cat_fn = mineral_subset_category_fn(
+        subset=subset,
+        eligible_phases=eligible_phases,
+        job_phases=job_phases,
+        collision_names=collision_names,
+        category_mode=category_mode,
+    )
+    layer = pack_custom_category_grid(
+        rows,
+        cat_fn=cat_fn,
+        ph_lookup=ph_lookup,
+        pe_lookup=pe_lookup,
+        pe_levels=pe_levels,
+        ph_levels=ph_levels,
+    )
+    solid_set = set(job_phases)
+    aqueous_names = [
+        n for n in layer["names"] if not label_is_solid(n, solid_set, collision_names)
+    ]
+    layer["elements"] = list(subset)
+    layer["aqueous_names"] = aqueous_names
+    return layer
+
+
+def pack_totals_heatmap(
+    params: GridJobParams,
+    rows: list[dict],
+    *,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+) -> dict[str, Any]:
+    """Pack base-grid aqueous ``TOT`` fields as continuous mol/kgw heatmaps.
+
+    Grid layout matches category/hover packs: ``grids[key][pe_index][ph_index]``
+    so Plotly heatmap ``z[i][j]`` aligns with ``y[i]`` (pe) and ``x[j]`` (pH).
+    """
+    from ..phreeqc.catalog import normalize_total_key, normalize_total_keys
+
+    keys = normalize_total_keys(params.tot_keys or ())
+    grids: dict[str, list[list[float | None]]] = {}
+    for key in keys:
+        grid: list[list[float | None]] = [
+            [None] * params.ph_levels for _ in range(params.pe_levels)
+        ]
+        for row in rows:
+            if not row.get("converged"):
+                continue
+            # Synthetic O₂/H₂ outside-band points have no aqueous totals.
+            if row.get("synthetic_label"):
+                continue
+            pi = ph_lookup.get(round(float(row["ph"]), 12))
+            pj = pe_lookup.get(round(float(row["pe"]), 12))
+            if pi is None or pj is None:
+                continue
+            raw = row.get("aq_total_by_key") or {}
+            tot = raw.get(key)
+            if tot is None:
+                # Legacy punch keys may still use Fe(+3) / C(+4) spelling.
+                for rk, rv in raw.items():
+                    if normalize_total_key(rk) == key:
+                        tot = rv
+                        break
+            if tot is None:
+                continue
+            try:
+                val = float(tot)
+            except (TypeError, ValueError):
+                continue
+            if val == val and val > 0.0:
+                grid[pj][pi] = val
+        grids[key] = grid
+    return {
+        "keys": list(keys),
+        "units": "mol/kgw",
+        "grids": grids,
+    }
+
+
+def pack_mineral_grid_results(
+    params: GridJobParams,
+    rows: list[dict],
+    *,
+    category_mode: MineralCategoryMode = "moles",
+    db_path: str | None = None,
+    progress_cb: Callable[[int, int], None] | None = None,
+) -> dict[str, Any]:
+    """Pack assemblage grid rows into mineral-stability hover/category layers.
+
+    Parallel to ``pack_grid_results``, but solid maps use precipitated-mole
+    categories and are stored under ``layers.mineral_subsets``. Sets
+    ``diagram_kind="assemblage"`` so callers can keep SI predominance packs
+    separate. Does not alter ``pack_grid_results``.
+    """
+    del db_path
+    mode: MineralCategoryMode = (
+        "costability" if category_mode == "costability" else "moles"
+    )
+    ph = np.linspace(params.ph_min, params.ph_max, params.ph_levels)
+    pe = np.linspace(params.pe_min, params.pe_max, params.pe_levels)
+
+    ph_lookup = {round(float(value), 12): i for i, value in enumerate(ph)}
+    pe_lookup = {round(float(value), 12): i for i, value in enumerate(pe)}
+
+    subset_list = subsets_for_job(params)
+    pack_steps = count_layer_pack_steps(params)
+    step = 0
+
+    collisions = frozenset(params.solid_aqueous_collisions)
+    subset_map = params.phase_names_by_subset
+
+    def tick() -> None:
+        nonlocal step
+        step += 1
+        if progress_cb:
+            progress_cb(step, pack_steps)
+
+    mineral_subsets: dict[str, Any] = {}
+    if params.layer_solids:
+        for subset in subset_list:
+            key = subset_key(subset)
+            eligible = frozenset(subset_map.get(key, ()))
+            mineral_subsets[key] = pack_mineral_subset_grid(
+                rows,
+                subset=subset,
+                eligible_phases=eligible,
+                job_phases=params.phases,
+                ph_lookup=ph_lookup,
+                pe_lookup=pe_lookup,
+                pe_levels=params.pe_levels,
+                ph_levels=params.ph_levels,
+                collision_names=collisions,
+                category_mode=mode,
+            )
+            tick()
+
+    aqueous_subsets: dict[str, Any] = {}
+    if params.layer_aqueous:
+        for subset in subset_list:
+            key = subset_key(subset)
+            sset = set(subset)
+
+            def aq_cat(row: dict, s: set[str] = sset) -> str:
+                return dominant_aq_species_subset(row, s)
+
+            layer = pack_custom_category_grid(
+                rows,
+                cat_fn=aq_cat,
+                ph_lookup=ph_lookup,
+                pe_lookup=pe_lookup,
+                pe_levels=params.pe_levels,
+                ph_levels=params.ph_levels,
+            )
+            layer["elements"] = list(subset)
+            aqueous_subsets[key] = layer
+            tick()
+
+    layers: dict[str, Any] = {
+        "mineral_subsets": mineral_subsets,
+        "aqueous_subsets": aqueous_subsets,
+    }
+
+    default_key = subset_key(params.system_elements)
+    if params.layer_solids and default_key in mineral_subsets:
+        default_layer = mineral_subsets[default_key]
+    elif params.layer_aqueous and default_key in aqueous_subsets:
+        default_layer = aqueous_subsets[default_key]
+    elif mineral_subsets:
+        default_layer = next(iter(mineral_subsets.values()))
+    elif aqueous_subsets:
+        default_layer = next(iter(aqueous_subsets.values()))
+    else:
+        default_layer = {"names": [], "grid": []}
+
+    return {
+        "ph": ph.tolist(),
+        "pe": pe.tolist(),
+        "redox_axis": getattr(params, "redox_axis", config.REDOX_AXIS_PE),
+        "system_elements": list(params.system_elements),
+        "layer_solids": params.layer_solids,
+        "layer_aqueous": params.layer_aqueous,
+        "layer_elements": effective_layer_elements(
+            params.system_elements, params.layer_elements
+        ),
+        "layers": layers,
+        "phase_names": default_layer["names"],
+        "grid": default_layer["grid"],
+        "hover_species": pack_hover_species_grid(
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
+            pe_levels=params.pe_levels,
+            ph_levels=params.ph_levels,
+        ),
+        "hover_precip": pack_hover_precip_grid(
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
+            pe_levels=params.pe_levels,
+            ph_levels=params.ph_levels,
+            collision_names=collisions,
+        ),
+        "totals_heatmap": pack_totals_heatmap(
+            params,
+            rows,
+            ph_lookup=ph_lookup,
+            pe_lookup=pe_lookup,
+        ),
+        "n_converged": sum(1 for r in rows if r.get("converged")),
+        "n_total": len(rows),
+        "temp_c": params.temp_c,
+        "solution_mode": params.solution_mode,
+        "diagram_kind": "assemblage",
+        "mineral_category_mode": mode,
     }
