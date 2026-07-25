@@ -20,7 +20,7 @@ Two diagram products share the same workspace:
 **Main features**
 
 - **Smooth phase boundaries** (default) — boundaries are refined after the base grid so regions draw as clean fills and lines, not only a coarse heatmap style diagram.
-- **Layers** — solid/mineral and aqueous maps, optional per-element filter views; hover on the diagram lists top aqueous species and precipitated amounts in Mineral Stability at this location.
+- **Layers** — solid/mineral and aqueous maps, optional per-element filter views. Hover shows the active category plus top aqueous species; **Saturation** also lists saturated solids (SI ≥ 0), **Mineral Stability** lists precipitated amounts.
 - **Concentration heatmap & contours** *(Mineral Stability)* — colour by aqueous `log₁₀ TOT` (mol/kgw) for system elements, plus optional log-spaced isolines refinement.
 - **Rich display options** — labels (name / formula / both), colours per phase, fill opacity, boundary width, axis ticks/fonts, callouts, system badges, and more — tweak the figure without recomputing.
 - **PNG download** — export the plot (or selected layers) at chosen size, aspect, and DPI.
@@ -359,7 +359,7 @@ Pick what matches the modelling question; chemistry details are in [Part III](#3
 6. **Layers / product options** — solid/mineral and/or aqueous; optional per-element views. On Mineral Stability: Predominant vs Co-stability; optionally enable **Compute element-total contours** (+ log step) before Compute if you want `log₁₀ TOT` isolines.
 7. **Configuration** — resolution (50–200, default 100), leave **Trace phase edges** on for smooth boundaries, set **Convergence rescue** if you expect hard points, adjust O₂/H₂ limits if needed.
 8. **Compute** — watch the header job slot (queue → progress → report). Long jobs time out around **5 minutes** by default.
-9. **Inspect** — hover for aqueous species (and precipitated amounts in Mineral Stability). Right panel: labels, colours, **Concentration heatmaps** / contour overlays, axis styling, PNG export.
+9. **Inspect** — hover for category, aqueous species, and (Saturation) saturated solids or (Mineral Stability) precipitated amounts. Right panel: labels, colours, **Concentration heatmaps** / contour overlays, axis styling, PNG export.
 10. **History** — reopen prior diagrams (up to 24 in this browser). Leave mid-job: the run can resume when you return (same browser/origin).
 
 Edits after a successful plot mark the diagram **stale** until you Compute again. An identical request may show **Cached** and skip the server.
@@ -376,7 +376,7 @@ Edits after a successful plot mark the diagram **stale** until you Compute again
 | **Stale** pill / Compute active after an edit | Inputs no longer match the plotted result | Press **Compute** again. |
 | **Cached** in the job slot | Same request served from browser history | Expected — no server run. |
 
-Hover always reflects the **base grid** point under the cursor (species list, precipitated amounts). Smooth edges are a drawing refinement of that grid, not a denser solve under the pointer.
+Hover always reflects the **base grid** point under the cursor (category, aqueous species, plus saturated solids or precipitated amounts by mode). Smooth edges are a drawing refinement of that grid, not a denser solve under the pointer.
 
 ### 1.5 Useful settings
 
@@ -564,7 +564,9 @@ Display controls describe the **plotted result**, not pending Configuration togg
 |---------|--------|
 | **Phase / species names** | Show/hide region name labels on the diagram (on by default). Format / size / hide-below / callouts apply only while this is on |
 | **Format** | Solid/mineral region labels: name, formula, or both (aqueous always chem-formatted). Co-stability / moles-tie joins (`"A + B"`) format each part the same way. Tip uses max clearance inside the **visible** vector fill when tracing is on |
-| **Size** | Phase annotation font (default **14** px, range 10–20) |
+| **Size** | Phase annotation font (default **14** px, range 8–20) |
+| **Label color** | Text / callout colour (default `#111111`; **Reset** restores it) |
+| **Label background** | White chip behind names (on by default). Off = text only over the fill |
 | **Hide labels below** | Connected regions smaller than this **% of the grid** are unlabeled (default **0.1%**, range 0–1%; square-curve slider). Threshold `max(4, floor(n_cells × pct/100))` |
 | **Arrow callout…** | On (default): overlapping / crowding labels shift aside with an arrow when the leader is clear. Off: names stay at the region tip |
 
@@ -572,8 +574,8 @@ Display controls describe the **plotted result**, not pending Configuration togg
 
 | Control | Effect |
 |---------|--------|
-| **Fill mode** *(Mineral Stability)* | **Category colors** (default) or **Concentration heatmaps**. Choosing heatmap **replaces** category colour filling (opacity / no-fill / per-phase picker hide). Contours remain independent overlays |
-| **Element total** / **Colormap** *(heatmap)* | Bare-element key from packed `totals_heatmap` (e.g. `Fe`, `C`) and colormap (`Viridis`, `Inferno`, `Plasma`, `Magma`, `Cividis`, `Turbo`, `Hot`, `Jet`, `YlOrRd`, `YlGnBu`, `Blues`, `Greens`, `Greys`, `RdBu`, `Spectral`), each shown with a CSS color swatch beside the name in the dropdown. **Opacity** (10–100%, default 100%) fades the heatmap fill; contours/labels stay opaque. Optional **Invert colors** flips the scale (swatches update too). Short **horizontal** inset colorbar along the top edge (`log₁₀ TOT … (mol/kgw)`), just left of the system-element badge. **Show legend** toggles the colorbar. **Legend size** (70–150%) sets length/thickness only; **Legend font** (8–28 px, default 15) sets title/tick type only — the two are independent. Each channel is auto-scaled from the plot box on small screens (no font→box feedback) |
+| **Fill mode** *(Mineral Stability)* | **Phase / aqueous species colors** (default) or **Concentration heatmaps**. Choosing heatmap **replaces** category colour filling (opacity / no-fill / per-phase picker hide). Contours remain independent overlays |
+| **Element total** / **Colormap** *(heatmap)* | Bare-element key from packed `totals_heatmap` (e.g. `Fe`, `C`) and colormap (`Viridis`, `Inferno`, `Plasma`, `Magma`, `Cividis`, `Turbo`, `Hot`, `Jet`, `YlOrRd`, `YlGnBu`, `Blues`, `Greens`, `Greys`, `RdBu`, `Spectral`), each shown with a CSS color swatch beside the name in the dropdown. **Opacity** (10–100%, default 100%) fades the heatmap fill; contours/labels stay opaque. Optional **Invert colors** flips the scale (swatches update too). **Show legend** toggles a draggable paper-annotation legend (`log₁₀ TOT … (mol/kgw)`) — drag it on the plot like the system / composition badges. Colour limits are the data min/max; the legend labels those two ends only. **Legend length** (40–150%) sets bar length; **Legend size** (6–28 px, default 15) sets title/tick type — independent channels, auto-scaled smaller on narrow plot panes |
 | **Opacity** | Region fill transparency for category fills (default **100%**, range 10–100%). Boundaries stay opaque |
 | **No fill** | Labels only, no category fill colours (hidden while Concentration heatmaps are active) |
 | **Phase / species colour** | Pick a plotted category (**name (formula)**) and set its colour; redraw without recompute. **Reset** restores the built-in/hash default |
@@ -585,10 +587,11 @@ Colours persist in `colorByName` (`phaseDiagramState.v8`). In solid/mineral view
 | Control | Effect |
 |---------|--------|
 | **Hover species** | How many aqueous species in the tooltip (default **4**; 2 / 4 / 6 / 8). Display truncate of packed data (jobs pack up to **8** per element) |
-| **System label** | Top-right badge (e.g. `Fe-C`): show/hide + font size (default **20** px, 15–35). Full system, or active element subset when filters are on |
-| **Initial system [C]** | Bottom-left composition box (always the full input system): show/hide + font size (default **16** px, 15–35) |
+| **System label** | Badge (e.g. `Fe-C`): show/hide + font size (default **20** px, 8–35). Default top-right; **drag on the plot** to reposition. Full system, or active element subset when filters are on |
+| **Initial system [C]** | Composition box (always the full input system): show/hide + font size (default **16** px, 8–35). Default bottom-left; drag to reposition |
+| **Reset overlay positions** | Quiet link under the system / composition toggles — restores default positions for dragged plot overlays |
 | **Boundaries width** / **Boundaries color** | Phase and gas-limit polylines on/off + stroke width (default **1** px, 0.25–2.5) + phase-boundary colour (default `#222222`; **Reset** restores it). O₂/H₂ gas dashes stay red and scale with width |
-| **Element-total contours** *(Mineral Stability)* | Show/hide isolines when computed (enable under Plot options → **Concentration contour lines** first); **one element** at a time; line style (default **dot**); **Line width** (0.25–3, default **1**); **Line color** (default `#111827`, with **Reset**; inline labels match); **Labels** — inline level numbers (8–20 px, default **11**). Labels show the log level only (e.g. `−6.0`), sitting in a break in the stroke (same colour, no halo box), oriented along the line and clustered near mid-arc while avoiding collisions. **Element label** toggles the bottom-right badge (element + units, e.g. `Contours for Mn · log₁₀(mol/kgw)`) and sets its font size (10–22 px, default **13**) |
+| **Element-total contours** *(Mineral Stability)* | Show/hide isolines when computed (enable under Plot options → **Concentration contour lines** first); **one element** at a time; line style (default **dot**); **Line width** (0.25–3, default **1**); **Line color** (default `#111827`, with **Reset**; inline labels match); **Labels** — inline level numbers (8–20 px, default **11**). Labels show the log level only (e.g. `−6.0`), sitting in a break in the stroke (same colour, no halo box), oriented along the line. Each long enough polyline gets its own label (so a same-level bump can show the value on both sides); placement prefers mid-arc and avoids collisions. **Element label** toggles the contour badge (element + units; default bottom-right; drag to reposition) and sets its font size (8–22 px, default **13**) |
 
 **Touch / hover.** Plotly hover sticks on touch until another plot tap; tap outside the data area (or redraw) dismisses via `Plotly.Fx.unhover`.
 
@@ -601,7 +604,7 @@ Aqueous **element totals** from PHREEQC `TOT("…")` for **bare system elements*
 | **`totals_heatmap`** | Always on Mineral Stability jobs | Continuous mol/kgw grids packed as `grids[key][pe_index][ph_index]`; UI colours `log₁₀` of those values |
 | **`totals_contours`** | Only if **Compute element-total contours** was on at job start | Log-spaced isoline polylines (`log_step` default **2**, clamp **0.5–6**) |
 
-- **Fill exclusivity** — **Concentration heatmaps** XOR **Category colors**. Contour overlays are independent of both and can sit on either fill.
+- **Fill exclusivity** — **Concentration heatmaps** XOR **Phase / aqueous species colors**. Contour overlays are independent of both and can sit on either fill.
 - **Water window** — heatmap cells are **not** nulled outside the O₂/H₂ band (avoids stair gaps). Analytic **white half-plane masks** (drawn after heatmap + contours) cut colour and strokes cleanly at the gas lines. Contour geometry is **not** pre-clipped on the server (clipping would break polyline stitching); the same masks hide strokes past the limit.
 - **Phase labels** — mineral/aqueous region labels stay available in heatmap fill mode.
 - **Not available** in Saturation / SI predominance mode.
@@ -617,7 +620,7 @@ Live axis styling only (no recompute; also applied to PNG exports):
 |---------|--------|
 | **Ticks X** / **Ticks Y** | **Standard** (Plotly automatic) or fixed step (`every 0.25` … `30` as Plotly `dtick`); wider steps suit log fO₂ |
 | **Tick font** | 8–28 px (default 15) |
-| **Title font** | Axis title (pH / Eh / …), 10–30 px (default 18); `automargin` avoids overlap |
+| **Title font** | Axis title (pH / Eh / …), 8–30 px (default 18); `automargin` avoids overlap |
 | **Axis width** | Frame/axis line thickness, 0.5–4 px (default 1) |
 
 #### Download

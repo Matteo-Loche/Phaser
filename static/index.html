@@ -1304,6 +1304,14 @@
       min-width: 0;
       max-width: 100%;
     }
+    /* Nested under the phase-labels toggle — body gap does not apply to these children. */
+    #phaseLabelDetailControls {
+      display: flex;
+      flex-direction: column;
+      gap: 0.55rem;
+      min-width: 0;
+      max-width: 100%;
+    }
     .disp-row {
       display: flex;
       align-items: center;
@@ -1528,6 +1536,21 @@
       border: 0;
       border-radius: 5px;
     }
+    .disp-overlay-reset {
+      display: block;
+      margin: 0.1rem 0 0.45rem;
+      padding: 0;
+      border: 0;
+      background: none;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 500;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .disp-overlay-reset:hover { color: var(--accent); }
     .disp-color-reset {
       flex: 1 1 auto;
       min-width: 0;
@@ -2208,7 +2231,7 @@
           <details class="card disp-card">
             <summary>Labels <span class="chev">›</span></summary>
             <div class="body">
-              <label class="toggle" style="margin-bottom:0.45rem" title="Show or hide phase / species name labels on the diagram">
+              <label class="toggle" title="Show or hide phase / species name labels on the diagram">
                 <input type="checkbox" id="showPhaseLabels" checked />
                 <span>Phase / species names</span>
               </label>
@@ -2225,10 +2248,21 @@
                   <label for="labelFontSize">Size</label>
                   <span class="disp-stepper">
                     <button type="button" id="labelFontSizeDec" aria-label="Decrease label size">−</button>
-                    <input type="number" id="labelFontSize" min="10" max="20" step="1" value="14" />
+                    <input type="number" id="labelFontSize" min="8" max="20" step="1" value="14" />
                     <button type="button" id="labelFontSizeInc" aria-label="Increase label size">+</button>
                   </span>
                 </div>
+                <div class="disp-row" title="Colour of phase / species name labels on the diagram">
+                  <label for="labelColor">Label color</label>
+                  <span class="disp-color-controls">
+                    <input type="color" class="disp-color-input" id="labelColor" value="#111111" aria-label="Phase label color" />
+                    <button type="button" class="disp-color-reset" id="labelColorReset">Reset</button>
+                  </span>
+                </div>
+                <label class="toggle" title="White chip behind phase / species names. Off = text only over the fill">
+                  <input type="checkbox" id="labelBackground" checked />
+                  <span>Label background</span>
+                </label>
                 <div class="disp-slider" title="Connected regions smaller than this % of the diagram are not labeled (floor: 4 cells). Slider is finer near 0%.">
                   <div class="disp-slider-head">
                     <label for="labelMinAreaPct">Hide labels below</label>
@@ -2251,7 +2285,7 @@
                 <div class="meta" style="margin-bottom:0.35rem">Fill mode</div>
                 <label class="toggle" style="margin-bottom:0.25rem">
                   <input type="radio" name="fillMode" value="category" checked />
-                  <span>Category colors</span>
+                  <span>Phase / aqueous species colors</span>
                 </label>
                 <label class="toggle" style="margin-bottom:0.35rem">
                   <input type="radio" name="fillMode" value="heatmap" />
@@ -2294,20 +2328,20 @@
                     <input type="checkbox" id="heatmapShowColorbar" checked />
                     <span>Show legend</span>
                   </label>
-                  <div class="disp-row" style="margin-bottom:0.35rem" title="Colorbar length and thickness only (independent of legend font; auto-fits the plot)">
-                    <label for="heatmapColorbarSize">Legend size</label>
+                  <div class="disp-row" style="margin-bottom:0.35rem" title="Length of the color bar (independent of legend size; auto-fits the plot)">
+                    <label for="heatmapLegendLength">Legend length</label>
                     <span class="disp-stepper">
-                      <button type="button" id="heatmapColorbarSizeDec" aria-label="Decrease legend size">−</button>
-                      <input type="number" id="heatmapColorbarSize" min="70" max="150" step="10" value="100" />
-                      <button type="button" id="heatmapColorbarSizeInc" aria-label="Increase legend size">+</button>
+                      <button type="button" id="heatmapLegendLengthDec" aria-label="Decrease legend length">−</button>
+                      <input type="number" id="heatmapLegendLength" min="40" max="150" step="10" value="100" />
+                      <button type="button" id="heatmapLegendLengthInc" aria-label="Increase legend length">+</button>
                     </span>
                   </div>
-                  <div class="disp-row" title="Colorbar title and tick font only (independent of legend size; scaled on small plots)">
-                    <label for="heatmapColorbarFontSize">Legend font</label>
+                  <div class="disp-row" title="Overall legend type size (title and end values; scaled on small plots)">
+                    <label for="heatmapLegendSize">Legend size</label>
                     <span class="disp-stepper">
-                      <button type="button" id="heatmapColorbarFontSizeDec" aria-label="Decrease legend font size">−</button>
-                      <input type="number" id="heatmapColorbarFontSize" min="8" max="28" step="1" value="15" />
-                      <button type="button" id="heatmapColorbarFontSizeInc" aria-label="Increase legend font size">+</button>
+                      <button type="button" id="heatmapLegendSizeDec" aria-label="Decrease legend size">−</button>
+                      <input type="number" id="heatmapLegendSize" min="6" max="28" step="1" value="15" />
+                      <button type="button" id="heatmapLegendSizeInc" aria-label="Increase legend size">+</button>
                     </span>
                   </div>
                 </div>
@@ -2361,7 +2395,7 @@
                 <label class="toggle"><input type="checkbox" id="showSystemLabel" checked /> <span>System label</span></label>
                 <span class="disp-stepper">
                   <button type="button" id="systemLabelSizeDec" aria-label="Decrease system label size">−</button>
-                  <input type="number" id="systemLabelSize" min="15" max="35" step="1" value="20" />
+                  <input type="number" id="systemLabelSize" min="8" max="35" step="1" value="20" />
                   <button type="button" id="systemLabelSizeInc" aria-label="Increase system label size">+</button>
                 </span>
               </div>
@@ -2369,10 +2403,14 @@
                 <label class="toggle"><input type="checkbox" id="showCompositionBox" checked /> <span>Initial system [C]</span></label>
                 <span class="disp-stepper">
                   <button type="button" id="compositionLabelSizeDec" aria-label="Decrease composition box size">−</button>
-                  <input type="number" id="compositionLabelSize" min="15" max="35" step="1" value="16" />
+                  <input type="number" id="compositionLabelSize" min="8" max="35" step="1" value="16" />
                   <button type="button" id="compositionLabelSizeInc" aria-label="Increase composition box size">+</button>
                 </span>
               </div>
+              <button type="button" class="disp-overlay-reset" id="resetOverlayPosBtn"
+                title="Restore default positions for dragged plot overlays (system, composition, contour label, heatmap legend)">
+                Reset overlay positions
+              </button>
               <div class="disp-inline-control" title="Show/hide phase and gas-limit boundaries and set line thickness (px)">
                 <label class="toggle"><input type="checkbox" id="showBoundaries" checked /> <span>Boundaries width</span></label>
                 <span class="disp-stepper">
@@ -2442,7 +2480,7 @@
                     </label>
                     <span class="disp-stepper">
                       <button type="button" id="totalsContourElementFontSizeDec" aria-label="Decrease contour element label size">−</button>
-                      <input type="number" id="totalsContourElementFontSize" min="10" max="22" step="1" value="13" />
+                      <input type="number" id="totalsContourElementFontSize" min="8" max="22" step="1" value="13" />
                       <button type="button" id="totalsContourElementFontSizeInc" aria-label="Increase contour element label size">+</button>
                     </span>
                   </div>
@@ -2496,7 +2534,7 @@
                 <label for="axisTitleFont">Title font</label>
                 <span class="disp-stepper">
                   <button type="button" id="axisTitleFontDec" aria-label="Decrease axis title font size">−</button>
-                  <input type="number" id="axisTitleFont" min="10" max="30" step="1" value="18" />
+                  <input type="number" id="axisTitleFont" min="8" max="30" step="1" value="18" />
                   <button type="button" id="axisTitleFontInc" aria-label="Increase axis title font size">+</button>
                 </span>
               </div>
@@ -2713,8 +2751,15 @@
       heatmapOpacity: 1, // 0.1–1 totals heatmap fill alpha
       heatmapReverseScale: false,
       heatmapShowColorbar: true,
-      heatmapColorbarSize: 100, // % — colorbar length/thickness only (70–150); not coupled to font
-      heatmapColorbarFontSize: 15, // px — title/ticks only (8–28); not coupled to bar box
+      heatmapLegendLength: 100, // % — color-bar length only (40–150); not coupled to type size
+      heatmapLegendSize: 15, // px — overall legend type size (6–28); not coupled to bar length
+      // Paper positions for draggable plot overlays (null = mode default).
+      overlayPos: {
+        system: null,
+        composition: null,
+        contourElement: null,
+        heatmapLegend: null,
+      },
       showTotalsContours: true,
       totalsContourKey: "", // bare-element TOT key; "" until keys available
       totalsContourDash: "dot",
@@ -2722,7 +2767,7 @@
       totalsContourColor: "#111827",
       totalsContourFontSize: 11,
       showTotalsContourElementLabel: true,
-      totalsContourElementFontSize: 13, // px — bottom-right element badge (10–22)
+      totalsContourElementFontSize: 13, // px — bottom-right element badge (8–22)
       displayMode: "solid",
       solidSubsetElements: [],
       layerSolids: true,
@@ -2731,9 +2776,9 @@
       labelsOnly: false,
       showBoundaries: true,
       showSystemLabel: true,
-      systemLabelSize: 20,    // px — system badge font (15–35)
+      systemLabelSize: 20,    // px — system badge font (8–35)
       showCompositionBox: true,
-      compositionLabelSize: 16, // px — bottom-left composition box (15–35)
+      compositionLabelSize: 16, // px — bottom-left composition box (8–35)
       boundaryWidth: 1,       // px — phase boundary stroke (0.25–2.5)
       boundaryColor: "#222222", // phase boundary stroke color
       axisTickStepX: "auto",   // X-axis tick spacing (dtick) or "auto" (Plotly native)
@@ -2743,7 +2788,9 @@
       axisLineWidth: 1,       // px — axis/frame line thickness (0.5–4)
       showPhaseLabels: true,  // phase / species name annotations on the diagram
       phaseLabelMode: "name", // "name" | "formula" | "both" — solids + joins; aqueous always chem-formatted
-      labelFontSize: 14,      // px — Plotly annotation font (10–20)
+      labelFontSize: 14,      // px — Plotly annotation font (8–20)
+      labelColor: "#111111",  // phase / species name text colour
+      labelBackground: true,  // white chip behind phase labels; off = text only
       fillOpacity: 1,         // 0.1–1 region fill alpha (boundaries stay opaque)
       labelMinAreaPct: 0.1,   // % of grid cells (0–1); minCells = max(4, floor(total * pct/100))
       calloutArrows: true,    // arrow callouts for overlap / tip cover / self-obscure
@@ -4309,7 +4356,7 @@
     }
 
     function clampLabelFontSize(v) {
-      return Math.min(20, Math.max(10, Math.round(Number(v) || 14)));
+      return Math.min(20, Math.max(8, Math.round(Number(v) || 14)));
     }
 
     // Regular 0.025 steps contained within the previous 1/1.2…1/0.8 range.
@@ -4345,11 +4392,11 @@
     }
 
     function clampSystemLabelSize(v) {
-      return Math.min(35, Math.max(15, Math.round(Number(v) || 20)));
+      return Math.min(35, Math.max(8, Math.round(Number(v) || 20)));
     }
 
     function clampCompositionLabelSize(v) {
-      return Math.min(35, Math.max(15, Math.round(Number(v) || 16)));
+      return Math.min(35, Math.max(8, Math.round(Number(v) || 16)));
     }
 
     function clampBoundaryWidth(v) {
@@ -4359,6 +4406,7 @@
     }
 
     const BOUNDARY_COLOR_DEFAULT = "#222222";
+    const LABEL_COLOR_DEFAULT = "#111111";
     const CONTOUR_COLOR_DEFAULT = "#111827";
 
     function normalizeHexColor(v, fallback) {
@@ -4389,7 +4437,7 @@
     }
 
     function clampAxisTitleFont(v) {
-      return Math.min(30, Math.max(10, Math.round(Number(v) || 18)));
+      return Math.min(30, Math.max(8, Math.round(Number(v) || 18)));
     }
 
     function clampAxisLineWidth(v) {
@@ -4468,6 +4516,12 @@
       const bcEl = $("boundaryColor");
       syncPhaseLabelDetailControls();
       if (fsEl) fsEl.value = String(state.labelFontSize);
+      {
+        const lcEl = $("labelColor");
+        if (lcEl) lcEl.value = normalizeHexColor(state.labelColor, LABEL_COLOR_DEFAULT);
+        const lbEl = $("labelBackground");
+        if (lbEl) lbEl.checked = state.labelBackground !== false;
+      }
       if (opEl) opEl.value = String(Math.round(state.fillOpacity * 100));
       if (arEl) {
         arEl.min = "0";
@@ -4646,113 +4700,351 @@
       return displayedSystemElements(result).join("-");
     }
 
-    /** Paper-x reserve on the top-right so the heatmap colorbar clears the system badge. */
+    /** Paper-x reserve on the top-right so the default legend clears the system badge. */
     function systemLabelPaperReserve(result = runtime.lastResult) {
       if (state.showSystemLabel === false) return 0;
       const text = chemicalSystemLabelText(result);
       if (!text) return 0;
       const fontSize = clampSystemLabelSize(state.systemLabelSize);
       const pad = Math.max(4, Math.round(fontSize * 0.35));
-      // Bold system-ui char width ~0.62em; + padding/border + annotation xshift.
       const boxPx = text.length * fontSize * 0.62 + 2 * pad + 12;
       const plotW = Math.max(280, (screenPlotBaseSize().width || 640));
-      // Leave room for the colorbar; tighter cap on narrow plots.
       const maxReserve = plotW < 420 ? 0.34 : plotW < 560 ? 0.42 : 0.52;
       return Math.min(maxReserve, Math.max(0.10, boxPx / plotW + 0.03));
     }
 
-    /**
-     * Heatmap colorbar layout — box and font are independent channels.
-     *
-     *   Legend size  → length + thickness only (then fit to available paper)
-     *   Legend font  → title / tick type size only
-     *   Plot resize  → scales each channel from the plot box separately
-     *
-     * Font never feeds length/thickness (avoids the old feedback loop where
-     * bigger type grew the bar, which then fought auto-fit).
-     */
-    function heatmapColorbarLayout(result, key) {
-      const plot = screenPlotBaseSize();
-      const plotW = Math.max(240, plot.width || 640);
-      const plotH = Math.max(240, plot.height || 640);
-      const shortSide = Math.min(plotW, plotH);
-      // 720px ≈ comfortable desktop plot; shrink below that, mild grow above.
-      const viewScale = Math.min(1.12, Math.max(0.52, shortSide / 720));
+    const OVERLAY_DEFAULTS = {
+      system: { x: 0.99, y: 0.99, xanchor: "right", yanchor: "top" },
+      composition: { x: 0.01, y: 0.01, xanchor: "left", yanchor: "bottom" },
+      contourElement: { x: 0.99, y: 0.01, xanchor: "right", yanchor: "bottom" },
+      heatmapLegend: { x: 0.62, y: 0.99, xanchor: "right", yanchor: "top" },
+    };
 
-      // —— Box channel (Legend size) ——
-      const userSize = Math.min(1.5, Math.max(0.7, (Number(state.heatmapColorbarSize) || 100) / 100));
-      const sysReserve = systemLabelPaperReserve(result);
-      const rightEdge = sysReserve > 0 ? Math.min(0.99, 1 - sysReserve) : 0.98;
-      const baseLen = 0.20 * (0.70 + 0.30 * viewScale);
-      let barLen = baseLen * userSize;
-      const maxLen = Math.max(0.10, rightEdge - 0.03);
-      barLen = Math.min(Math.max(0.10, barLen), maxLen);
-      // xanchor=right → left edge at x − len; keep clear of the left margin.
-      if (rightEdge - barLen < 0.02) {
-        barLen = Math.max(0.10, rightEdge - 0.02);
+    function normalizeOverlayPosMap(raw) {
+      const keys = ["system", "composition", "contourElement", "heatmapLegend"];
+      const out = {};
+      const src = raw && typeof raw === "object" ? raw : {};
+      for (const k of keys) {
+        const p = src[k];
+        if (
+          p && typeof p === "object"
+          && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))
+        ) {
+          out[k] = {
+            x: Number(p.x),
+            y: Number(p.y),
+            xanchor: typeof p.xanchor === "string" ? p.xanchor : OVERLAY_DEFAULTS[k].xanchor,
+            yanchor: typeof p.yanchor === "string" ? p.yanchor : OVERLAY_DEFAULTS[k].yanchor,
+          };
+        } else {
+          out[k] = null;
+        }
       }
-      const thickBase = 15 * viewScale;
-      const thickMax = Math.max(9, Math.round(plotH * 0.032));
-      const thickness = Math.round(
-        Math.min(thickMax, Math.max(8, thickBase * userSize))
-      );
-      // Pad from box thickness only — not from font.
-      const pad = Math.max(3, Math.round(thickness * 0.22));
+      return out;
+    }
 
-      // —— Font channel (Legend font) ——
-      const userFont = Math.min(28, Math.max(8, Math.round(Number(state.heatmapColorbarFontSize) || 15)));
-      const fontCap = Math.max(10, Math.min(28, Math.round(plotW * 0.032)));
-      const fontSize = Math.round(Math.min(fontCap, Math.max(8, userFont * viewScale)));
-      const fontFamily = "system-ui,Segoe UI,sans-serif";
-
-      const nticks = shortSide < 360 ? 4 : shortSide < 520 ? 5 : 7;
-      const units = result?.totals_heatmap?.units || "mol/kgw";
-      const titleText = shortSide < 400
-        ? `log₁₀ ${key} (${units})`
-        : `log₁₀ TOT ${key} (${units})`;
-
+    function defaultHeatmapLegendPos(result) {
+      const reserve = systemLabelPaperReserve(result);
+      const right = reserve > 0 ? Math.min(0.97, 1 - reserve - 0.01) : 0.72;
       return {
-        orientation: "h",
-        title: {
-          text: titleText,
-          side: "top",
-          font: {
-            size: fontSize,
-            color: "#0f172a",
-            family: fontFamily,
-            weight: 700,
-          },
-        },
-        thickness,
-        len: barLen,
-        x: rightEdge,
-        y: shortSide < 400 ? 0.992 : 0.985,
-        xref: "paper",
-        yref: "paper",
+        x: Math.max(0.18, right),
+        y: 0.99,
         xanchor: "right",
         yanchor: "top",
-        xpad: pad,
-        ypad: pad,
-        bgcolor: "rgba(255,255,255,0.90)",
-        bordercolor: "#cbd5e1",
-        borderwidth: 1,
-        tickfont: {
-          size: fontSize,
-          color: "#334155",
-          family: fontFamily,
-          weight: 700,
+      };
+    }
+
+    function overlayPosFor(key, result = runtime.lastResult) {
+      const saved = state.overlayPos?.[key];
+      if (
+        saved && Number.isFinite(Number(saved.x)) && Number.isFinite(Number(saved.y))
+      ) {
+        return {
+          x: Number(saved.x),
+          y: Number(saved.y),
+          xanchor: saved.xanchor || OVERLAY_DEFAULTS[key].xanchor,
+          yanchor: saved.yanchor || OVERLAY_DEFAULTS[key].yanchor,
+        };
+      }
+      if (key === "heatmapLegend") return defaultHeatmapLegendPos(result);
+      return { ...OVERLAY_DEFAULTS[key] };
+    }
+
+    /** Tag a paper badge so Plotly drag can move it; persist via name. */
+    function withOverlayPos(ann, key, result = runtime.lastResult) {
+      if (!ann) return null;
+      const pos = overlayPosFor(key, result);
+      return {
+        ...ann,
+        x: pos.x,
+        y: pos.y,
+        xanchor: pos.xanchor,
+        yanchor: pos.yanchor,
+        xshift: 0,
+        yshift: 0,
+        xref: "paper",
+        yref: "paper",
+        name: `phaser-overlay-${key}`,
+        captureevents: true,
+        editable: true,
+      };
+    }
+
+    function resetOverlayPositions() {
+      state.overlayPos = normalizeOverlayPosMap(null);
+      persist();
+      if (runtime.lastResult) drawDiagram(runtime.lastResult);
+    }
+
+    function plotlyDragConfig(extra = {}) {
+      return {
+        responsive: true,
+        displaylogo: false,
+        displayModeBar: false,
+        editable: true,
+        edits: {
+          annotationPosition: true,
+          annotationText: false,
+          annotationTail: false,
+          axisTitleText: false,
+          titleText: false,
+          colorbarPosition: false,
+          colorbarTitleText: false,
+          legendPosition: false,
+          shapePosition: false,
         },
-        ticks: "outside",
-        ticklen: Math.max(3, Math.round(fontSize * 0.4)),
-        tickwidth: 1,
-        tickcolor: "#334155",
-        outlinewidth: 0,
-        nticks,
+        ...extra,
       };
     }
 
     /**
-     * Pixel box (plot area) covered by the horizontal heatmap colorbar.
+     * Plotly has no per-annotation drag lock when edits.annotationPosition is on.
+     * Contour digits stay on the line by not receiving pointer events at all.
+     */
+    function disableContourLabelPointerEvents(gd = $("plotDiv")) {
+      if (!gd) return;
+      const anns = gd.layout?.annotations || [];
+      anns.forEach((ann, i) => {
+        if (ann?.name !== "phaser-contour-label") return;
+        gd.querySelectorAll(`.annotation[data-index="${i}"]`).forEach(el => {
+          el.style.pointerEvents = "none";
+          el.style.cursor = "default";
+          el.querySelectorAll("*").forEach(child => {
+            child.style.pointerEvents = "none";
+            child.style.cursor = "default";
+          });
+        });
+      });
+    }
+
+    function bindPlotOverlayDrag() {
+      const gd = $("plotDiv");
+      if (!gd || gd.dataset.overlayDragBound === "1") return;
+      gd.dataset.overlayDragBound = "1";
+      gd.on("plotly_relayout", (ev) => {
+        if (!ev || typeof ev !== "object") return;
+        const anns = gd.layout?.annotations || [];
+        let changed = false;
+        state.overlayPos = normalizeOverlayPosMap(state.overlayPos);
+        const touched = new Set();
+        for (const key of Object.keys(ev)) {
+          const m = /^annotations\[(\d+)\]\.(x|y|xanchor|yanchor)$/.exec(key);
+          if (!m) continue;
+          touched.add(Number(m[1]));
+        }
+        for (const idx of touched) {
+          const ann = anns[idx];
+          const name = String(ann?.name || "");
+          if (!name.startsWith("phaser-overlay-")) continue;
+          const overlayKey = name.slice("phaser-overlay-".length);
+          if (!(overlayKey in OVERLAY_DEFAULTS)) continue;
+          if (!Number.isFinite(Number(ann.x)) || !Number.isFinite(Number(ann.y))) continue;
+          state.overlayPos[overlayKey] = {
+            x: Number(ann.x),
+            y: Number(ann.y),
+            xanchor: ann.xanchor || OVERLAY_DEFAULTS[overlayKey].xanchor,
+            yanchor: ann.yanchor || OVERLAY_DEFAULTS[overlayKey].yanchor,
+          };
+          changed = true;
+        }
+        if (changed) persist();
+        // Relayout can rebuild annotation nodes — re-apply the no-hit rule.
+        disableContourLabelPointerEvents(gd);
+      });
+    }
+
+    function parseCssColorRgb(c) {
+      const s = String(c || "").trim();
+      const rgb = s.match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+      if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])];
+      const hex = s.replace("#", "");
+      if (hex.length === 6 && /^[0-9a-f]+$/i.test(hex)) {
+        return [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16));
+      }
+      return null;
+    }
+
+    function lerpCssColor(a, b, t) {
+      const pa = parseCssColorRgb(a);
+      const pb = parseCssColorRgb(b);
+      if (!pa || !pb) return a;
+      const u = Math.min(1, Math.max(0, t));
+      const r = Math.round(pa[0] + (pb[0] - pa[0]) * u);
+      const g = Math.round(pa[1] + (pb[1] - pa[1]) * u);
+      const bl = Math.round(pa[2] + (pb[2] - pa[2]) * u);
+      return `rgb(${r},${g},${bl})`;
+    }
+
+    function sampleColorscaleColor(stops, t) {
+      const s = Array.isArray(stops) && stops.length ? stops : [[0, "rgb(0,0,0)"], [1, "rgb(255,255,255)"]];
+      const u = Math.min(1, Math.max(0, Number(t) || 0));
+      if (u <= Number(s[0][0])) return s[0][1];
+      if (u >= Number(s[s.length - 1][0])) return s[s.length - 1][1];
+      for (let i = 1; i < s.length; i++) {
+        const t0 = Number(s[i - 1][0]);
+        const t1 = Number(s[i][0]);
+        if (u <= t1) {
+          const f = t1 > t0 ? (u - t0) / (t1 - t0) : 0;
+          return lerpCssColor(s[i - 1][1], s[i][1], f);
+        }
+      }
+      return s[s.length - 1][1];
+    }
+
+    /** Exact data log₁₀ min/max — colour limits only; never “niced” outward. */
+    function heatmapLogZExtent(result, key) {
+      const grid = totalsHeatmapGrid(result, key);
+      let lo = Infinity;
+      let hi = -Infinity;
+      for (const row of grid || []) {
+        for (const v of row || []) {
+          const n = Number(v);
+          if (!Number.isFinite(n) || n <= 0) continue;
+          const z = Math.log10(n);
+          if (z < lo) lo = z;
+          if (z > hi) hi = z;
+        }
+      }
+      if (!Number.isFinite(lo) || !Number.isFinite(hi)) return { lo: -8, hi: -2 };
+      if (!(lo < hi)) return { lo: lo - 0.5, hi: hi + 0.5 };
+      return { lo, hi };
+    }
+
+    /** Legend end labels only (min / max) — interiors were unreliable in Plotly HTML. */
+    function fmtLegendTick(v) {
+      if (!Number.isFinite(v)) return "—";
+      const a = Math.abs(v);
+      if (a >= 10) return String(Math.round(v));
+      return String(parseFloat(v.toFixed(1)));
+    }
+
+    /** Colour bounds = data log₁₀ min/max; legend shows those two ends only. */
+    function heatmapColorScale(result, key) {
+      const ext = heatmapLogZExtent(result, key);
+      return { lo: ext.lo, hi: ext.hi, ticks: [ext.lo, ext.hi] };
+    }
+
+    /**
+     * Heatmap legend metrics (annotation stand-in for a Plotly colorbar).
+     * Length → bar block count; size → title/tick type — independent channels.
+     * Plotly annotations only allow a tiny HTML subset (br/b/i/span color).
+     */
+    function heatmapLegendMetrics(result, key) {
+      const plot = screenPlotBaseSize();
+      const plotW = Math.max(240, plot.width || 640);
+      const plotH = Math.max(240, plot.height || 640);
+      const shortSide = Math.min(plotW, plotH);
+      // Allow smaller overlays on narrow / short plot panes (previews, split view).
+      const viewScale = Math.min(1.12, Math.max(0.35, shortSide / 720));
+      const userLen = Math.min(1.5, Math.max(0.4, (Number(state.heatmapLegendLength) || 100) / 100));
+      const userSize = Math.min(28, Math.max(6, Math.round(Number(state.heatmapLegendSize) || 15)));
+      const fontCap = Math.max(6, Math.min(28, Math.round(plotW * 0.032)));
+      const fontSize = Math.round(Math.min(fontCap, Math.max(6, userSize * viewScale)));
+      const nBlocks = Math.round(Math.min(36, Math.max(8, 18 * userLen * (0.65 + 0.35 * viewScale))));
+      const units = result?.totals_heatmap?.units || "mol/kgw";
+      const titleText = shortSide < 400
+        ? `log₁₀ ${key} (${units})`
+        : `log₁₀ TOT ${key} (${units})`;
+      const scale = heatmapColorScale(result, key);
+      return { fontSize, nBlocks, titleText, ...scale, plotW, plotH };
+    }
+
+    const HEATMAP_LEGEND_FONT = "system-ui,Segoe UI,sans-serif";
+    let _legendMeasureCtx = null;
+
+    /** Measure legend text in the same face Plotly uses (█ ≠ digit width in sans). */
+    function measureLegendText(text, fontSize) {
+      if (!_legendMeasureCtx) {
+        const c = document.createElement("canvas");
+        _legendMeasureCtx = c.getContext("2d");
+      }
+      _legendMeasureCtx.font = `700 ${Math.max(1, fontSize)}px ${HEATMAP_LEGEND_FONT}`;
+      return _legendMeasureCtx.measureText(String(text ?? "")).width;
+    }
+
+    /**
+     * Build █ bar + extrema labels (low left → high right).
+     */
+    function heatmapLegendBarAndTicks(scale, nBlocks, stops, reverse, fontSize) {
+      const { lo, hi } = scale;
+      const n = Math.max(8, nBlocks | 0);
+      const loTxt = fmtLegendTick(lo);
+      const hiTxt = fmtLegendTick(hi);
+      let bar = "";
+      for (let i = 0; i < n; i++) {
+        const t = n <= 1 ? 0 : i / (n - 1);
+        const c = sampleColorscaleColor(stops, reverse ? 1 - t : t);
+        bar += `<span style="color:${c}">█</span>`;
+      }
+      const barPx = measureLegendText("█".repeat(n), fontSize);
+      const pad = "\u00A0";
+      const padW = Math.max(0.5, measureLegendText(pad, fontSize));
+      const gapTarget = Math.max(
+        0,
+        barPx - measureLegendText(loTxt, fontSize) - measureLegendText(hiTxt, fontSize),
+      );
+      let gap = "";
+      let gapW = 0;
+      let guard = 0;
+      while (gapW < gapTarget - padW * 0.4 && guard++ < 800) {
+        gap += pad;
+        gapW += padW;
+      }
+      return { text: `${bar}<br>${escapeHtml(loTxt)}${gap}${escapeHtml(hiTxt)}` };
+    }
+
+    /** Draggable paper annotation: title + colored █ bar + end values. */
+    function heatmapLegendAnnotation(result) {
+      if (state.heatmapShowColorbar === false) return null;
+      if (activeModeId !== "mineral-stability") return null;
+      if (!(state.fillMode === "heatmap" || isTotalsHeatmapMode(result))) return null;
+      const key = activeHeatmapKey(result);
+      if (!key || !totalsHeatmapGrid(result, key)) return null;
+      const m = heatmapLegendMetrics(result, key);
+      const stops = heatmapColorscaleValue(state.heatmapColorscale);
+      const rev = !!state.heatmapReverseScale;
+      const body = heatmapLegendBarAndTicks(m, m.nBlocks, stops, rev, m.fontSize).text;
+      // <br> required — Plotly strips block/flex CSS and would otherwise glue lines.
+      const text = `<b>${escapeHtml(m.titleText)}</b><br>${body}`;
+      return withOverlayPos({
+        text,
+        align: "center",
+        showarrow: false,
+        font: {
+          size: m.fontSize,
+          color: "#0f172a",
+          family: HEATMAP_LEGEND_FONT,
+          weight: 700,
+        },
+        bgcolor: "rgba(255,255,255,0.92)",
+        bordercolor: "#cbd5e1",
+        borderwidth: 1,
+        borderpad: Math.max(4, Math.round(m.fontSize * 0.28)),
+      }, "heatmapLegend", result);
+    }
+
+    /**
+     * Pixel box (plot area) covered by the heatmap legend annotation.
      * Contour labels avoid this so they cannot paint over the legend.
      */
     function heatmapColorbarAvoidBox(result, map) {
@@ -4761,27 +5053,33 @@
       if (!(state.fillMode === "heatmap" || isTotalsHeatmapMode(result))) return null;
       const key = activeHeatmapKey(result);
       if (!key || !totalsHeatmapGrid(result, key)) return null;
-      const cb = heatmapColorbarLayout(result, key);
-      const padX = Math.max(6, Number(cb.xpad) || 0);
-      const padY = Math.max(6, Number(cb.ypad) || 0);
-      const titleH = (cb.title?.font?.size || 12) * 1.5;
-      const tickH = (cb.tickfont?.size || 12) * 1.2;
-      const left = (cb.x - cb.len) * map.pw - padX;
-      const right = cb.x * map.pw + padX;
-      const top = (1 - cb.y) * map.ph - padY;
-      const bottom = top + titleH + cb.thickness + tickH + padY + 4;
-      return { l: left, r: right, t: top, b: bottom };
+      const m = heatmapLegendMetrics(result, key);
+      const pos = overlayPosFor("heatmapLegend", result);
+      const n = Math.max(8, m.nBlocks | 0);
+      const titleW = measureLegendText(m.titleText, m.fontSize);
+      const barW = measureLegendText("█".repeat(n), m.fontSize);
+      const boxW = Math.max(barW, titleW) + m.fontSize;
+      const boxH = m.fontSize * 3.6;
+      let cx = pos.x * map.pw;
+      let cy = (1 - pos.y) * map.ph;
+      if (pos.xanchor === "left") cx += boxW * 0.5;
+      else if (pos.xanchor === "right") cx -= boxW * 0.5;
+      if (pos.yanchor === "top") cy += boxH * 0.5;
+      else if (pos.yanchor === "bottom") cy -= boxH * 0.5;
+      const pad = 8;
+      return {
+        l: cx - boxW * 0.5 - pad,
+        r: cx + boxW * 0.5 + pad,
+        t: cy - boxH * 0.5 - pad,
+        b: cy + boxH * 0.5 + pad,
+      };
     }
 
     function systemLabelAnnotation(result) {
       if (!state.showSystemLabel) return null;
       const text = chemicalSystemLabelText(result);
       if (!text) return null;
-      return {
-        x: 1, y: 1,
-        xref: "paper", yref: "paper",
-        xanchor: "right", yanchor: "top",
-        xshift: -10, yshift: -10,
+      return withOverlayPos({
         text: `<b>${escapeHtml(text)}</b>`,
         showarrow: false,
         font: {
@@ -4794,7 +5092,7 @@
         bordercolor: "#cbd5e1",
         borderwidth: 1,
         borderpad: Math.max(4, Math.round(clampSystemLabelSize(state.systemLabelSize) * 0.35)),
-      };
+      }, "system", result);
     }
 
     function compositionEntries(result = runtime.lastResult) {
@@ -4821,11 +5119,7 @@
         const conc = roundForUnit(v, result?.input_units || state.units);
         return `${formatChemHtml(sp)} = ${escapeHtml(String(conc))} ${escapeHtml(units)}`;
       });
-      return {
-        x: 0, y: 0,
-        xref: "paper", yref: "paper",
-        xanchor: "left", yanchor: "bottom",
-        xshift: 10, yshift: 10,
+      return withOverlayPos({
         text: lines.join("<br>"),
         align: "left",
         showarrow: false,
@@ -4839,7 +5133,7 @@
         bordercolor: "#cbd5e1",
         borderwidth: 1,
         borderpad: Math.max(4, Math.round(size * 0.35)),
-      };
+      }, "composition", result);
     }
 
     function activeLayer(result, source = null, view = null) {
@@ -5335,6 +5629,8 @@
       state.showPhaseLabels = state.showPhaseLabels !== false;
       if (!["name", "formula", "both"].includes(state.phaseLabelMode)) state.phaseLabelMode = "name";
       state.labelFontSize = clampLabelFontSize(state.labelFontSize);
+      state.labelColor = normalizeHexColor(state.labelColor, LABEL_COLOR_DEFAULT);
+      state.labelBackground = state.labelBackground !== false;
       {
         const op = Number(state.fillOpacity);
         state.fillOpacity = Number.isFinite(op)
@@ -5364,6 +5660,7 @@
       state.layerElements ??= false;
       state.showSystemLabel ??= true;
       state.showCompositionBox ??= true;
+      state.overlayPos = normalizeOverlayPosMap(state.overlayPos);
       delete state.exportSize;
       state.exportAspect = clampExportAspect(state.exportAspect);
       state.exportDpi = clampExportDpi(state.exportDpi);
@@ -5394,14 +5691,26 @@
       }
       state.heatmapReverseScale = !!state.heatmapReverseScale;
       state.heatmapShowColorbar = state.heatmapShowColorbar !== false;
+      delete state.heatmapLegendVertical;
       {
-        const sz = Math.round(Number(state.heatmapColorbarSize));
-        state.heatmapColorbarSize = Number.isFinite(sz)
-          ? Math.min(150, Math.max(70, Math.round(sz / 10) * 10))
+        // Migrate pre-rename keys (Legend size→length, Legend font→size).
+        if (!Number.isFinite(Number(state.heatmapLegendLength))
+            && Number.isFinite(Number(state.heatmapColorbarSize))) {
+          state.heatmapLegendLength = state.heatmapColorbarSize;
+        }
+        if (!Number.isFinite(Number(state.heatmapLegendSize))
+            && Number.isFinite(Number(state.heatmapColorbarFontSize))) {
+          state.heatmapLegendSize = state.heatmapColorbarFontSize;
+        }
+        delete state.heatmapColorbarSize;
+        delete state.heatmapColorbarFontSize;
+        const len = Math.round(Number(state.heatmapLegendLength));
+        state.heatmapLegendLength = Number.isFinite(len)
+          ? Math.min(150, Math.max(40, Math.round(len / 10) * 10))
           : 100;
-        const fs = Math.round(Number(state.heatmapColorbarFontSize));
-        state.heatmapColorbarFontSize = Number.isFinite(fs)
-          ? Math.min(28, Math.max(8, fs))
+        const sz = Math.round(Number(state.heatmapLegendSize));
+        state.heatmapLegendSize = Number.isFinite(sz)
+          ? Math.min(28, Math.max(6, sz))
           : 15;
       }
       state.heatmapKey = typeof state.heatmapKey === "string" ? state.heatmapKey : "";
@@ -5440,7 +5749,7 @@
           : 11;
         const efs = Number(state.totalsContourElementFontSize);
         state.totalsContourElementFontSize = Number.isFinite(efs)
-          ? Math.min(22, Math.max(10, Math.round(efs)))
+          ? Math.min(22, Math.max(8, Math.round(efs)))
           : 13;
       }
       state.showTotalsContourElementLabel = state.showTotalsContourElementLabel !== false;
@@ -6509,35 +6818,36 @@
       $("heatmapShowColorbar")?.addEventListener("change", e => {
         state.heatmapShowColorbar = !!e.target.checked;
         persist();
+        syncFillModeControls(runtime.lastResult);
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       });
-      const setHeatmapColorbarSize = (v) => {
+      const setHeatmapLegendLength = (v) => {
         const n = Math.round(Number(v));
-        state.heatmapColorbarSize = Number.isFinite(n)
-          ? Math.min(150, Math.max(70, Math.round(n / 10) * 10))
+        state.heatmapLegendLength = Number.isFinite(n)
+          ? Math.min(150, Math.max(40, Math.round(n / 10) * 10))
           : 100;
-        const el = $("heatmapColorbarSize");
-        if (el) el.value = String(state.heatmapColorbarSize);
+        const el = $("heatmapLegendLength");
+        if (el) el.value = String(state.heatmapLegendLength);
         persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       };
-      const setHeatmapColorbarFont = (v) => {
-        state.heatmapColorbarFontSize = Math.min(28, Math.max(8, Math.round(Number(v) || 15)));
-        const el = $("heatmapColorbarFontSize");
-        if (el) el.value = String(state.heatmapColorbarFontSize);
+      const setHeatmapLegendSize = (v) => {
+        state.heatmapLegendSize = Math.min(28, Math.max(6, Math.round(Number(v) || 15)));
+        const el = $("heatmapLegendSize");
+        if (el) el.value = String(state.heatmapLegendSize);
         persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       };
-      $("heatmapColorbarSizeDec")?.addEventListener("click", () =>
-        setHeatmapColorbarSize((state.heatmapColorbarSize || 100) - 10));
-      $("heatmapColorbarSizeInc")?.addEventListener("click", () =>
-        setHeatmapColorbarSize((state.heatmapColorbarSize || 100) + 10));
-      $("heatmapColorbarSize")?.addEventListener("change", e => setHeatmapColorbarSize(e.target.value));
-      $("heatmapColorbarFontSizeDec")?.addEventListener("click", () =>
-        setHeatmapColorbarFont((state.heatmapColorbarFontSize || 15) - 1));
-      $("heatmapColorbarFontSizeInc")?.addEventListener("click", () =>
-        setHeatmapColorbarFont((state.heatmapColorbarFontSize || 15) + 1));
-      $("heatmapColorbarFontSize")?.addEventListener("change", e => setHeatmapColorbarFont(e.target.value));
+      $("heatmapLegendLengthDec")?.addEventListener("click", () =>
+        setHeatmapLegendLength((state.heatmapLegendLength || 100) - 10));
+      $("heatmapLegendLengthInc")?.addEventListener("click", () =>
+        setHeatmapLegendLength((state.heatmapLegendLength || 100) + 10));
+      $("heatmapLegendLength")?.addEventListener("change", e => setHeatmapLegendLength(e.target.value));
+      $("heatmapLegendSizeDec")?.addEventListener("click", () =>
+        setHeatmapLegendSize((state.heatmapLegendSize || 15) - 1));
+      $("heatmapLegendSizeInc")?.addEventListener("click", () =>
+        setHeatmapLegendSize((state.heatmapLegendSize || 15) + 1));
+      $("heatmapLegendSize")?.addEventListener("change", e => setHeatmapLegendSize(e.target.value));
       $("showTotalsContours")?.addEventListener("change", e => {
         state.showTotalsContours = e.target.checked;
         persist();
@@ -6594,7 +6904,7 @@
       });
       const setContourElementFont = (v) => {
         state.totalsContourElementFontSize = Math.min(
-          22, Math.max(10, Math.round(Number(v) || 13)),
+          22, Math.max(8, Math.round(Number(v) || 13)),
         );
         const el = $("totalsContourElementFontSize");
         if (el) el.value = String(state.totalsContourElementFontSize);
@@ -6777,6 +7087,19 @@
           e.target.blur();
         }
       });
+      const setLabelColor = (v) => {
+        state.labelColor = normalizeHexColor(v, LABEL_COLOR_DEFAULT);
+        const el = $("labelColor");
+        if (el) el.value = state.labelColor;
+        redrawDisplay();
+      };
+      $("labelColor")?.addEventListener("input", e => setLabelColor(e.target.value));
+      $("labelColor")?.addEventListener("change", e => setLabelColor(e.target.value));
+      $("labelColorReset")?.addEventListener("click", () => setLabelColor(LABEL_COLOR_DEFAULT));
+      $("labelBackground")?.addEventListener("change", e => {
+        state.labelBackground = !!e.target.checked;
+        redrawDisplay();
+      });
       $("fillOpacity").addEventListener("input", e => {
         state.fillOpacity = Math.min(1, Math.max(0.1, (Number(e.target.value) || 100) / 100));
         syncDisplayStyleReadouts();
@@ -6923,6 +7246,7 @@
         state.showCompositionBox = e.target.checked; persist();
         if (runtime.lastResult) drawDiagram(runtime.lastResult);
       });
+      $("resetOverlayPosBtn")?.addEventListener("click", () => resetOverlayPositions());
 
       $("exportAspect").addEventListener("change", e => {
         state.exportAspect = clampExportAspect(e.target.value);
@@ -8813,6 +9137,8 @@
       const minCells = Math.max(4, Math.floor(total * minFrac));
       const useArrows = state.calloutArrows !== false;
       const fontSize = clampLabelFontSize(state.labelFontSize);
+      const labelColor = normalizeHexColor(state.labelColor, LABEL_COLOR_DEFAULT);
+      const labelBg = state.labelBackground !== false;
       const seen = Array.from({ length: ny }, () => new Int8Array(nx));
       const ringsByCat = vectorRingsByCat(vectorLayer);
       const candidates = [];
@@ -8887,10 +9213,13 @@
         const tpx = tipsPx[ci].x, tpy = tipsPx[ci].y;
         const base = {
           text: c.text,
-          font: { size: fontSize, color: "#111" },
-          bgcolor: "rgba(255,255,255,0.72)",
-          borderpad: 2,
+          font: { size: fontSize, color: labelColor },
+          bgcolor: labelBg ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0)",
+          bordercolor: labelBg ? "rgba(0,0,0,0)" : "rgba(0,0,0,0)",
+          borderwidth: 0,
+          borderpad: labelBg ? 2 : 0,
           x: c.x, y: c.y,
+          // Phase labels may be dragged; contour digits use pointer-events:none.
         };
 
         const placementOk = (box) =>
@@ -8937,7 +9266,7 @@
             arrowhead: 3,
             arrowsize: 0.9,
             arrowwidth: 1.1,
-            arrowcolor: "#444",
+            arrowcolor: labelColor,
             standoff: 0,
             startstandoff: 3,
           });
@@ -9682,19 +10011,20 @@
         const n = Number(v);
         return Number.isFinite(n) && n > 0 ? Math.log10(n) : null;
       }));
-      // Horizontal colorbar: user size/font prefs, then fit to plot box + badge.
-      const showLegend = state.heatmapShowColorbar !== false;
+      // zmin/zmax = data log₁₀ extent (same values labeled on the legend ends).
+      const scale = heatmapColorScale(result, key);
       const opacity = Math.min(1, Math.max(0.1, Number(state.heatmapOpacity) || 1));
       return {
         type: "heatmap",
         x,
         y,
         z,
+        zmin: scale.lo,
+        zmax: scale.hi,
         colorscale: heatmapColorscaleValue(state.heatmapColorscale),
         reversescale: !!state.heatmapReverseScale,
         opacity,
-        colorbar: showLegend ? heatmapColorbarLayout(result, key) : undefined,
-        showscale: showLegend,
+        showscale: false,
         xgap: 0,
         ygap: 0,
         hoverinfo: "skip",
@@ -9824,26 +10154,21 @@
     }
 
     /**
-     * Sample label candidates along the longest in-band polyline.
+     * Sample label candidates along one in-band polyline.
      * Arc length and tangent are both in pixel space so orientation matches
      * the drawn stroke (axis aspect + pe/Eh/log fO₂ remap).
      */
-    function sampleContourLabelCandidates(segments, tempC, result, band, map) {
+    function sampleContourLabelCandidatesOnPoly(poly) {
+      if (!poly) return [];
       const fracs = [0.28, 0.36, 0.42, 0.46, 0.50, 0.54, 0.58, 0.64, 0.72];
-      let best = null;
-      for (const seg of segments || []) {
-        const poly = contourPolylinePixels(seg, tempC, result, band, map);
-        if (poly && (!best || poly.total > best.total)) best = poly;
-      }
-      if (!best) return [];
-      const { total } = best;
+      const { total } = poly;
       // Tangent baseline ≥ ~10 px so noisy short chords do not jitter the angle.
       const tanDelta = Math.max(10, total * 0.04);
       const out = [];
       for (const frac of fracs) {
-        const mid = pointAtPixelArc(best, frac * total);
-        const a = pointAtPixelArc(best, Math.max(0, frac * total - tanDelta));
-        const b = pointAtPixelArc(best, Math.min(total, frac * total + tanDelta));
+        const mid = pointAtPixelArc(poly, frac * total);
+        const a = pointAtPixelArc(poly, Math.max(0, frac * total - tanDelta));
+        const b = pointAtPixelArc(poly, Math.min(total, frac * total + tanDelta));
         if (Math.hypot(b.px - a.px, b.py - a.py) < 4) continue;
         const ang = contourTextAnglePx(a.px, a.py, b.px, b.py);
         out.push({
@@ -9860,38 +10185,60 @@
     }
 
     /**
-     * Place one label per contour level: prefer mid-arc, keep labels in a
-     * compact cluster across levels, and avoid collisions (contour + others).
-     * Labels are drawn inline with the stroke (no halo box); callers gap the
-     * contour polyline through each label via the returned ``gaps``.
+     * Place one label per long enough contour polyline (not merely per level).
+     * Same-level bumps / disconnected arcs each get their own digit when space
+     * allows. Prefer mid-arc; soft-cluster across levels for a readable ladder;
+     * avoid collisions. Callers gap strokes through returned ``gaps``.
      */
     function placeTotalsContourLabels(levelJobs, tempC, result, band, fontSize, avoidAnns) {
       const map = makeLabelPlotMapper(result);
       const placed = annotationAvoidBoxes(avoidAnns, map, fontSize);
       const cbBox = heatmapColorbarAvoidBox(result, map);
       if (cbBox) placed.push(cbBox);
+      // Expand each level into one job per drawable polyline so a mid-pH bump
+      // (same log value on left and right) can label both branches.
       const jobs = [];
       for (const job of levelJobs) {
-        const samples = sampleContourLabelCandidates(
-          job.segments, tempC, result, band, map,
-        );
-        if (!samples.length) continue;
-        jobs.push({ ...job, samples });
+        for (const seg of job.segments || []) {
+          const poly = contourPolylinePixels(seg, tempC, result, band, map);
+          if (!poly) continue;
+          const samples = sampleContourLabelCandidatesOnPoly(poly);
+          if (!samples.length) continue;
+          jobs.push({
+            text: job.text,
+            level: job.level,
+            samples,
+            len: poly.total,
+          });
+        }
       }
-      jobs.sort((a, b) => a.level - b.level);
+      // Longer arcs first within a level; levels still ordered low→high for
+      // the ladder spine, then expand from the middle level outward.
+      jobs.sort((a, b) => (a.level - b.level) || (b.len - a.len));
       if (!jobs.length) return { annotations: [], gaps: [] };
 
-      // Place middle levels first so the cluster grows from a readable spine.
-      const mid = Math.floor(jobs.length / 2);
+      const levels = [...new Set(jobs.map(j => j.level))].sort((a, b) => a - b);
+      const midLv = levels[Math.floor(levels.length / 2)];
       const order = [];
-      const seen = new Set();
-      for (let d = 0; d < jobs.length; d++) {
-        for (const i of [mid + d, mid - d]) {
-          if (i >= 0 && i < jobs.length && !seen.has(i)) {
-            seen.add(i);
-            order.push(i);
+      const byLevel = new Map();
+      for (let i = 0; i < jobs.length; i++) {
+        const lv = jobs[i].level;
+        if (!byLevel.has(lv)) byLevel.set(lv, []);
+        byLevel.get(lv).push(i);
+      }
+      const lvOrder = [];
+      const midIdx = levels.indexOf(midLv);
+      const seenLv = new Set();
+      for (let d = 0; d < levels.length; d++) {
+        for (const i of [midIdx + d, midIdx - d]) {
+          if (i >= 0 && i < levels.length && !seenLv.has(i)) {
+            seenLv.add(i);
+            lvOrder.push(levels[i]);
           }
         }
+      }
+      for (const lv of lvOrder) {
+        for (const i of byLevel.get(lv) || []) order.push(i);
       }
 
       const diag = Math.hypot(map.pw, map.ph) || 1;
@@ -9911,10 +10258,10 @@
           const box = rotatedLabelBox(s.px, s.py, w, h, s.ang);
           if (!map.inBounds(box) || labelCollides(box, placed, 4)) continue;
           const midPen = Math.abs(s.frac - 0.5);
+          // Soft ladder clustering — weak enough that a distant same-level
+          // branch can still take its own mid-arc (not pulled onto the first).
           const clusterDist = Math.hypot(s.px - clusterX, s.py - clusterY) / diag;
-          // Mid-arc + stay near the shared label ladder; slight preference for
-          // the geometric middle sample when scores tie.
-          const score = midPen * 1.35 + clusterDist * 2.8 + Math.abs(s.frac - 0.5) * 0.05;
+          const score = midPen * 1.35 + clusterDist * 0.85 + Math.abs(s.frac - 0.5) * 0.05;
           if (score < bestScore) {
             bestScore = score;
             best = { s, box, w };
@@ -9948,6 +10295,7 @@
           halfPx: textW * 0.5 + clearance,
         });
         annotations.push({
+          name: "phaser-contour-label",
           x: best.s.x,
           y: best.s.y,
           text,
@@ -9955,6 +10303,7 @@
           showarrow: false,
           xanchor: "center",
           yanchor: "middle",
+          captureevents: false,
           font: {
             size: fontSize,
             color: lineColor,
@@ -10129,13 +10478,9 @@
       const key = keys[0];
       const units = result?.totals_contours?.units || "mol/kgw";
       const size = Math.min(
-        22, Math.max(10, Math.round(Number(state.totalsContourElementFontSize) || 13)),
+        22, Math.max(8, Math.round(Number(state.totalsContourElementFontSize) || 13)),
       );
-      return {
-        x: 1, y: 0,
-        xref: "paper", yref: "paper",
-        xanchor: "right", yanchor: "bottom",
-        xshift: -10, yshift: 10,
+      return withOverlayPos({
         text: `Contours for <b>${escapeHtml(key)}</b> · log₁₀(${escapeHtml(units)})`,
         showarrow: false,
         font: {
@@ -10148,7 +10493,7 @@
         bordercolor: "#cbd5e1",
         borderwidth: 1,
         borderpad: Math.max(3, Math.round(size * 0.3)),
-      };
+      }, "contourElement", result);
     }
 
     function totalsContourOverlay(result, avoidAnnotations = []) {
@@ -10255,20 +10600,20 @@
       if (rev) rev.checked = !!state.heatmapReverseScale;
       const showCb = $("heatmapShowColorbar");
       if (showCb) showCb.checked = state.heatmapShowColorbar !== false;
-      const cbs = $("heatmapColorbarSize");
-      if (cbs && document.activeElement !== cbs) {
-        cbs.value = String(state.heatmapColorbarSize ?? 100);
+      const lenEl = $("heatmapLegendLength");
+      if (lenEl && document.activeElement !== lenEl) {
+        lenEl.value = String(state.heatmapLegendLength ?? 100);
       }
-      const cbf = $("heatmapColorbarFontSize");
-      if (cbf && document.activeElement !== cbf) {
-        cbf.value = String(state.heatmapColorbarFontSize ?? 15);
+      const sizeEl = $("heatmapLegendSize");
+      if (sizeEl && document.activeElement !== sizeEl) {
+        sizeEl.value = String(state.heatmapLegendSize ?? 15);
       }
-      const legendControls = [cbs, cbf].filter(Boolean);
-      legendControls.forEach(el => { el.disabled = state.heatmapShowColorbar === false; });
-      $("heatmapColorbarSizeDec") && ($("heatmapColorbarSizeDec").disabled = state.heatmapShowColorbar === false);
-      $("heatmapColorbarSizeInc") && ($("heatmapColorbarSizeInc").disabled = state.heatmapShowColorbar === false);
-      $("heatmapColorbarFontSizeDec") && ($("heatmapColorbarFontSizeDec").disabled = state.heatmapShowColorbar === false);
-      $("heatmapColorbarFontSizeInc") && ($("heatmapColorbarFontSizeInc").disabled = state.heatmapShowColorbar === false);
+      const legendOff = state.heatmapShowColorbar === false;
+      [
+        lenEl, sizeEl,
+        $("heatmapLegendLengthDec"), $("heatmapLegendLengthInc"),
+        $("heatmapLegendSizeDec"), $("heatmapLegendSizeInc"),
+      ].filter(Boolean).forEach(el => { el.disabled = legendOff; });
     }
 
     function syncTotalsContourKeyList(result = runtime.lastResult) {
@@ -10424,6 +10769,8 @@
       if (sysAnn) layout.annotations.push(sysAnn);
       const compAnn = compositionBoxAnnotation(result);
       if (compAnn) layout.annotations.push(compAnn);
+      const legendAnn = heatmapLegendAnnotation(result);
+      if (legendAnn) layout.annotations.push(legendAnn);
       if (!traces.length) {
         traces.push({
           type: "scatter", x: [x[0]], y: [y[0]], mode: "markers",
@@ -10644,11 +10991,14 @@
       const layer = activeLayer(result);
       const vectorLayer = usesVectorDisplay(result) ? activeVectorLayer(result) : null;
       fitPlotBox();
-      Plotly.react("plotDiv", spec.traces, spec.layout, {
-        responsive: true,
-        displaylogo: false,
-        displayModeBar: false,
-      }).then(() => { clearPlotHover(); }, () => {});
+      Plotly.react("plotDiv", spec.traces, spec.layout, plotlyDragConfig()).then(
+        () => {
+          disableContourLabelPointerEvents($("plotDiv"));
+          bindPlotOverlayDrag();
+          clearPlotHover();
+        },
+        () => {},
+      );
       const mode = adaptiveStatusSuffix(result);
       $("plotMeta").textContent =
         `${result.n_converged}/${result.n_total} converged · ${(vectorLayer || layer).label} · T=${result.temp_c} °C${mode}`;
