@@ -1102,7 +1102,7 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 
 | Field | Meaning |
 |-------|---------|
-| `refine_factor` | Display subdivision factor (`ADAPTIVE_REFINE_FACTOR`, default 5) |
+| `refine_factor` | Display subdivision factor (`ADAPTIVE_REFINE_FACTOR`, default 6) |
 | `base_levels_ph`, `base_levels_pe` | Base grid dimensions (same as the user's plot resolution) |
 | `boundary_cells` | Number of base cells flagged as straddling a boundary |
 | `n_evaluated` | Total PHREEQC runs (base grid + trace/fallback evaluations) |
@@ -1121,7 +1121,7 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 | Constant | Default | Purpose |
 |----------|---------|---------|
 | `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI/API default for Trace phase edges |
-| `ADAPTIVE_REFINE_FACTOR` | 5 | Fallback sub-grid / local geometry (`PHASER_ADAPTIVE_REFINE_FACTOR`) |
+| `ADAPTIVE_REFINE_FACTOR` | 6 | Fallback sub-grid / local geometry (`PHASER_ADAPTIVE_REFINE_FACTOR`) |
 | `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evals in adaptive mode |
 | `BOUNDARY_TRACE_TOLERANCE` | 1e-3 | Phase-boundary `brentq` / 2D roots |
 | `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed edges (looser) |
@@ -1140,7 +1140,7 @@ Optional post-grid step (`phreeqc/totals_contours.py`) when the compute request 
 
 **Root-find.** Same idea as phase-boundary edges: for each grid cell and level, `brentq` finds zeros of `log₁₀(TOT) − level` on the four cell edges (shared edges rooted once per worker via a canonical edge cache). Two crossings → one chord; four crossings (saddle) → two chords in edge-walk order. Chords are **stitched** into continuous polylines by matching endpoints (grid-aware snap). Water-band clipping is **not** applied here — the UI white masks cut strokes at the gas lines (see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)).
 
-**Parallelism.** Contiguous **pH-line bands** (`workers × CONTOUR_BANDS_PER_WORKER`, default **2** interleaved strips per worker), not Morton cell shards — isolines need locality along consecutive `i` rows. Each worker gets a `PointEvaluator` that **trusts** the base-grid seed `aq_total_by_key` (no corner re-PHREEQC). Band results are merged and **re-stitched** across band seams. Abort/timeout uses the same `managed_process_pool` kill path as sweep/trace. Progress phase: **`contours`**.
+**Parallelism.** Contiguous **pH-line bands** (`CONTOUR_BANDS_PER_WORKER` consecutive pH-cell rows per job, default **1**), not Morton cell shards — isolines need locality along consecutive `i` rows. Up to `workers` jobs run at once. Progress first ticks once per worker as the spawn pool finishes `init_phreeqc`, then once per band job — otherwise the bar sat at 0 for the whole warmup and jumped when jobs finished in a wave. Each worker gets a `PointEvaluator` that **trusts** the base-grid seed `aq_total_by_key` (no corner re-PHREEQC). Band results are merged and **re-stitched** across band seams. Abort/timeout uses the same `managed_process_pool` kill path as sweep/trace. Progress phase: **`contours`**.
 
 **Packed shape** (attached on the job result):
 
@@ -1264,16 +1264,17 @@ After the base grid is labelled, only **mixed cells** (disagreeing corner signat
 After the base grid (and optional boundary trace), Mineral Stability jobs with `totals_contours` root-find `log₁₀(TOT)` isolines.
 
 - Pool initializer `_contour_worker_init`: each child gets IPhreeqc, `GridJobParams`, axis arrays, a light seed of base-grid `aq_total_by_key`, and `brentq` tolerance (`trust_seed_cache=True` on the evaluator).
-- The cell grid is split into **`workers × CONTOUR_BANDS_PER_WORKER`** contiguous pH-line strips (`_chunk_contour_cells`, default **2** bands/worker), then round-robin assigned so each worker owns that many strips in **one** pool job — isolines stay local; results are merged and re-stitched across band seams.
-- Futures run `_contour_chunk_job` (key + levels + cells); progress is **jobs completed** (`phase=contours`).
+- The cell grid is split into contiguous pH-line strips of **`CONTOUR_BANDS_PER_WORKER`** rows each (`_chunk_contour_cells`, default **1** row/job); isolines stay local; results are merged and re-stitched across band seams.
+- Before band work, one `_contour_worker_ready` future per worker forces initializer completion so progress advances during pool warmup.
+- Futures run `_contour_chunk_job` (key + levels + cells); progress is **warmup workers + band jobs completed** (`phase=contours`).
 
 | | Grid sweep | Boundary trace | Totals contours |
 |--|------------|----------------|-----------------|
 | Unit of work | `(pH, pe)` points | Mixed base cells | Cell bands × element key |
-| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`) | Contiguous pH-line bands (`CONTOUR_BANDS_PER_WORKER` strips/worker) |
+| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`) | Contiguous pH-line bands (`CONTOUR_BANDS_PER_WORKER` rows/job) |
 | Heavy payload in init | `GridJobParams` | `trace_params` + axes + tolerances + mode | `GridJobParams` + axes + seed totals |
 | Per-task payload | Point coordinates | Cell indices + corner seeds | Cells + key + levels |
-| Progress | Points done | Chunks done | Band jobs done |
+| Progress | Points done | Chunks done | Worker warmup + band jobs done |
 
 Production CPU / worker sizing: [6.5 CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs).
 
@@ -1448,7 +1449,7 @@ Key fields in the JSON body:
 | `mineral_category_mode` | `moles` | `moles` or `costability` — used when `solution_mode` is an assemblage mode; ignored for SI predominance |
 | `totals_contours` | `false` (`PHASER_TOTALS_CONTOURS`) | Mineral Stability: root-find log₁₀(TOT) isolines after the base grid (packed as `totals_contours`; job `phase=contours`). Ignored for SI predominance. Bare-element `TOT` heatmap data is always punched on assemblage jobs regardless of this flag |
 | `totals_contour_log_step` | `2` | Spacing of contour levels in log₁₀(molality); clamped to `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN`–`_MAX` (0.5–6). Included in the browser cache key with `totals_contours` |
-| `adaptive_refine_factor` | server default (5) | Display subdivision factor (included in browser cache key) |
+| `adaptive_refine_factor` | server default (6) | Display subdivision factor (included in browser cache key) |
 | `gas_phases` / `include_common_gases` | none / `false` | Component trace gases (CO₂, CH₄, …) for over-pressure boundaries |
 | `o2_limit_atm` | `0.21` | O₂ water-stability limit (atm); absolute `1e−12`–`300` — see [Water window and gas lines](#16-water-window-and-gas-lines) |
 | `h2_limit_atm` | `1.0` | H₂ water-stability limit (atm); same absolute pressure bounds as O₂ |
@@ -1568,13 +1569,13 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_TOTALS_CONTOURS` | `false` | Default for per-job `totals_contours` (Mineral Stability isolines) |
 | `PHASER_TOTALS_CONTOUR_LOG_STEP` | `2` | Default for `totals_contour_log_step` |
 | `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN` / `_MAX` | `0.5` / `6` | Clamp for `totals_contour_log_step` |
-| `PHASER_CONTOUR_BANDS_PER_WORKER` | `2` | Interleaved pH-line strips per contour worker (one pool job/worker) |
+| `PHASER_CONTOUR_BANDS_PER_WORKER` | `1` | Consecutive pH-cell rows per contour pool job |
 | `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode` |
 | `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides (clamped to `GAS_LIMIT_ATM_*`) |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | Component-gas reference pressure |
 | `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | `true` | Skip PHREEQC outside water band |
 | `PHASER_SWEEP_WATER_MARGIN_CELLS` | `1.0` | Extra cells beyond analytic clip |
-| `PHASER_ADAPTIVE_REFINE_FACTOR` | `5` | Adaptive fallback / local geometry |
+| `PHASER_ADAPTIVE_REFINE_FACTOR` | `6` | Adaptive fallback / local geometry |
 | `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft adaptive PHREEQC budget |
 | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-3` | Phase-boundary roots |
 | `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed roots |
@@ -1598,7 +1599,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_DATA_DIR` | `./data/databases/generated` | Docker host mount for generated DBs |
 | `CLOUDFLARE_TUNNEL_TOKEN` | — | Compose `tunnel` profile |
 | `WATCHTOWER_INTERVAL` | `3600` | Compose `watchtower` profile |
-| `PHASER_REPO_URL` / `PHASER_ISSUES_URL` / license / DOI / `PHASER_BUILD_ID` | (repo defaults) | Statistics About panel |
+| `PHASER_REPO_URL` / `PHASER_ISSUES_URL` / `PHASER_DOCS_URL` / license / DOI / `PHASER_BUILD_ID` | (repo defaults) | Statistics About panel |
 | Default units / species conc. | `mmol/kgw` / `1.0` | UI and API defaults |
 
 ---

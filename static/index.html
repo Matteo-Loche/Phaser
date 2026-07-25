@@ -1620,6 +1620,8 @@
       background: #fff; overflow: hidden;
     }
     #plotDiv { width: 100%; height: 100%; }
+    /* Plotly “Double-click to zoom back out” (and similar) corner toasts. */
+    .plotly-notifier { display: none !important; }
 
     /* Narrow/medium screens: options menu moves on top as a wrapping bar.
        Visual order: toolbar → horizontal resizer → plot (DOM order differs). */
@@ -3640,6 +3642,7 @@
         : "";
       const repo = htmlEscape(about.repository_url || "");
       const issues = htmlEscape(about.issues_url || "");
+      const docs = htmlEscape(about.documentation_url || "");
       const licenseName = about.license_name || "License";
       const licenseUrl = about.license_url || "";
       const doiUrl = about.doi_url || "";
@@ -3659,8 +3662,9 @@
         );
       }
       const links = [
-        `<a href="${repo}" target="_blank" rel="noopener noreferrer">Source code</a>`,
-        `<a href="${htmlEscape(issues)}" target="_blank" rel="noopener noreferrer">Report a bug</a>`,
+        docs ? `<a href="${docs}" target="_blank" rel="noopener noreferrer">Documentation</a>` : "",
+        repo ? `<a href="${repo}" target="_blank" rel="noopener noreferrer">Source code</a>` : "",
+        issues ? `<a href="${issues}" target="_blank" rel="noopener noreferrer">Report a bug</a>` : "",
       ].filter(Boolean).join(" · ");
       el.innerHTML = `
         <p><strong>PHASER ${ver}</strong>${build}</p>
@@ -4801,6 +4805,7 @@
         responsive: true,
         displaylogo: false,
         displayModeBar: false,
+        showTips: false, // no corner “Double-click to zoom back out” helper
         editable: true,
         edits: {
           annotationPosition: true,
@@ -5346,8 +5351,10 @@
           if (text) text.textContent = "…";
         } else {
           el.classList.remove("indeterminate");
-          const p = Math.max(0, Math.min(100, Math.round(pct)));
-          if (fill) fill.style.clipPath = `inset(0 ${100 - p}% 0 0)`;
+          // Keep sub-percent fill motion; label stays a whole percent.
+          const raw = Math.max(0, Math.min(100, Number(pct) || 0));
+          const p = Math.round(raw);
+          if (fill) fill.style.clipPath = `inset(0 ${100 - raw}% 0 0)`;
           if (text) text.textContent = p + "%";
         }
       },
@@ -6244,7 +6251,7 @@
       syncNumericInputAttrs();
     }
     function adaptiveFactor() {
-      return (runtime.cfg && runtime.cfg.adaptive_refine_factor) || 5;
+      return (runtime.cfg && runtime.cfg.adaptive_refine_factor) || 6;
     }
 
     /** Absolute compute bounds from /api/config (fallback matches server defaults). */
@@ -8524,7 +8531,7 @@
           }
           if (st.status === "running") {
             const phase = st.phase || "grid";
-            JobProgress.setPhase(phase, st.progress || 0);
+            JobProgress.setPhase(phase, Number(st.progress ?? 0));
             const phaseLabel = {
               grid: "Computing grid",
               compute: "Computing grid",

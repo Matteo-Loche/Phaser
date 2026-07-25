@@ -224,20 +224,20 @@ def _chunk_contour_cells(
     workers: int,
     bands_per_worker: int | None = None,
 ) -> list[list[tuple[int, int]]]:
-    """Split the cell grid into one pool job per worker (pH-line bands).
+    """Split the cell grid into one pool job per pH-line group.
 
-    Build ``workers × bands_per_worker`` contiguous pH-line strips, then
-    round-robin them so each worker owns that many (possibly non-adjacent)
-    bands in a single future. Seed TOT values are trusted in workers — no
-    corner re-PHREEQC. Morton-style cell shards are avoided (isolines need
-    locality; seams are re-stitched after merge).
+    Each job is ``bands_per_worker`` consecutive pH-cell rows (default from
+    ``CONTOUR_BANDS_PER_WORKER``), so progress can advance when a line group
+    finishes. ``workers`` is unused for chunking (the pool caps concurrency);
+    kept for call-site compatibility. Morton-style cell shards are avoided
+    (isolines need locality; seams are re-stitched after merge).
     """
+    del workers  # concurrency is enforced by the pool, not by chunk count
     n_i = max(int(n_ph) - 1, 0)
     n_j = max(int(n_pe) - 1, 0)
     if n_i == 0 or n_j == 0:
         return []
-    w = max(int(workers), 1)
-    bpw = max(
+    rows_per_job = max(
         1,
         int(
             bands_per_worker
@@ -245,14 +245,9 @@ def _chunk_contour_cells(
             else config.CONTOUR_BANDS_PER_WORKER
         ),
     )
-    n_bands = max(1, min(w * bpw, n_i))
-    base, extra = divmod(n_i, n_bands)
     strips: list[list[tuple[int, int]]] = []
-    start = 0
-    for _bi in range(n_bands):
-        height = base + (1 if _bi < extra else 0)
-        if height <= 0:
-            continue
+    for start in range(0, n_i, rows_per_job):
+        height = min(rows_per_job, n_i - start)
         strips.append(
             [
                 (i, j)
@@ -260,12 +255,12 @@ def _chunk_contour_cells(
                 for j in range(n_j)
             ]
         )
-        start += height
-    n_jobs = min(w, len(strips))
-    chunks: list[list[tuple[int, int]]] = [[] for _ in range(n_jobs)]
-    for bi, strip in enumerate(strips):
-        chunks[bi % n_jobs].extend(strip)
-    return [c for c in chunks if c]
+    return strips
+
+
+def _contour_worker_ready() -> bool:
+    """No-op task that runs only after worker initializer finishes."""
+    return _WORKER_EVALUATOR is not None
 
 
 def _canonical_grid_edge(
@@ -535,14 +530,24 @@ def _find_totals_contours_parallel(
             jobs.append({"key": key, "levels": levels, "cells": chunk})
     if not jobs:
         return {}
-    if progress_cb:
-        progress_cb(0, len(jobs))
 
+    # Most contour wall time used to sit at progress=0 while spawn workers ran
+    # ``init_phreeqc``. Budget warmup ticks (one per worker) so the UI advances
+    # through that phase, then one tick per pH-line job.
+    n_workers = max(int(max_workers), 1)
+    total_units = n_workers + len(jobs)
+    done_units = 0
+
+    def report() -> None:
+        if progress_cb:
+            progress_cb(done_units, total_units)
+
+    report()
     seed_rows = _light_seed_rows(results)
     merged: dict[str, dict[float, list[list[list[float]]]]] = {}
     with managed_process_pool(
         job_id,
-        max_workers=max_workers,
+        max_workers=n_workers,
         initializer=_contour_worker_init,
         initargs=(
             params.dll_path,
@@ -555,20 +560,27 @@ def _find_totals_contours_parallel(
         ),
     ) as pool:
         try:
+            # Force initializer on each worker and tick as they become ready.
+            warmups = {
+                pool.submit(_contour_worker_ready): i for i in range(n_workers)
+            }
+            for future, _idx in iter_futures_abortable(warmups, job_id=job_id):
+                future.result(timeout=0.1)
+                done_units += 1
+                report()
+
             futures = {
                 pool.submit(_contour_chunk_job, job): idx
                 for idx, job in enumerate(jobs)
             }
-            done = 0
             for future, _idx in iter_futures_abortable(futures, job_id=job_id):
                 result = future.result(timeout=0.1)
                 key = result["key"]
                 bucket = merged.setdefault(key, {})
                 for lv_s, segs in (result.get("by_level") or {}).items():
                     bucket.setdefault(float(lv_s), []).extend(segs)
-                done += 1
-                if progress_cb:
-                    progress_cb(done, len(jobs))
+                done_units += 1
+                report()
         except Exception as exc:
             from ..services.job_control import JobAborted
 
@@ -614,9 +626,9 @@ def find_totals_contours(
     """Trace ``log10(TOT)`` isolines for each key.
 
     When ``params`` is set (live PHREEQC path), contiguous pH-line bands are
-    evaluated in a ``ProcessPoolExecutor`` (trusted seed TOT cache;
-    ``CONTOUR_BANDS_PER_WORKER`` interleaved bands per worker — not Morton
-    shards). Synthetic / analytic evaluators stay single-process.
+    evaluated in a ``ProcessPoolExecutor`` (trusted seed TOT cache; one job per
+    ``CONTOUR_BANDS_PER_WORKER`` pH rows, plus per-worker warmup ticks — not
+    Morton shards). Synthetic / analytic evaluators stay single-process.
     """
     step = clamp_contour_log_step(
         log_step if log_step is not None else config.TOTALS_CONTOUR_LOG_STEP_DEFAULT

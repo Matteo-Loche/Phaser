@@ -103,6 +103,10 @@ _DEFAULT_REPO_URL = "https://github.com/matteo-loche/phaser"
 REPOSITORY_URL = os.environ.get("PHASER_REPO_URL", _DEFAULT_REPO_URL).strip() or _DEFAULT_REPO_URL
 _issues_override = os.environ.get("PHASER_ISSUES_URL", "").strip()
 ISSUES_URL = _issues_override or f"{REPOSITORY_URL.rstrip('/')}/issues"
+_docs_override = os.environ.get("PHASER_DOCS_URL", "").strip()
+DOCUMENTATION_URL = (
+    _docs_override or f"{REPOSITORY_URL.rstrip('/')}/blob/main/README.md"
+)
 
 
 def _find_license_file() -> tuple[str, Path] | None:
@@ -319,7 +323,7 @@ TOTALS_CONTOUR_LOG_STEP_MAX = float(
     os.environ.get("PHASER_TOTALS_CONTOUR_LOG_STEP_MAX", "6")
 )
 # Subdivision per base cell for fallback sampling and geometric traced fills.
-ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "5"))
+ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "6"))
 # Soft cap on total PHREEQC evaluations in adaptive mode (base grid + trace work).
 MAX_ADAPTIVE_POINTS = int(os.environ.get("PHASER_MAX_ADAPTIVE_POINTS", "120000"))
 # Aqueous species molalities punched per element (USER_PUNCH via SYS) for
@@ -344,8 +348,9 @@ BOUNDARY_TRACE_STABILITY_TOLERANCE = float(
 # Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
 TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "16"))
 TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "4"))
-# Totals-contour pool: interleaved pH-line bands per worker (one job/worker).
-CONTOUR_BANDS_PER_WORKER = int(os.environ.get("PHASER_CONTOUR_BANDS_PER_WORKER", "2"))
+# Totals-contour pool: consecutive pH-cell rows per pool job (progress ticks
+# once per job; worker warmup is reported separately before band work).
+CONTOUR_BANDS_PER_WORKER = int(os.environ.get("PHASER_CONTOUR_BANDS_PER_WORKER", "1"))
 # Base grid sweep: ProcessPoolExecutor.map chunksize (points per IPC message).
 SWEEP_MAP_CHUNKSIZE = int(os.environ.get("PHASER_SWEEP_MAP_CHUNKSIZE", "200"))
 

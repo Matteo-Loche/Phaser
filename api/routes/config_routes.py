@@ -138,6 +138,7 @@ def get_config():
             "build_id": config.BUILD_ID,
             "repository_url": config.REPOSITORY_URL,
             "issues_url": config.ISSUES_URL,
+            "documentation_url": config.DOCUMENTATION_URL,
             "license_name": config.LICENSE_NAME,
             "license_url": config.LICENSE_URL,
             "doi_url": config.DOI_URL,
