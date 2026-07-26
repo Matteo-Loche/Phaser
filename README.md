@@ -295,7 +295,7 @@ PHASER/
 ├── docker-compose.yml     # Server deployment (pull GHCR; optional local build)
 ├── Dockerfile             # Image build (used by GitHub Actions and compose --build)
 ├── .github/workflows/
-│   └── docker-publish.yml # Build & push to GHCR on main / tags
+│   └── docker-publish.yml # Build & push to GHCR on version tags (v*)
 └── data/
     ├── catalog.sqlite     # Auto-created PHREEQC catalog cache (gitignored)
     ├── stats.sqlite       # Auto-created per-server usage log (gitignored)
@@ -1675,16 +1675,13 @@ Never commit the real tunnel token.
 
 ### 6.3 Image publishing (GitHub Actions)
 
-The workflow `.github/workflows/docker-publish.yml` builds and pushes to **GHCR** on every push to **`main`** and on version tags (`v1.2.3`):
+The workflow `.github/workflows/docker-publish.yml` builds and pushes to **GHCR** only on version tags (`v1.2.3`).
 
 ```text
-ghcr.io/matteo-loche/phaser:latest   # newest commit on main
-ghcr.io/matteo-loche/phaser:0.1.0    # git tag v0.1.0
+ghcr.io/matteo-loche/phaser:0.2.1    # git tag v0.2.1
+ghcr.io/matteo-loche/phaser:latest   # same image as that release (last tagged build)
 ```
-
-Pushes to **`main`** and tags matching **`v*`** trigger a build; other branches do not update `:latest`.
-
-Application version (and optional DOI) are defined in **`__version__.py`** and exposed via `GET /api/config` under `about`.
+Application version and optional are defined in **`__version__.py`** and exposed via `GET /api/config` under `about`.
 
 ### 6.4 Production server
 
