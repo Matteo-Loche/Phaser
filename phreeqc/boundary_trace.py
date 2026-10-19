@@ -1728,14 +1728,20 @@ def _normalize_trace_mode(trace_mode: str) -> str:
     """Map legacy mineral aliases; leave predominance unchanged.
 
     ``mineral_si`` is a historical alias for ``mineral_costability`` (post-precip
-    moles joins under EQUI) — not free-SI co-stability.
+    moles joins under EQUI) — not free-SI co-stability. Any other value raises
+    ValueError instead of being traced as predominance.
     """
     mode = str(trace_mode or "predominance")
     if mode in ("mineral", "mineral_moles"):
         return "mineral_moles"
     if mode in ("mineral_si", "mineral_costability"):
         return "mineral_costability"
-    return mode
+    if mode == "predominance":
+        return mode
+    raise ValueError(
+        f"Unknown trace_mode {trace_mode!r}. "
+        "Use predominance, mineral_moles or mineral_costability."
+    )
 
 
 def _trace_worker_init(

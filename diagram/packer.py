@@ -725,9 +725,7 @@ def pack_mineral_grid_results(
     separate. Does not alter ``pack_grid_results``.
     """
     del db_path
-    mode: MineralCategoryMode = (
-        "costability" if category_mode == "costability" else "moles"
-    )
+    mode: MineralCategoryMode = config.require_mineral_category_mode(category_mode)  # type: ignore[assignment]
     ph = np.linspace(params.ph_min, params.ph_max, params.ph_levels)
     pe = np.linspace(params.pe_min, params.pe_max, params.pe_levels)
 

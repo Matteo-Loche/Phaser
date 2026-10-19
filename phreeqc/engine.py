@@ -85,7 +85,10 @@ def grid_job_params_from_dict(data: dict) -> GridJobParams:
         if axis == "eh":
             axis = config.REDOX_AXIS_PE
         if axis not in config.REDOX_AXES:
-            axis = config.REDOX_AXIS_DEFAULT
+            raise ValueError(
+                f"Unknown redox_axis {kwargs.get('redox_axis')!r}. "
+                f"Use one of: {', '.join(config.REDOX_AXES)}."
+            )
         kwargs["redox_axis"] = axis
     return GridJobParams(**kwargs)
 
@@ -686,6 +689,19 @@ def format_assemblage_selected_output_suffix(params: GridJobParams) -> str:
     return f"{_format_selected_output_block(params, user_punch=user_punch, mol_line=mol_line)}END\n"
 
 
+# Solution modes format_grid_input has an input builder for. A mode listed in
+# config.SOLUTION_MODES but missing here would otherwise run the wrong chemistry
+# and still draw a plausible diagram.
+_INPUT_BUILDER_MODES = frozenset(
+    {"dummy_titration", "assemblage_dummy_titration", "assemblage_titration", "titration"}
+)
+
+
+def _require_input_builder(solution_mode: str) -> None:
+    if solution_mode not in _INPUT_BUILDER_MODES:
+        raise ValueError(f"No PHREEQC input builder for solution_mode {solution_mode!r}.")
+
+
 def format_grid_input(
     *,
     ph: float,
@@ -694,6 +710,7 @@ def format_grid_input(
     flip_charge: bool = False,
 ) -> str:
     """Dispatch to the input builder for ``params.solution_mode``."""
+    _require_input_builder(params.solution_mode)
     if params.solution_mode == "dummy_titration":
         from .input_dummy_titration import format_dummy_titration_input
 
@@ -721,6 +738,9 @@ def _selected_output_row_index(params: GridJobParams) -> int:
 
 
 def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> GridPointResult:
+    # Checked outside the per-point try below: an unknown mode must stop the job,
+    # not turn every cell blank.
+    _require_input_builder(params.solution_mode)
     base = GridPointResult(ph=ph, pe=pe, converged=False)
     flip_modes = frozenset({"dummy_titration", "assemblage_dummy_titration"})
     flips = (False, True) if params.solution_mode in flip_modes else (False,)

@@ -23,6 +23,7 @@ from skimage.measure import find_contours
 _FIELD_BIG = 1.0e4
 _FIELD_PAD = -1.0e6  # border pad: closes regions touching the plot frame
 
+from .. import config
 from ..phreeqc.adaptive import fine_axis_levels
 from ..phreeqc.engine import GridJobParams
 from ..phreeqc.gas_limits import (
@@ -998,7 +999,7 @@ def pack_traced_mineral_display(
     change SI-predominance ``pack_traced_display``.
     """
     del db_path
-    mode = "costability" if category_mode == "costability" else "moles"
+    mode = config.require_mineral_category_mode(category_mode)
     trace_layers = trace_bundle.get("layers") or {}
     factor = int(trace_bundle.get("refine_factor") or 1)
     n_ph_fine = fine_axis_levels(params.ph_levels, factor)

@@ -15,6 +15,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 
+from .. import config
 from ..diagram.packer import (
     dominant_aq_in_subset,
     dominant_aq_species_subset,
@@ -36,9 +37,7 @@ _MOL_FLOOR = 1e-30
 
 
 def _normalize_category_mode(mode: str) -> Literal["moles", "costability"]:
-    if mode == "costability":
-        return "costability"
-    return "moles"
+    return config.require_mineral_category_mode(mode)  # type: ignore[return-value]
 
 
 def precip_moles_in_subset(

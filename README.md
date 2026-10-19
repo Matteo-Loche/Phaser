@@ -761,15 +761,16 @@ Users select a database by **`db_id`** from a server-managed catalog. Filesystem
 
 1. On startup, `db/registry.py` scans configured directories.
 2. Each file becomes a `DatabaseRecord` with `id`, `name`, `source`, `filename`.
-3. Optional sidecar metadata: `mydb.meta.json` next to `mydb.dat` (display name, `origin_service`, etc.).
+3. Optional sidecar metadata: `mydb.meta.json` next to `mydb.dat` (display name, `origin_service`, etc.). An unreadable sidecar does not stop the other databases from loading: the server prints a warning naming the file, and that database shows its file name and gets an id built from the file name.
 4. `GET /api/databases` returns client-safe records (**no filesystem paths**).
 5. Compute requests pass `db_id`; the server resolves to a trusted absolute path internally.
+6. The **default database** (used when a request names none) is `PHASER_DEFAULT_DB_ID` if set, otherwise the file at `PHASER_DB`. If it does not match an available, enabled database, the server stops at startup and lists the valid ids; it never picks another database in its place.
 
 #### The PHREEQC catalog (`data/catalog.sqlite`)
 
 Per-database cache of what the UI and compute need from a `.dat` file (elements, phases, species, collisions). Built by `phreeqc/catalog.py`, stored by `db/catalog_store.py`. **Inventories come from parsing `.dat` text once at scan time**; later API/compute calls read SQLite only (no per-job re-parse).
 
-**Scan timing.** On startup (`services/catalog.py`), the **default** database is scanned synchronously; the rest run in a background thread. Databases in `PHASER_DISABLED_DB_STEMS` are skipped. A failed scan marks the DB `failed` and hides it from the selector. Re-scan without restart for newly dropped files is part of the planned generated-DB flow ([Future features](#part-vii-future-features)).
+**Scan timing.** On startup (`services/catalog.py`), the server first checks that the IPhreeqc library exists and stops with an error if it does not. The **default** database is then scanned synchronously; the rest run in a background thread. Databases in `PHASER_DISABLED_DB_STEMS` are skipped. A failed scan marks the DB `failed` and hides it from the selector. Re-scan without restart for newly dropped files is part of the planned generated-DB flow ([Future features](#part-vii-future-features)).
 
 ##### SQLite layout
 
@@ -1033,7 +1034,7 @@ Some pH–redox points are hard for the chemical solver to converge. **Convergen
 | **Standard (recommended)** | `standard` | `default` → `damped` |
 | **Maximum** | `maximum` | `default` → `damped` → `robust` |
 
-Server default is `standard`. Legacy env aliases: `off` / `none` / `fast` → `default`; `ladder` / `full` / `max` → `maximum`.
+Server default is `standard`. Legacy aliases: `off` / `none` / `fast` → `default`; `ladder` / `full` / `max` → `maximum`. Any other value is rejected: the API returns **422**, and an unknown `PHASER_KNOBS_MODE` stops the server at startup.
 
 Each attempt prefixes the grid input with a PHREEQC **`KNOBS` … `END`** block from `KNOBS_PROFILES`, then runs the body (`run_single_profile`). **`-convergence_tolerance` stays `1e-8` on every profile** — rescue never loosens the tolerance; it only changes path controls (iterations, step sizes, diagonal scaling, numerical derivatives):
 
@@ -1261,7 +1262,7 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 7. **Browser reconnect during compute:** the UI stores the active `job_id` in `localStorage` (`phaserActiveJob.v2`) and resumes polling on load after refresh, tab close, or full browser quit (same origin). If the job finished while you were away and is still within `JOB_RESULT_TTL_SEC`, the result is fetched automatically. If the job was already reaped or the server restarted, the UI shows **Job was deleted from the server. Please recompute.** A second tab shows a branded gate (logo + **Transfer here**); only the leader tab polls or starts compute. Closing the browser does **not** DELETE the server job.
 8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h from `finished_at`) and queued jobs after `JOB_QUEUE_TTL_SEC` (default 2 h from `created_at`). Status/result GETs refresh `last_seen_at` for diagnostics, but the reaper does **not** use it for pruning.
 9. **Wall-clock timeout:** once PHREEQC compute starts (base grid and, when enabled, boundary tracing and totals-contour root-find), a timer (and the reaper as a safety net) hard-aborts after `JOB_WALL_TIMEOUT_SEC` (default 5 min). DB/catalog setup, packing, and stats persistence are **outside** that wall clock. Process pools use the **`spawn`** start method (not `fork`) so workers do not inherit the server listen socket. The pool stays **bound** for the whole shutdown so a mid-join abort can still `terminate_pool`; unbinding first used to leave `_running_count` held and block the FIFO queue after a timeout. Children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace/contour waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. Abort checks run through the grid→category-map→trace→contours gap and on packing ticks (client `DELETE` still cancels packing). The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
-10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted.
+10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted. If recording fails, the diagram is still returned and the server prints a `[phaser stats]` warning.
 
 Job statuses: `queued` → `running` → `done` | `error` (including `error_code` `timed_out` / `cancelled`).
 
@@ -1578,9 +1579,9 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | Name | Default | Purpose |
 |------|---------|---------|
 | `PHASER_HOST` / `PHASER_PORT` | `0.0.0.0` / `8765` | Bind address |
-| `PHASER_IPHREEQC_LIB` | `/usr/local/lib/libiphreeqc.so` | IPhreeqc shared library loaded by phreeqpy (no other location is searched) |
-| `PHASER_DB` | `/opt/phreeqc/database/PHREEQC_ThermoddemV1.10_15Dec2020.dat` | Pick default registry entry by file path when `PHASER_DEFAULT_DB_ID` unset |
-| `PHASER_DEFAULT_DB_ID` | — | Force default `db_id` |
+| `PHASER_IPHREEQC_LIB` | `/usr/local/lib/libiphreeqc.so` | IPhreeqc shared library loaded by phreeqpy (no other location is searched; the server does not start without it) |
+| `PHASER_DB` | `/opt/phreeqc/database/PHREEQC_ThermoddemV1.10_15Dec2020.dat` | Default database by file path when `PHASER_DEFAULT_DB_ID` is unset; the server does not start if this file is missing or disabled |
+| `PHASER_DEFAULT_DB_ID` | — | Default `db_id`; must match an available, enabled database or the server does not start |
 | `PHASER_BUILTIN_DB_DIRS` | `/opt/phreeqc/database` | Builtin `.dat` directories (`:`-separated); replaces the default |
 | `PHASER_GENERATED_DB_DIR` | `data/databases/generated` | Generated database directory |
 | `PHASER_DISABLED_DB_STEMS` | `iso,coldchem,…` | Hide stems from the selector (see `.env.example`) |
@@ -1600,7 +1601,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_TOTALS_CONTOUR_LOG_STEP` | `2` | Default for `totals_contour_log_step` |
 | `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN` / `_MAX` | `0.5` / `6` | Clamp for `totals_contour_log_step` |
 | `PHASER_CONTOUR_BANDS_PER_WORKER` | `1` | Consecutive pH-cell rows per contour pool job |
-| `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode` |
+| `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode`. Unknown values stop the server at startup ([3.4](#34-convergence-rescue-knobs)) |
 | `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides (clamped to `GAS_LIMIT_ATM_*`) |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | Component-gas reference pressure |
 | `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | `true` | Skip PHREEQC outside water band |

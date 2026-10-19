@@ -45,9 +45,10 @@ def record_compute(
             queue_position_at_start=queue_position_at_start,
             queue_wait_ms=queue_wait_ms,
         )
-    except Exception:
-        # Stats must never break a successful compute.
-        pass
+    except Exception as exc:
+        # Stats must never break a successful compute, but a failure is printed
+        # so a stats database that stopped recording does not go unnoticed.
+        print(f"[phaser stats] warning — compute event not recorded: {exc!r}", flush=True)
 
 
 def get_summary(window: str | None = None) -> dict[str, Any]:

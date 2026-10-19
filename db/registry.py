@@ -44,6 +44,10 @@ class DatabaseRecord:
         return out
 
 
+def _registry_log(message: str) -> None:
+    print(f"[phaser registry] {message}", flush=True)
+
+
 def _slugify(text: str) -> str:
     return _SLUG_RE.sub("-", text.lower()).strip("-")
 
@@ -60,14 +64,25 @@ def _make_id(source: DatabaseSource, filename: str, used: set[str]) -> str:
 
 
 def _load_sidecar_metadata(dat_path: Path) -> dict[str, Any]:
+    """Read ``<name>.meta.json`` next to a database; ``{}`` when there is none.
+
+    An unreadable sidecar only affects its own database, so the registry keeps
+    loading the others and prints a warning: that database then shows its file
+    name, and its id is rebuilt from the file name, so browser history saved
+    with the old id no longer matches it.
+    """
     sidecar = dat_path.with_suffix(".meta.json")
     if not sidecar.is_file():
         return {}
     try:
         data = json.loads(sidecar.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        _registry_log(f"warning — ignoring unreadable metadata {sidecar}: {exc}")
         return {}
+    if not isinstance(data, dict):
+        _registry_log(f"warning — ignoring metadata {sidecar}: expected a JSON object")
+        return {}
+    return data
 
 
 def _display_name(dat_path: Path, metadata: dict[str, Any]) -> str:
@@ -184,27 +199,41 @@ def get_database(db_id: str) -> DatabaseRecord | None:
 
 
 def get_default_database() -> DatabaseRecord:
+    """Database used when a request names none: PHASER_DEFAULT_DB_ID, else PHASER_DB.
+
+    The configured default must match an available, enabled database. If it does
+    not, this raises instead of picking another one, because a different database
+    gives different log K values and therefore a different diagram.
+    """
     records = [r for r in list_enabled_databases() if r.exists]
     if not records:
         raise RuntimeError(
             "No PHREEQC databases are available on the server. "
             "Install PHREEQC databases or add files to the generated database directory."
         )
+    available = ", ".join(r.id for r in records)
 
     preferred = config.DEFAULT_DB_ID
     if preferred:
         match = get_database(preferred)
         if match and match.exists and not is_database_disabled(match):
             return match
+        raise RuntimeError(
+            f"PHASER_DEFAULT_DB_ID={preferred!r} does not match an available, enabled "
+            f"database. Set it to one of: {available}."
+        )
 
     default_path = Path(config.THERMODDEM_DB)
     if default_path.is_file():
-        resolved = str(default_path.resolve())
+        resolved = default_path.resolve()
         for rec in records:
-            if Path(rec.path).resolve() == Path(resolved):
+            if Path(rec.path).resolve() == resolved:
                 return rec
-
-    return records[0]
+    raise RuntimeError(
+        f"Default database {config.THERMODDEM_DB} (PHASER_DB) is missing or disabled. "
+        f"Install it, point PHASER_DB at another .dat file, or set "
+        f"PHASER_DEFAULT_DB_ID to one of: {available}."
+    )
 
 
 def find_database_by_path(path: str | Path) -> DatabaseRecord | None:

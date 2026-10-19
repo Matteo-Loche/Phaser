@@ -116,16 +116,21 @@ def check_abort(job_id: str | None) -> None:
         raise JobAborted(reason, error_code=code)
 
 
+def _worker_processes(pool: ProcessPoolExecutor) -> list[Any]:
+    # ``_processes`` is private and becomes None once the pool has shut down.
+    return list((pool._processes or {}).values())
+
+
 def _collect_worker_pids(pool: ProcessPoolExecutor) -> list[int]:
-    procs = list((getattr(pool, "_processes", None) or {}).values())
     pids: list[int] = []
-    for proc in procs:
+    for proc in _worker_processes(pool):
         try:
             pid = proc.pid
-            if pid is not None:
-                pids.append(int(pid))
-        except Exception:
+        except ValueError:
+            # Process object already closed: the worker is gone.
             continue
+        if pid is not None:
+            pids.append(int(pid))
     return pids
 
 
@@ -144,13 +149,16 @@ def terminate_pool(pool: ProcessPoolExecutor) -> None:
     keep the executor's queue-management thread draining forever.
     """
     pids = _collect_worker_pids(pool)
-    procs = list((getattr(pool, "_processes", None) or {}).values())
+    procs = _worker_processes(pool)
 
+    # A worker can exit, or have its process object closed by the executor,
+    # between these calls; that race raises OSError or ValueError and only
+    # means there is nothing left to stop.
     for proc in procs:
         try:
             if proc.is_alive():
                 proc.terminate()
-        except Exception:
+        except (OSError, ValueError):
             pass
     for proc in procs:
         try:
@@ -158,23 +166,15 @@ def terminate_pool(pool: ProcessPoolExecutor) -> None:
             if proc.is_alive():
                 proc.kill()
                 proc.join(timeout=0.4)
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     if pids:
         _signal_pids(pids, signal.SIGTERM)
         time.sleep(0.15)
-        _signal_pids(pids, getattr(signal, "SIGKILL", signal.SIGTERM))
+        _signal_pids(pids, signal.SIGKILL)
 
-    try:
-        pool.shutdown(wait=False, cancel_futures=True)
-    except TypeError:
-        try:
-            pool.shutdown(wait=False)
-        except Exception:
-            pass
-    except Exception:
-        pass
+    pool.shutdown(wait=False, cancel_futures=True)
 
 
 def request_abort(
@@ -282,15 +282,7 @@ def iter_futures_abortable(
 
 
 def _shutdown_pool(pool: ProcessPoolExecutor, *, wait: bool) -> None:
-    try:
-        pool.shutdown(wait=wait, cancel_futures=not wait)
-    except TypeError:
-        try:
-            pool.shutdown(wait=wait)
-        except Exception:
-            pass
-    except Exception:
-        pass
+    pool.shutdown(wait=wait, cancel_futures=not wait)
 
 
 @contextmanager

@@ -105,15 +105,21 @@ def _scan_background(records: list[DatabaseRecord], dll_path: str) -> None:
 
 
 def initialize_catalogs(*, dll_path: str | None = None) -> None:
-    """Initialize SQLite schema and scan databases."""
+    """Initialize SQLite schema and scan databases.
+
+    Raises when IPhreeqc is missing so the server does not start (and report
+    healthy) without the library every compute needs.
+    """
     global _bg_started
     _catalog_log(f"SQLite catalog: {config.CATALOG_DB}")
     init_schema()
 
     dll = dll_path or config.IPHREEQC_DLL
     if not Path(dll).is_file():
-        _catalog_log(f"skip — IPhreeqc library not found: {dll}")
-        return
+        raise RuntimeError(
+            f"IPhreeqc library not found: {dll}. Install IPhreeqc (README, "
+            "From source (Linux / WSL)) or set PHASER_IPHREEQC_LIB to its path."
+        )
 
     existing = [r for r in list_enabled_databases() if r.exists]
     _catalog_log(f"found {len(existing)} database(s) in registry")

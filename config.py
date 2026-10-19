@@ -262,6 +262,16 @@ MINERAL_CATEGORY_MODE_META: dict[str, dict[str, str]] = {
     },
 }
 
+
+def require_mineral_category_mode(mode: str) -> str:
+    """Return ``mode`` if it is a known mineral category mode, else raise ValueError."""
+    if mode not in MINERAL_CATEGORY_MODES:
+        raise ValueError(
+            f"Unknown mineral category mode {mode!r}. "
+            f"Use one of: {', '.join(MINERAL_CATEGORY_MODES)}."
+        )
+    return mode
+
 # Most solid phases one compute request may include. /api/phases always lists
 # every eligible phase; the UI caps the selection with MAX_SELECTED_PHASES in
 # static/index.html, which must stay equal to this value. The server checks the
@@ -377,17 +387,34 @@ KNOBS_MODE_META: dict[str, dict[str, str]] = {
 }
 
 
+# Older names still accepted from .env files and saved browser history.
+_KNOBS_MODE_ALIASES: dict[str, str] = {
+    "off": "default",
+    "none": "default",
+    "fast": "default",
+    "ladder": "maximum",
+    "full": "maximum",
+    "max": "maximum",
+}
+
+
 def normalize_knobs_mode(mode: str | None) -> str:
-    """Map UI/API/env values onto default | standard | maximum."""
+    """Map UI/API/env values onto default | standard | maximum.
+
+    An empty value means "standard". Any other unknown value raises ValueError,
+    so a typo is reported instead of silently running "standard".
+    """
     raw = (mode or "").strip().lower()
-    # Legacy server env / older clients.
-    if raw in ("off", "none", "fast"):
-        return "default"
-    if raw in ("ladder", "full", "max"):
-        return "maximum"
+    if not raw:
+        return "standard"
     if raw in KNOBS_MODES:
         return raw
-    return "standard"
+    if raw in _KNOBS_MODE_ALIASES:
+        return _KNOBS_MODE_ALIASES[raw]
+    raise ValueError(
+        f"Unknown knobs_mode {mode!r}. Use one of: {', '.join(KNOBS_MODES)} "
+        f"(older names {', '.join(_KNOBS_MODE_ALIASES)} are also accepted)."
+    )
 
 
 KNOBS_MODE_DEFAULT = normalize_knobs_mode(os.environ.get("PHASER_KNOBS_MODE", "standard"))
