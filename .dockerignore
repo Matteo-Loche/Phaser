@@ -19,6 +19,23 @@ env/
 
 docker-data/
 data/databases/generated/*.dat
+data/*.sqlite*
+
+tests/
+local/
+scratch/
+results/
+output/
+outputs/
+notes/
+maintainer-notes.md
+truenas_deploy/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursor/
+.cursorignore
+.claude/
 
 .DS_Store
 Thumbs.db

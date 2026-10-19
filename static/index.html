@@ -2674,6 +2674,10 @@
       Object.entries(MODE_HASH_BY_ID).map(([id, slug]) => [slug, id])
     );
     const RESULT_CACHE_MAX = 24;
+    // Most phases one diagram may include. Every eligible phase stays listed and
+    // selectable; only how many are selected at once is capped. Keep equal to
+    // MAX_PHASES_PER_JOB in config.py, which rejects longer lists sent to the API.
+    const MAX_SELECTED_PHASES = 200;
     const STATS_WINDOW_KEY = "phaserStatsWindow.v2";
     const STATS_WINDOW_LABELS = {
       "24h": "last 24 hours",
@@ -2808,6 +2812,7 @@
       cfg: null,
       databases: [],
       catalog: [],          // discovered phases [{name, elements, formula}]
+      phaseLimitHit: false, // true after a selection was stopped at MAX_SELECTED_PHASES
       formulaByName: {},   // phase name -> stoichiometric formula from catalog
       allowedSpecies: [],   // species valid for the selected database
       speciesSuggestions: [],
@@ -5481,11 +5486,18 @@
       dot.className = "db-dot" + (kind ? " " + kind : "");
       dot.title = text || "Database status";
     }
+    /** Readable message from an error body; request validation (422) sends ``detail`` as a list. */
+    function apiErrorMessage(data, fallback) {
+      if (Array.isArray(data.detail)) {
+        return data.detail.map(d => String(d.msg || d).replace(/^Value error, /, "")).join(" ") || fallback;
+      }
+      return data.detail || data.error || fallback;
+    }
     async function api(path, opts = {}) {
       const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = new Error(data.detail || data.error || res.statusText);
+        const err = new Error(apiErrorMessage(data, res.statusText));
         err.status = res.status;
         err.error_code = data.error_code || null;
         err.data = data;
@@ -5497,7 +5509,7 @@
       const res = await fetch(path, { headers: { "Content-Type": "application/json" } });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.detail || data.error || res.statusText);
+        throw new Error(apiErrorMessage(data, res.statusText));
       }
       const total = Number(res.headers.get("Content-Length")) || 0;
       if (!res.body || !total) {
@@ -6181,10 +6193,9 @@
         if (seq !== runtime.phaseSeq) return; // stale response
         runtime.catalog = data.phases;
         runtime.formulaByName = {};
-        runtime.catalog.forEach(p => {
-          runtime.formulaByName[p.name] = p.formula || p.name;
-          if (!(p.name in state.phaseSel)) state.phaseSel[p.name] = true;
-        });
+        runtime.catalog.forEach(p => { runtime.formulaByName[p.name] = p.formula || p.name; });
+        // Newly listed phases start selected, in list order, up to the selection limit.
+        selectUpToLimit(runtime.catalog.map(p => p.name).filter(n => !(n in state.phaseSel)));
         renderPhases();
         persist();
         setStatus(`Found ${data.count} candidate phases.`, "ok");
@@ -6195,15 +6206,20 @@
       }
     }
 
-    function renderPhases() {
-      const box = $("phaseBox");
+    /** Catalog phases matching the filter box (every phase when the filter is empty). */
+    function visiblePhases() {
       const q = ($("phaseSearch").value || "").toLowerCase();
-      const list = runtime.catalog.filter(p => {
+      return runtime.catalog.filter(p => {
         if (!q) return true;
         const form = (p.formula || p.name).toLowerCase();
         return p.name.toLowerCase().includes(q) || form.includes(q)
           || (p.elements || []).some(e => e.toLowerCase().includes(q));
       });
+    }
+
+    function renderPhases() {
+      const box = $("phaseBox");
+      const list = visiblePhases();
       if (!runtime.catalog.length) {
         box.innerHTML = `<div class="meta" style="padding:0.6rem">No phases match this system.</div>`;
       } else {
@@ -6221,6 +6237,12 @@
         }).join("");
         box.querySelectorAll('input[type="checkbox"]').forEach(cb => {
           cb.addEventListener("change", () => {
+            if (cb.checked && selectedPhases().length >= MAX_SELECTED_PHASES) {
+              cb.checked = false;
+              runtime.phaseLimitHit = true;
+              updatePhaseCount();
+              return;
+            }
             state.phaseSel[cb.dataset.name] = cb.checked;
             updatePhaseCount();
             persist();
@@ -6235,8 +6257,44 @@
         .map(p => p.name)
         .filter(n => state.phaseSel[n] && !/\(g\)$/i.test(n));
     }
+    /**
+     * Pill: selected / available phases for the current system. The selection limit
+     * appears only after the user tries to go past it, and clears once below it.
+     */
     function updatePhaseCount() {
-      $("phaseSelCount").textContent = selectedPhases().length;
+      const n = selectedPhases().length;
+      const available = runtime.catalog.filter(p => !/\(g\)$/i.test(p.name)).length;
+      if (n < MAX_SELECTED_PHASES) runtime.phaseLimitHit = false;
+      const showLimit = runtime.phaseLimitHit || n > MAX_SELECTED_PHASES;
+      const pill = $("phaseSelCount");
+      pill.textContent = showLimit ? `${n}/${available} · max ${MAX_SELECTED_PHASES}` : `${n}/${available}`;
+      pill.title = showLimit
+        ? `At most ${MAX_SELECTED_PHASES} phases can be selected for one diagram`
+        : `${n} of ${available} available phases selected`;
+      pill.classList.toggle("warn", showLimit && n <= MAX_SELECTED_PHASES);
+      pill.classList.toggle("err", n > MAX_SELECTED_PHASES);
+    }
+    /** Select ``names`` in list order until the limit is reached; flags the pill if some were left out. */
+    function selectUpToLimit(names) {
+      let count = selectedPhases().length;
+      for (const n of names) {
+        if (state.phaseSel[n] || /\(g\)$/i.test(n)) continue;
+        if (count >= MAX_SELECTED_PHASES) {
+          runtime.phaseLimitHit = true;
+          break;
+        }
+        state.phaseSel[n] = true;
+        count += 1;
+      }
+    }
+    /** **All** selects the phases shown by the filter (up to the limit); **None** clears them. */
+    function setVisiblePhases(selected) {
+      const names = visiblePhases().map(p => p.name);
+      if (selected) selectUpToLimit(names);
+      else names.forEach(n => { state.phaseSel[n] = false; });
+      renderPhases();
+      persist();
+      markStale();
     }
 
     /* ---------------- axes ---------------- */
@@ -7326,8 +7384,8 @@
       $("speciesPicker").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addSpecies(e.target.value); } });
 
       $("phaseSearch").addEventListener("input", renderPhases);
-      $("selAll").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = true); renderPhases(); persist(); markStale(); });
-      $("selNone").addEventListener("click", () => { runtime.catalog.forEach(p => state.phaseSel[p.name] = false); renderPhases(); persist(); markStale(); });
+      $("selAll").addEventListener("click", () => setVisiblePhases(true));
+      $("selNone").addEventListener("click", () => setVisiblePhases(false));
 
       $("computeBtn").addEventListener("click", dispatchCompute);
       $("historyBtn").addEventListener("click", e => {
@@ -8328,6 +8386,10 @@
       const sel = selectedPhases();
       if (!Object.keys(totals).length) { setStatus("Add at least one species with a concentration.", "err"); return; }
       if (!sel.length) { setStatus("Select at least one phase.", "err"); return; }
+      if (sel.length > MAX_SELECTED_PHASES) {
+        setStatus(`${sel.length} phases selected; at most ${MAX_SELECTED_PHASES} can be used in one diagram. Deselect some phases.`, "err");
+        return;
+      }
       if (!state.layerSolids && !state.layerAqueous) {
         setStatus(
           modeId === "mineral-stability"

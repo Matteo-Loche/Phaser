@@ -3,47 +3,31 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 from pathlib import Path
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 from .__version__ import DOI_URL as _BUILTIN_DOI_URL
-_IS_WINDOWS = sys.platform == "win32"
 
-# Override with PHASER_DB and PHASER_IPHREEQC_LIB if needed.
-_WIN_THERMODDEM_DB = (
-    r"C:\Program Files (x86)\USGS\Phreeqc Interactive 3.8.6-17100\database"
-    r"\PHREEQC_ThermoddemV1.10_15Dec2020.dat"
-)
-_LINUX_THERMODDEM_DB = (
-    "/mnt/c/Program Files (x86)/USGS/Phreeqc Interactive 3.8.6-17100/database"
-    "/PHREEQC_ThermoddemV1.10_15Dec2020.dat"
-)
+# PHASER runs on Linux only (native, WSL, or the Docker image). The defaults
+# follow the Docker layout: the PHREEQC databases shipped in the IPhreeqc source
+# tarball are copied to /opt/phreeqc/database.
+_DEFAULT_PHREEQC_DB_DIR = "/opt/phreeqc/database"
 
+# Database file used as the server default; override with PHASER_DB.
 THERMODDEM_DB = os.environ.get(
     "PHASER_DB",
-    _WIN_THERMODDEM_DB if _IS_WINDOWS else _LINUX_THERMODDEM_DB,
+    f"{_DEFAULT_PHREEQC_DB_DIR}/PHREEQC_ThermoddemV1.10_15Dec2020.dat",
 )
 
-_WIN_PHREEQC_DB_DIR = (
-    r"C:\Program Files (x86)\USGS\Phreeqc Interactive 3.8.6-17100\database"
-)
-_LINUX_PHREEQC_DB_DIR = (
-    "/mnt/c/Program Files (x86)/USGS/Phreeqc Interactive 3.8.6-17100/database"
-)
-
-# Directories scanned for built-in PHREEQC databases (comma-separated override).
-_BUILTIN_DB_DIR_DEFAULT = (
-    _WIN_PHREEQC_DB_DIR if _IS_WINDOWS else _LINUX_PHREEQC_DB_DIR
-)
-_extra_builtin_dirs = [
+# Directories scanned for built-in PHREEQC databases. PHASER_BUILTIN_DB_DIRS
+# replaces the default list; separate several directories with ":".
+_builtin_dirs_env = [
     p.strip()
     for p in os.environ.get("PHASER_BUILTIN_DB_DIRS", "").split(os.pathsep)
     if p.strip()
 ]
 BUILTIN_DB_DIRS: tuple[Path, ...] = tuple(
-    Path(p)
-    for p in ([_BUILTIN_DB_DIR_DEFAULT, *_extra_builtin_dirs])
+    Path(p) for p in (_builtin_dirs_env or [_DEFAULT_PHREEQC_DB_DIR])
 )
 
 # User-generated databases (e.g. PyGCC output copied or registered here).
@@ -151,30 +135,10 @@ _doi_override = os.environ.get("PHASER_DOI_URL", "").strip()
 _baked_doi = (_BUILTIN_DOI_URL or "").strip()
 DOI_URL = _doi_override or _baked_doi or None
 
-_WIN_IPHREEQC_CANDIDATES = (
-    r"C:\Program Files\USGS\IPhreeqc\bin\IPhreeqcCOM.dll",
-    r"C:\Program Files (x86)\USGS\IPhreeqc\bin\IPhreeqcCOM.dll",
-)
-_LINUX_IPHREEQC_CANDIDATES = (
-    "/usr/local/lib/libiphreeqc.so",
-    "/usr/lib/x86_64-linux-gnu/libiphreeqc.so",
-    "/usr/lib/libiphreeqc.so",
-)
-
-
-def _first_existing(paths: tuple[str, ...]) -> str:
-    for path in paths:
-        if Path(path).is_file():
-            return path
-    return paths[0]
-
-
-IPHREEQC_DLL = os.environ.get(
-    "PHASER_IPHREEQC_LIB",
-    _first_existing(_WIN_IPHREEQC_CANDIDATES)
-    if _IS_WINDOWS
-    else _first_existing(_LINUX_IPHREEQC_CANDIDATES),
-)
+# Shared IPhreeqc library loaded by phreeqpy (``make install`` puts it here);
+# override with PHASER_IPHREEQC_LIB. No other location is searched: a missing
+# library is logged at startup and every compute fails with an explicit error.
+IPHREEQC_DLL = os.environ.get("PHASER_IPHREEQC_LIB", "/usr/local/lib/libiphreeqc.so")
 
 HOST = os.environ.get("PHASER_HOST", "0.0.0.0")
 PORT = int(os.environ.get("PHASER_PORT", "8765"))
@@ -298,6 +262,11 @@ MINERAL_CATEGORY_MODE_META: dict[str, dict[str, str]] = {
     },
 }
 
+# Most solid phases one compute request may include. /api/phases always lists
+# every eligible phase; the UI caps the selection with MAX_SELECTED_PHASES in
+# static/index.html, which must stay equal to this value. The server checks the
+# same limit again (api/models.py and diagram/phases.py) as a safety net for
+# requests that do not come from the UI, such as scripts calling the API.
 MAX_PHASES_PER_JOB = 200
 MAX_GRID_POINTS = 40000  # 200 x 200
 MAX_WORKERS = int(os.environ.get("PHASER_MAX_WORKERS", "8"))

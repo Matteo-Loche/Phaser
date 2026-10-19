@@ -29,8 +29,10 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Generated PHREEQC databases: keep examples/metadata, not user data files
+# Generated PHREEQC databases and the sidecars written by POST /api/databases/register:
+# keep the example metadata only
 data/databases/generated/*.dat
+data/databases/generated/*.meta.json
 !data/databases/generated/.gitkeep
 !data/databases/generated/example.meta.json
 
@@ -55,6 +57,26 @@ docker-compose.override.yml
 
 # Local dev tests (not part of the shipped package)
 tests/
+
+# AI agent and editor configuration (kept local, never committed)
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.cursor/
+.cursorignore
+.cursorindexingignore
+.claude/
+.github/copilot-instructions.md
+
+# Local workspace for scratch scripts, results, outputs and notes (never committed)
+local/
+scratch/
+results/
+output/
+outputs/
+notes/
+*.ipynb
+.ipynb_checkpoints/
 
 # Personal deploy configs (not shipped)
 truenas_deploy/

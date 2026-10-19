@@ -114,12 +114,12 @@ Pull the pre-built image from GHCR — no local compiler required:
 
 ```bash
 cd /path/to/PHASER
-cp .env.example .env          # Windows: copy .env.example .env
+cp .env.example .env
 docker compose pull
 docker compose up -d
 ```
 
-Open [http://localhost:8765](http://localhost:8765). See [Part VI — Deployment](#part-vi-deployment) for VPS setup, runtime tuning, and optional Cloudflare Tunnel / Watchtower profiles.
+Open [http://localhost:8765](http://localhost:8765). See [Part VI](#part-vi-deployment) for VPS setup, runtime tuning, and optional Cloudflare Tunnel / Watchtower profiles.
 
 To **build the image from source** instead of pulling (developers / CI only):
 
@@ -129,21 +129,32 @@ docker compose up --build -d
 
 ### From source (Linux / WSL)
 
+PHASER runs on Linux only (native, WSL, or Docker); Windows Python is not supported. The steps below reproduce the Docker image layout, so the `config.py` defaults work without extra environment variables.
+
+The repository folder must be named **`PHASER`** (upper case): the package imports itself as `PHASER`, and Linux paths are case-sensitive.
+
 ```bash
+# 1. Build tools and Python (Debian / Ubuntu)
+sudo apt update && sudo apt install -y python3 python3-venv python3-dev build-essential wget ca-certificates
+
+# 2. IPhreeqc library -> /usr/local/lib/libiphreeqc.so
+cd /tmp && wget https://water.usgs.gov/water-resources/software/PHREEQC/iphreeqc-3.8.6-17100.tar.gz
+tar -xzf iphreeqc-3.8.6-17100.tar.gz && mkdir -p iphreeqc-3.8.6-17100/build && cd iphreeqc-3.8.6-17100/build
+../configure && make -j"$(nproc)" && sudo make install && sudo ldconfig
+
+# 3. PHREEQC databases shipped with IPhreeqc -> /opt/phreeqc/database
+sudo mkdir -p /opt/phreeqc && sudo cp -r /tmp/iphreeqc-3.8.6-17100/database /opt/phreeqc/
+
+# 4. Python environment and server
 cd /path/to/PHASER
 python3 -m venv .venv-linux
 source .venv-linux/bin/activate
 pip install -r requirements.txt
-
-# IPhreeqc must be built and available (see phreeqpy docs)
+python scripts/smoke_check.py   # imports, database list, default database
 python run_server.py
 ```
 
-Open [http://localhost:8765](http://localhost:8765).
-
-### Windows
-
-Windows Python cannot load Linux `libiphreeqc.so`. Use **WSL** or **Docker** for compute, or install a matching Windows `IPhreeqc` DLL and set **`PHASER_IPHREEQC_LIB`** to its path (see `.env.example` / `config.py`).
+Open [http://localhost:8765](http://localhost:8765). If IPhreeqc or a database lives elsewhere, set `PHASER_IPHREEQC_LIB`, `PHASER_BUILTIN_DB_DIRS` and `PHASER_DB` ([5.3](#53-configuration-reference)); PHASER does not search other locations.
 
 
 ---
@@ -180,6 +191,9 @@ flowchart TB
         Sweep["sweep - parallel grid"]
         Adaptive["adaptive - boundary trace"]
         Trace["boundary_trace - root finding"]
+        MinStab["mineral_stability_trace - assemblage trace"]
+        Contours["totals_contours - TOT isolines"]
+        PqCatalog["catalog - .dat scan"]
     end
 
     subgraph diagram_layer [diagram layer]
@@ -209,7 +223,18 @@ flowchart TB
     StatsSvc --> StatsStore
     Routes --> StatsSvc
     Phases --> Catalog
+    Compute --> MinStab
+    Compute --> Contours
+    Compute -->|request models, db_id lookup| Models
+    Models --> Contours
+    MinStab --> Packer
+    Trace --> Packer
+    Adaptive --> Packer
+    Contours --> JobCtl
+    MinStab --> JobCtl
+    Catalog --> PqCatalog
     Engine -->|phreeqpy| IPhreeqc[IPhreeqc library]
+    PqCatalog -->|phreeqpy| IPhreeqc
     Packer --> UI
     Vectors --> UI
 ```
@@ -219,7 +244,7 @@ flowchart TB
 | Layer | Role |
 |-------|------|
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
-| **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py` with **spawn** ProcessPools), species helpers, and usage-statistics recording. No PHREEQC math here. |
+| **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py` with **spawn** ProcessPools), species helpers, and usage-statistics recording. No PHREEQC math here. `compute.py` and `stats.py` reuse the `api` request models and database lookup. |
 | **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`); persist per-server compute events (`stats_store.py`). |
 | **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing (SI predominance and mineral-stability plugins) / optional totals-contour root-find; register live ProcessPools for hard-kill on timeout. Lazy imports avoid circular deps under multiprocessing **spawn**. |
 | **diagram** | Turn per-point SI / precipitated-mole / species / `TOT` data into 2D category grids, `totals_heatmap` packs, and traced display layers (vector fills batched per category). |
@@ -306,7 +331,7 @@ PHASER/
 
 ## Part I: Using PHASER
 
-Short guide for **running diagrams**: pick a database, choose a mode, set the system, compute, and read the plot. Screen layout and every control: [Part II — Web UI](#part-ii-web-ui). Chemistry internals: [Part III](#part-iii-chemistry-engine). Jobs/packing: [Part IV](#part-iv-compute-and-packing). API/config: [Part V](#part-v-api-security-and-configuration).
+Short guide for **running diagrams**: pick a database, choose a mode, set the system, compute, and read the plot. Screen layout and every control: [Part II](#part-ii-web-ui). Chemistry internals: [Part III](#part-iii-chemistry-engine). Jobs/packing: [Part IV](#part-iv-compute-and-packing). API/config: [Part V](#part-v-api-security-and-configuration).
 
 Typical path: **database → mode → chemical system & axes → phases → Compute → inspect / export**. Settings and colours stay in this browser; the server only runs the job.
 
@@ -328,7 +353,7 @@ Every diagram is solved against one **PHREEQC thermodynamic database** (`.dat`).
 
 Hover the dot for a short status tip.
 
-**What is available today.** The list is the **builtin** set shipped with the install / Docker image (USGS Phreeqc Interactive databases under the configured builtin directory). A database appears only after the server has scanned it into the catalog; failed scans stay hidden. Changing the selection reloads element suggestions, species lists, and eligible phases automatically — no manual refresh. Different databases can give different predominance fields for the same totals and same phases (coverage and log *K* differ).
+**What is available today.** The list is the **builtin** set shipped with the install / Docker image (the PHREEQC databases distributed with IPhreeqc, under the configured builtin directory). A database appears only after the server has scanned it into the catalog; failed scans stay hidden. Changing the selection reloads element suggestions, species lists, and eligible phases automatically — no manual refresh. Different databases can give different predominance fields for the same totals and same phases (coverage and log *K* differ).
 
 ### 1.2 Diagram modes
 
@@ -355,7 +380,7 @@ Pick what matches the modelling question; chemistry details are in [Part III](#3
 2. **Mode** — **Saturation** or **Mineral Stability** from the header switcher.
 3. **Chemical system** — element totals (default unit mmol/kgw) and **temperature**.
 4. **Axes** — **pH** range and redox range. Display as **Eh**, **pe**, or **log fO₂**. pe↔Eh is display-only; switching to or from log fO₂ needs a new compute.
-5. **Phases** — select from those eligible for your system (and database).
+5. **Phases** — select from those eligible for your system (and database). Every eligible phase is listed and selectable, but one diagram can include at most **200** at a time; with large databases (e.g. `llnl.dat`) use the filter to choose which ones.
 6. **Layers / product options** — solid/mineral and/or aqueous; optional per-element views. On Mineral Stability: Predominant vs Co-stability; optionally enable **Compute element-total contours** (+ log step) before Compute if you want `log₁₀ TOT` isolines.
 7. **Configuration** — resolution (50–200, default 100), leave **Trace phase edges** on for smooth boundaries, set **Convergence rescue** if you expect hard points, adjust O₂/H₂ limits if needed.
 8. **Compute** — watch the header job slot (queue → progress → report). Long jobs time out around **5 minutes** by default.
@@ -508,7 +533,7 @@ Elements no longer need a manual reload button — everything refreshes when the
 | **Database** | *(narrow screens only)* Same `db_id` selector as the header, plus filename / source / catalog-status meta |
 | **Chemical system** | Element picker with concentrations (general element symbols only, e.g. `C` not `C(4)`), unit selector (`mol/kgw` / `mmol/kgw` / `µmol/kgw`), temperature |
 | **Axes** | pH min/max (default **2–12**); redox axis **Eh / pe / log fO₂** (default **Eh**); redox min/max — **pe −14 to 20** for Eh/pe (stored as `peMin`/`peMax`), independent **log fO₂** bounds for log fO₂ mode. See [Redox axis](#211-redox-axis-log-fo-eh-pe) |
-| **Phases** | Searchable checklist of catalog solids; select all/none |
+| **Phases** | Searchable checklist of every eligible catalog solid. The count pill shows selected / available phases for the current system. At most **200** can be selected at once: **All** selects the phases shown by the filter in list order up to that limit, newly listed phases are auto-selected the same way, and a checkbox past the limit stays unchecked. Whenever the limit stops a selection, the pill adds **max 200** (amber) until the selection drops below it. **None** clears the phases shown by the filter |
 | **Plot options** | **Compute layers** — solid/mineral map / aqueous / per-element subset toggles; on Mineral Stability also exclusive **Predominant mineral** vs **Co-stability** (`mineral_category_mode`) with help tips, plus **Concentration contour lines** (**Compute element-total contours** + **Concentration steps** in log₁₀ mol/kgw; see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)) |
 | **Configuration** | Plot resolution (`ph_levels` = `pe_levels`, **50–200**, default 100) via slider plus editable − / value / +; **Trace phase edges** toggle (vector boundary tracing; with help tip); **Calculation mode** (Dummy / Real electrolyte only — assemblage ids are mapped for Mineral Stability); **Convergence rescue** (`knobs_mode`: **Off** / **Standard** (default) / **Maximum** — how hard to retry points that fail to converge before leaving them blank); **O₂/H₂ stability limits** (atm) |
 
@@ -661,8 +686,12 @@ Redox axis choice (**Eh / pe / log fO₂**): **pe ↔ Eh** is a free display rem
 | `localStorage` | `phaserLastResultKey.v2` | Pointer to the last cached diagram (browser-scoped) |
 | `localStorage` | `phaserActiveJob.v2` | Active compute job (`jobId`, `cacheKey`, `modeId`, `request`) for reconnect after refresh / browser quit |
 | `localStorage` | `phaserTabLock.v1` | Single-tab ownership marker (Web Locks primary; heartbeat fallback on non-HTTPS LAN) |
-| IndexedDB | `phaserResultCache.v23` / `results` | History meta: `modeId`, compute `request`, plot thumbnail (JPEG blob) |
+| `localStorage` | `phaserTabBus.v1` | Tab-to-tab messages (`storage`-event fallback when `BroadcastChannel` is unavailable) |
+| `localStorage` | `phaserStatsWindow.v2` | Selected time window on the Statistics page |
+| IndexedDB | `phaserResultCache.v23` / `results` | History meta: `modeId`, compute `request`, plot thumbnail (JPEG blob) with its `thumbGen` |
 | IndexedDB | `phaserResultCache.v23` / `resultData` | Packed diagram JSON (loaded only on restore / cache hit) |
+
+The result cache database is opened at IndexedDB schema version **3** (stores and indexes). Thumbnails whose `thumbGen` differs from the page's `HISTORY_THUMB_GEN` (currently **2**) are re-rendered the next time they are needed, so a change to thumbnail drawing refreshes old History entries without clearing the cache.
 
 Closing the tab or clearing site data resets settings. Cached diagrams and UI settings persist until the browser clears site data (or the user clears History). The result cache keeps at most **24** diagrams (newest kept; oldest evicted).
 
@@ -713,11 +742,11 @@ O₂/H₂ stability limits are horizontal in a log fO₂ plot (constant fugacity
 
 ## Part III: Chemistry engine
 
-Internals for **geochem modelers**: databases, equilibration frames, water-band policy, and boundary geometry. Jobs and packing: [Part IV](#part-iv-compute-and-packing). API and config: [Part V](#part-v-api-security-and-configuration). Product use: [Part I](#part-i-using-phaser).
+Internals for **geochemical modellers**: databases, equilibration frames, water-band policy, and boundary geometry. Jobs and packing: [Part IV](#part-iv-compute-and-packing). API and config: [Part V](#part-v-api-security-and-configuration). Product use: [Part I](#part-i-using-phaser).
 
 ### 3.1 Chemistry pipeline
 
-PHASER turns a chemical system and axis bounds into labelled (pH, redox) maps: load a thermodynamic database, evaluate each grid point with PHREEQC, optionally trace phase edges, then pack fills/boundaries for the UI. This part covers **what a point means** (databases, titration frames, convergence rescue, water-band policy, tracing geometry). Phase selection, result packing, and vector/gas display: [Part IV — Compute and packing](#part-iv-compute-and-packing). HTTP surface and env: [Part V — API, security and configuration](#part-v-api-security-and-configuration).
+PHASER turns a chemical system and axis bounds into labelled (pH, redox) maps: load a thermodynamic database, evaluate each grid point with PHREEQC, optionally trace phase edges, then pack fills/boundaries for the UI. This part covers **what a point means** (databases, titration frames, convergence rescue, water-band policy, tracing geometry). Phase selection, result packing, and vector/gas display: [Part IV](#part-iv-compute-and-packing). HTTP surface and env: [Part V](#part-v-api-security-and-configuration).
 
 ### 3.2 Database system
 
@@ -725,7 +754,7 @@ Users select a database by **`db_id`** from a server-managed catalog. Filesystem
 
 #### Sources
 
-1. **builtin** — `.dat` files scanned from `BUILTIN_DB_DIRS` (default: USGS Phreeqc Interactive `database/` on Windows/WSL dev; `/opt/phreeqc/database` in the Docker image via `PHASER_BUILTIN_DB_DIRS`).
+1. **builtin** — `.dat` files scanned from `BUILTIN_DB_DIRS` (default `/opt/phreeqc/database`, the databases shipped in the IPhreeqc source tarball, in both the Docker image and a [from-source install](#from-source-linux--wsl)). `PHASER_BUILTIN_DB_DIRS` replaces this list.
 2. **generated** — directory `data/databases/generated/` exists for external `.dat` files; product integration is still evolving ([Future features](#part-vii-future-features)).
 
 #### Registry flow
@@ -1128,7 +1157,7 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 | `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N during tracing |
 | `TRACE_CHUNK_MULTIPLIER` / `TRACE_MIN_CELLS_PER_CHUNK` | 16 / 4 | Worker chunking for mixed cells |
 
-Worker count, packing, and wall-clock timeout: [Part IV — Compute and packing](#part-iv-compute-and-packing).
+Worker count, packing, and wall-clock timeout: [Part IV](#part-iv-compute-and-packing).
 
 ---
 
@@ -1162,7 +1191,7 @@ UI display controls: [Overlays](#overlays) / [Concentration heatmap and contours
 
 ## Part IV: Compute and packing
 
-How a diagram job runs on the server: enqueue → PHREEQC sweep (and optional edge tracing / totals contours) → pack layers / hover → vector display for adaptive mode. Covers the FIFO queue, workers, timeouts, and the JSON the UI renders. System map and tree: [Architecture overview](#architecture-overview), [Project layout](#project-layout). Chemistry of a point: [Part III](#part-iii-chemistry-engine). CPU sizing in production: [Part VI — Deployment](#part-vi-deployment).
+How a diagram job runs on the server: enqueue → PHREEQC sweep (and optional edge tracing / totals contours) → pack layers / hover → vector display for adaptive mode. Covers the FIFO queue, workers, timeouts, and the JSON the UI renders. System map and tree: [Architecture overview](#architecture-overview), [Project layout](#project-layout). Chemistry of a point: [Part III](#part-iii-chemistry-engine). CPU sizing in production: [Part VI](#part-vi-deployment).
 
 ### 4.1 End-to-end compute flow
 
@@ -1290,7 +1319,7 @@ Before compute:
 
 1. Derive **system elements** from total concentrations (e.g. `Fe`, `C` → `Fe`, `C`).
 2. **`list_phases`** (from `db/catalog_store.py`) returns phases whose element sets are subsets of the system, computed from each phase's stored element composition (`phase_elements`) in the PHREEQC catalog. Each phase also includes a **`formula`** field parsed from the PHASES reaction for display (the UI toggles mineral name / formula / both client-side without repacking; join labels format each part the same way).
-3. User-selected phases (or auto-discovered set) become the `phases` tuple passed to PHREEQC.
+3. User-selected phases (or the auto-discovered set when the request has no `phases`) become the `phases` tuple passed to PHREEQC. Listing is never capped, but a job uses at most `MAX_PHASES_PER_JOB` (**200**) phases: a longer list is rejected with an explicit error, never shortened, because dropping phases could remove the stable solid. The UI already stops the selection at 200; this server check is a safety net for direct API calls and for auto-discovery, which can find more than 200 eligible phases when the request has no `phases`.
 
 #### Result packing (`packer.py`)
 
@@ -1441,7 +1470,7 @@ Key fields in the JSON body:
 | `ph_min`, `ph_max` | config defaults | pH axis; absolute `0`–`14`, with `ph_min < ph_max` |
 | `pe_min`, `pe_max` | config defaults | pe/Eh axis (stored as pe); absolute `−40`–`40`, with `pe_min < pe_max` |
 | `log_fo2_min`, `log_fo2_max` | config defaults | Native log fO₂ axis; absolute `−120`–`10`, with min `<` max |
-| `phases` | auto-discover | Selected solid phase names |
+| `phases` | auto-discover | Selected solid phase names; at most **200** distinct names (more returns **422**; the UI never sends more, so this mainly concerns scripts) |
 | `system_elements` | from totals | Explicit element list for layers |
 | `db_id` | server default | Database from registry |
 | `adaptive_boundaries` | `true` | Enable adaptive boundary tracing |
@@ -1549,10 +1578,10 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | Name | Default | Purpose |
 |------|---------|---------|
 | `PHASER_HOST` / `PHASER_PORT` | `0.0.0.0` / `8765` | Bind address |
-| `PHASER_IPHREEQC_LIB` | (platform path) | `libiphreeqc.so` / `IPhreeqc.dll` |
-| `PHASER_DB` | (dev path) | Pick default registry entry by file path when `PHASER_DEFAULT_DB_ID` unset |
+| `PHASER_IPHREEQC_LIB` | `/usr/local/lib/libiphreeqc.so` | IPhreeqc shared library loaded by phreeqpy (no other location is searched) |
+| `PHASER_DB` | `/opt/phreeqc/database/PHREEQC_ThermoddemV1.10_15Dec2020.dat` | Pick default registry entry by file path when `PHASER_DEFAULT_DB_ID` unset |
 | `PHASER_DEFAULT_DB_ID` | — | Force default `db_id` |
-| `PHASER_BUILTIN_DB_DIRS` | (scan defaults) | Extra builtin `.dat` dirs (`os.pathsep`-separated) |
+| `PHASER_BUILTIN_DB_DIRS` | `/opt/phreeqc/database` | Builtin `.dat` directories (`:`-separated); replaces the default |
 | `PHASER_GENERATED_DB_DIR` | `data/databases/generated` | Generated database directory |
 | `PHASER_DISABLED_DB_STEMS` | `iso,coldchem,…` | Hide stems from the selector (see `.env.example`) |
 | `PHASER_CATALOG_DB` | `data/catalog.sqlite` | Catalog cache |
@@ -1560,6 +1589,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_CATALOG_PROBE_AMOUNT` | `1.0` mmol/kgw | Catalog SI probe totals |
 | `GRID_LEVELS` / min / max | 100 / 50 / 200 | Default and clamp for `ph_levels` = `pe_levels` |
 | `MAX_GRID_POINTS` | 40000 | Cap on `ph_levels × pe_levels` |
+| `MAX_PHASES_PER_JOB` | 200 | Most phases one compute request may include. The UI limits the selection with `MAX_SELECTED_PHASES` in `static/index.html` (keep both equal); the server checks again as a safety net for direct API calls and auto-discovery. `/api/phases` listing is not capped |
 | `PH_MIN`/`PH_MAX`, `PE_MIN`/`PE_MAX`, `LOG_FO2_MIN`/`LOG_FO2_MAX` | 2–12, −14–20, −90–10 | Default axis bounds |
 | `TEMP_C_MIN`/`MAX`, `PH_ABS_*`, `PE_ABS_*`, `LOG_FO2_ABS_*` | 0–300, 0–14, −40–40, −120–10 | Absolute compute/UI clamps (also in `/api/config` → `limits`) |
 | `GAS_LIMIT_ATM_MIN`/`MAX` | 1e−12–300 atm | Gas-limit pressure ceiling |

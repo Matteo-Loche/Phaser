@@ -126,6 +126,21 @@ class ComputeRequest(BaseModel):
             cleaned[name] = amount
         return cleaned
 
+    @field_validator("phases")
+    @classmethod
+    def _validate_phases(cls, value: list[str] | None) -> list[str] | None:
+        # Safety net for direct API calls: the UI already stops the selection at the
+        # same limit. Checking here returns the message before the job is queued.
+        if value is None:
+            return None
+        count = len({name.strip() for name in value if name.strip()})
+        if count > config.MAX_PHASES_PER_JOB:
+            raise ValueError(
+                f"{count} phases selected; at most {config.MAX_PHASES_PER_JOB} "
+                "can be used in one diagram. Select fewer phases."
+            )
+        return value
+
     @field_validator("solution_mode")
     @classmethod
     def _validate_solution_mode(cls, value: str) -> str:
