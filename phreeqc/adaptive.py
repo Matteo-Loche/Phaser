@@ -13,13 +13,12 @@ Pipeline:
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any, Callable
 
 import numpy as np
 
 from .. import config
-from .engine import GridJobParams, GridPointResult
+from .engine import GridJobParams, GridPointResult, ResultView
 from .sweep import _point_key, build_grid, run_point_sweep
 
 
@@ -95,10 +94,10 @@ def boundary_base_cells(categories: np.ndarray) -> list[tuple[int, int]]:
 def run_adaptive_boundary_sweep(
     params: GridJobParams,
     *,
-    max_workers: int | None = None,
     progress_cb=None,
     refine_factor: int | None = None,
     job_id: str | None = None,
+    compute_pool=None,
 ) -> tuple[GridJobParams, dict[str, Any], list[GridPointResult], dict[str, Any] | None]:
     """Full base grid sweep + boundary tracing.
 
@@ -130,13 +129,18 @@ def run_adaptive_boundary_sweep(
     base_rows = run_point_sweep(
         params,
         base_points,
-        max_workers=max_workers,
         progress_cb=(lambda d, _t: report(d, base_total, "grid")) if progress_cb else None,
         job_id=job_id,
+        compute_pool=compute_pool,
     )
     check_abort(job_id)
-    # Category map / cell prep sits between the grid pool and the trace pool;
-    # keep abort responsive during this gap (and before workers respawn).
+    # Category map sits in the gap after the grid. The pool is still bound, so
+    # a timeout here can kill the workers. Report the boundary phase at 0
+    # before that work so the bar does not jump backwards when the phase starts.
+    report(0, 1, "boundaries")
+    from ..services.job_control import hold_phase_for_test
+
+    hold_phase_for_test(job_id, "signature")
     base_by_key = {_point_key(r.ph, r.pe): r for r in base_rows}
 
     signature = layer_signature_fn(params)
@@ -146,7 +150,7 @@ def run_adaptive_boundary_sweep(
         check_abort(job_id)
         for i in range(n_ph):
             row = base_by_key[_point_key(float(base_ph[i]), float(base_pe[j]))]
-            categories[j, i] = signature(asdict(row))
+            categories[j, i] = signature(ResultView(row))
             base_result_ij[(i, j)] = row
 
     check_abort(job_id)
@@ -155,7 +159,6 @@ def run_adaptive_boundary_sweep(
     from .gas_limits import trace_gas_limit_segments
 
     if not cells:
-        report(base_total, base_total, "grid")
         gas_segments = trace_gas_limit_segments(
             params,
             base_ph=base_ph,
@@ -183,11 +186,14 @@ def run_adaptive_boundary_sweep(
             "stability_limits": {"kind": "stability_limit", "segments": []},
             "gas_limits": {"kind": "gas_limit", "segments": gas_segments},
         }
+        report(1, 1, "boundaries")
         return params, stats, base_rows, trace_bundle
 
     from .boundary_trace import _chunk_cells, run_boundary_trace
+    from .session import require_compute_pool
 
-    workers = max_workers if max_workers is not None else config.MAX_WORKERS
+    compute_pool = require_compute_pool(compute_pool)
+    workers = compute_pool.workers
     n_progress = max(1, len(_chunk_cells(cells, workers=workers)))
     report(0, n_progress, "boundaries")
     trace_bundle, trace_stats = run_boundary_trace(
@@ -198,11 +204,11 @@ def run_adaptive_boundary_sweep(
         base_ij=base_result_ij,
         cells=cells,
         refine_factor=desired,
-        max_workers=max_workers,
         progress_cb=(
             (lambda d, t: report(d, t, "boundaries")) if progress_cb else None
         ),
         job_id=job_id,
+        compute_pool=compute_pool,
     )
     report(n_progress, n_progress, "boundaries")
 

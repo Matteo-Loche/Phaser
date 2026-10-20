@@ -18,6 +18,8 @@ from contextlib import contextmanager
 from typing import Any, Callable, Iterator, TypeVar
 
 T = TypeVar("T")
+
+_hold_entries = 0
 R = TypeVar("R")
 
 
@@ -116,6 +118,30 @@ def check_abort(job_id: str | None) -> None:
         raise JobAborted(reason, error_code=code)
 
 
+def hold_phase_for_test(job_id: str | None, phase: str) -> None:
+    """Wait until abort when ``PHASER_TEST_HOLD_PHASE`` names ``phase``.
+
+    The variable is unset in normal runs. Abort tests set it so the wall-clock
+    timer can fire inside a gap that would otherwise finish in milliseconds.
+    ``PHASER_TEST_HOLD_ONCE=1`` holds only the first entry, so a queued job on
+    the same server can run. The pool stays bound while this waits.
+    """
+    if os.environ.get("PHASER_TEST_HOLD_PHASE") != phase:
+        return
+    if os.environ.get("PHASER_TEST_HOLD_ONCE") == "1":
+        global _hold_entries
+        _hold_entries += 1
+        if _hold_entries > 1:
+            return
+    deadline = time.monotonic() + 60.0
+    while time.monotonic() < deadline:
+        check_abort(job_id)
+        time.sleep(0.05)
+    raise RuntimeError(
+        f"PHASER_TEST_HOLD_PHASE={phase!r} held for 60s without an abort"
+    )
+
+
 def _worker_processes(pool: ProcessPoolExecutor) -> list[Any]:
     # ``_processes`` is private and becomes None once the pool has shut down.
     return list((pool._processes or {}).values())
@@ -207,6 +233,7 @@ def pool_map_abortable(
     job_id: str | None,
     max_in_flight: int,
     on_result: Callable[[R, int], None] | None = None,
+    retain: bool = True,
 ) -> list[R]:
     """Like ``pool.map`` but wakes every ``_POOL_WAIT_TIMEOUT_SEC`` to honour abort.
 
@@ -252,7 +279,8 @@ def pool_map_abortable(
                 check_abort(job_id)
                 raise RuntimeError("Process pool future ready but result timed out") from exc
             done_n += 1
-            out.append(row)
+            if retain:
+                out.append(row)
             if on_result is not None:
                 on_result(row, done_n)
         _submit_more()

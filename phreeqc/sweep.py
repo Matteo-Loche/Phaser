@@ -8,29 +8,20 @@ from typing import Any
 import numpy as np
 
 from .. import config
-from ..services.job_control import check_abort, managed_process_pool, pool_map_abortable
+from ..services.job_control import check_abort, pool_map_abortable
 from .engine import (
     GridJobParams,
     GridPointResult,
     evaluate_point,
-    grid_job_params_from_dict,
-    init_phreeqc,
     point_key,
+    worker_params,
+    worker_phreeqc,
 )
-
-_WORKER_PQ = None
-_WORKER_PARAMS: GridJobParams | None = None
-
-
-def _worker_init(dll_path: str, db_path: str, params_dict: dict) -> None:
-    global _WORKER_PQ, _WORKER_PARAMS
-    _WORKER_PQ = init_phreeqc(dll_path, db_path)
-    _WORKER_PARAMS = grid_job_params_from_dict(params_dict)
-
+from .session import require_compute_pool
 
 def _worker_eval(args: tuple[float, float]) -> dict:
     ph, pe = args
-    result = evaluate_point(_WORKER_PQ, ph=ph, pe=pe, params=_WORKER_PARAMS)
+    result = evaluate_point(worker_phreeqc(), ph=ph, pe=pe, params=worker_params())
     return asdict(result)
 
 
@@ -81,12 +72,12 @@ def run_point_sweep(
     params: GridJobParams,
     points: list[tuple[float, float]],
     *,
-    max_workers: int | None = None,
     progress_cb=None,
     progress_offset: int = 0,
     progress_total: int | None = None,
     apply_water_mask: bool = True,
     job_id: str | None = None,
+    compute_pool=None,
 ) -> list[GridPointResult]:
     """Evaluate an explicit list of (pH, pe) points."""
     from .gas_limits import water_band_active
@@ -115,20 +106,15 @@ def run_point_sweep(
     if not tasks_list:
         return results
 
-    workers = max_workers if max_workers is not None else config.MAX_WORKERS
-    chunksize = config.SWEEP_MAP_CHUNKSIZE
-    chunksize = max(1, int(chunksize))
-    params_dict = asdict(params)
-
+    compute_pool = require_compute_pool(compute_pool)
+    workers = compute_pool.workers
+    chunksize = max(1, int(config.SWEEP_MAP_CHUNKSIZE))
     done = progress_offset
-    with managed_process_pool(
-        job_id,
-        max_workers=workers,
-        initializer=_worker_init,
-        initargs=(params.dll_path, params.db_path, params_dict),
-    ) as pool:
-        # Batch points per future (same idea as SWEEP_MAP_CHUNKSIZE) but wait with
-        # a timeout so wall-timeout abort cannot hang forever inside pool.map.
+
+    def _mapped(pool) -> None:
+        from ..services.job_control import hold_phase_for_test
+
+        hold_phase_for_test(job_id, "grid")
         chunks = [
             tasks_list[i : i + chunksize]
             for i in range(0, len(tasks_list), chunksize)
@@ -150,18 +136,19 @@ def run_point_sweep(
             job_id=job_id,
             max_in_flight=max_in_flight,
             on_result=_on_chunk,
+            retain=False,
         )
 
+    _mapped(compute_pool.pool)
     return results
 
 
 def run_grid_sweep(
     params: GridJobParams,
     *,
-    max_workers: int | None = None,
     progress_cb=None,
-    map_chunksize: int | None = None,
     job_id: str | None = None,
+    compute_pool=None,
 ) -> tuple[list[GridPointResult], dict[str, Any]]:
     ph_axis, pe_axis = build_grid(params)
     total = len(ph_axis) * len(pe_axis)
@@ -172,12 +159,11 @@ def run_grid_sweep(
         )
     points = [(float(p), float(e)) for p, e in product(ph_axis, pe_axis)]
     _, _, mask_stats = partition_points_for_sweep(params, points)
-    del map_chunksize  # reserved; run_point_sweep uses config.SWEEP_MAP_CHUNKSIZE
     rows = run_point_sweep(
         params,
         points,
-        max_workers=max_workers,
         progress_cb=progress_cb,
         job_id=job_id,
+        compute_pool=compute_pool,
     )
     return rows, mask_stats

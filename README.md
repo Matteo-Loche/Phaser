@@ -188,6 +188,7 @@ flowchart TB
 
     subgraph solver [phreeqc layer]
         Engine["engine - single point"]
+        Pool["session pool - one spawn executor"]
         Sweep["sweep - parallel grid"]
         Adaptive["adaptive - boundary trace"]
         Trace["boundary_trace - root finding"]
@@ -211,11 +212,13 @@ flowchart TB
     Compute --> Registry
     Compute --> Phases
     Compute --> Engine
-    Compute --> Sweep
-    Compute --> Adaptive
+    Compute --> Pool
+    Pool --> Sweep
+    Pool --> Adaptive
+    Pool --> MinStab
+    Pool --> Contours
+    Pool --> JobCtl
     Adaptive --> Trace
-    Sweep --> JobCtl
-    Trace --> JobCtl
     Compute --> Packer
     Compute --> Vectors
     Compute --> Catalog
@@ -223,10 +226,7 @@ flowchart TB
     StatsSvc --> StatsStore
     Routes --> StatsSvc
     Phases --> Catalog
-    Compute --> MinStab
-    Compute --> Contours
     Compute -->|request models, db_id lookup| Models
-    Models --> Contours
     MinStab --> Packer
     Trace --> Packer
     Adaptive --> Packer
@@ -244,9 +244,9 @@ flowchart TB
 | Layer | Role |
 |-------|------|
 | **api** | HTTP endpoints only. Validates requests, resolves `db_id` to trusted paths, returns JSON. |
-| **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py` with **spawn** ProcessPools), species helpers, and usage-statistics recording. No PHREEQC math here. `compute.py` and `stats.py` reuse the `api` request models and database lookup. |
+| **services** | FIFO compute queue, job lifecycle (reaper + wall-clock abort via `job_control.py` on the **spawn** session pool), species helpers, and usage-statistics recording. No PHREEQC math here. `compute.py` and `stats.py` reuse the `api` request models and database lookup. |
 | **db** | Discover/register `.dat` files; build and serve the SQLite PHREEQC catalog (`catalog_store.py`); persist per-server compute events (`stats_store.py`). |
-| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run parallel sweeps / boundary tracing (SI predominance and mineral-stability plugins) / optional totals-contour root-find; register live ProcessPools for hard-kill on timeout. Lazy imports avoid circular deps under multiprocessing **spawn**. |
+| **phreeqc** | Build PHREEQC input strings, call IPhreeqc (with KNOBS ladder), run the grid, the boundary trace (SI predominance and mineral-stability plugins), and optional totals-contour root-find on one spawn pool; that pool is registered so a timeout can hard-kill it. Lazy imports avoid circular deps under multiprocessing **spawn**. |
 | **diagram** | Turn per-point SI / precipitated-mole / species / `TOT` data into 2D category grids, `totals_heatmap` packs, and traced display layers (vector fills batched per category). |
 | **static** | Client UI: species editor, phase picker, plot canvas (incl. totals heatmap fill + contour overlays), job polling, browser-side settings and result cache. |
 
@@ -293,10 +293,11 @@ PHASER/
 │   ├── input_assemblage_titration.py # Real electrolyte + EQUI solids (mineral stability)
 │   ├── mineral_stability.py # Precipitated-mole categories + root scalars (moles / costability)
 │   ├── mineral_stability_trace.py # Adaptive trace orchestration for mineral modes
-│   ├── totals_contours.py # log₁₀(TOT) isoline root-find + polyline stitch (process-pooled)
+│   ├── totals_contours.py # log₁₀(TOT) isolines on the session pool (shared totals block)
 │   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
 │   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
-│   ├── sweep.py           # Multiprocessing grid sweep (killable ProcessPool)
+│   ├── session.py         # One spawn pool for the PHREEQC stretch of a job
+│   ├── sweep.py           # Base-grid chunks on that session pool
 │   ├── adaptive.py        # Adaptive boundary orchestration (SI predominance)
 │   └── boundary_trace.py  # Root-finding tracer (brentq; predominance + mineral plugins)
 ├── diagram/               # Phase diagram assembly
@@ -558,7 +559,7 @@ While a job runs:
 
 The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
 
-**Unified progress budget** — packing and client finish are always `90–95 → 95–100`. The front of the bar depends on mode and whether contours run:
+**Unified progress budget** — packing is always 90–95%. The client then downloads (95–98%), writes the browser cache (98–99%), and renders (99–100%). The front of the bar depends on mode and whether contours run:
 
 | Step | Adaptive, no contours | Adaptive + contours | Uniform, no contours | Uniform + contours |
 |------|----------------------|---------------------|----------------------|--------------------|
@@ -566,7 +567,9 @@ The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled wi
 | Trace phase edges | 20–90% | 20–70% | — | — |
 | Element-total contours | — | 70–90% | — | 70–90% |
 | Packing | 90–95% | 90–95% | 90–95% | 90–95% |
-| Download / cache / render | 95–100% | 95–100% | 95–100% | 95–100% |
+| Download | 95–98% | 95–98% | 95–98% | 95–98% |
+| Browser cache | 98–99% | 98–99% | 98–99% | 98–99% |
+| Render | 99–100% | 99–100% | 99–100% | 99–100% |
 
 Contour root-find runs inside the wall-clock timeout and cooperatively checks the job abort flag. Workers: [§4.3](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours).
 
@@ -1089,7 +1092,7 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
 
    <img src="docs/schemes/trace-base-cell.png" width="520" alt="Base cell: square between four evaluated grid corners; flagged when corner phase labels disagree; mixed edges get brentq later" />
 
-4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, in parallel (separate ProcessPool after the base sweep; Morton-ordered `_chunk_cells` — see [Parallel workers](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours)). For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
+4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, on the same session pool as the base grid (Morton-ordered `_chunk_cells` — see [Parallel workers](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours)). For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
    - **2-category cells (chord)** — two corner labels, two edge zeros. `brentq` on each mixed edge finds the zero of a continuous pair scalar; the boundary is the **straight chord** between those zeros (fills = both half-planes of that chord). Example: long Hausmannite | Mn²⁺ edge, or Pyrolusite | Manganite. Pair scalars:
      - SI predominance solid↔solid: `SI_A − SI_B`
      - mineral moles solid↔solid: precipitated-mole difference
@@ -1170,7 +1173,7 @@ Optional post-grid step (`phreeqc/totals_contours.py`) when the compute request 
 
 **Root-find.** Same idea as phase-boundary edges: for each grid cell and level, `brentq` finds zeros of `log₁₀(TOT) − level` on the four cell edges (shared edges rooted once per worker via a canonical edge cache). Two crossings → one chord; four crossings (saddle) → two chords in edge-walk order. Chords are **stitched** into continuous polylines by matching endpoints (grid-aware snap). Water-band clipping is **not** applied here — the UI white masks cut strokes at the gas lines (see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)).
 
-**Parallelism.** Contiguous **pH-line bands** (`CONTOUR_BANDS_PER_WORKER` consecutive pH-cell rows per job, default **1**), not Morton cell shards — isolines need locality along consecutive `i` rows. Up to `workers` jobs run at once. Progress first ticks once per worker as the spawn pool finishes `init_phreeqc`, then once per band job — otherwise the bar sat at 0 for the whole warmup and jumped when jobs finished in a wave. Each worker gets a `PointEvaluator` that **trusts** the base-grid seed `aq_total_by_key` (no corner re-PHREEQC). Band results are merged and **re-stitched** across band seams. Abort/timeout uses the same `managed_process_pool` kill path as sweep/trace. Progress phase: **`contours`**.
+**Parallelism.** Isolines run on the same session pool as the grid and the trace. Contiguous **pH-line bands** (`CONTOUR_BANDS_PER_WORKER` consecutive pH-cell rows per job, default **1**), not Morton cell shards — isolines need locality along consecutive `i` rows. The parent publishes aqueous totals in one shared block. A worker attaches that block and reads a grid node from it; a sample that misses the node calls `evaluate_point` on the worker's existing IPhreeqc. Progress ticks once per worker as it attaches, then once per band. Band results are merged and **re-stitched** across band seams. Abort and the wall-clock timeout kill that same pool. Progress phase: **`contours`**.
 
 **Packed shape** (attached on the job result):
 
@@ -1201,10 +1204,10 @@ sequenceDiagram
     participant UI as Browser
     participant API as Compute API
     participant Job as Compute service
+    participant Pool as Session pool
     participant Reg as DB registry
     participant Sw as PHREEQC sweep
     participant Ad as Adaptive trace
-    participant Tr as Boundary tracer
     participant TC as Totals contours
     participant Pack as Diagram packer
     participant Vec as Vector display
@@ -1213,27 +1216,20 @@ sequenceDiagram
     API->>Job: enqueue job
     API-->>UI: job_id and queue_position
     Job->>Reg: resolve db_id to path
-    alt adaptive predominance
-        Job->>Ad: run_adaptive_boundary_sweep
-        Ad->>Tr: root-find boundaries
-        Job->>Pack: pack_grid_results
-        Job->>Vec: pack_traced_display
-    else adaptive mineral stability
-        Job->>Ad: run_adaptive_mineral_stability_sweep
-        Ad->>Tr: root-find boundaries
-        opt totals_contours
-            Job->>TC: find_totals_contours
-        end
-        Job->>Pack: pack_mineral_grid_results
-        Job->>Vec: pack_traced_mineral_display
-    else uniform
-        Job->>Sw: run_grid_sweep
-        opt assemblage and totals_contours
-            Job->>TC: find_totals_contours
-        end
-        Job->>Pack: pack_grid_results or pack_mineral_grid_results
+    Job->>Pool: open_compute_pool
+    alt Trace phase edges on
+        Job->>Ad: grid then boundary trace on that pool
+    else uniform grid
+        Job->>Sw: run_grid_sweep on that pool
     end
-    Pack-->>Job: layered grids (+ vector display if adaptive)
+    opt Mineral stability and element-total contours
+        Job->>TC: find_totals_contours on the same pool
+    end
+    Job->>Pool: close pool
+    Job->>Pack: category grids and hover
+    opt Trace phase edges on
+        Job->>Vec: traced fills
+    end
     loop Poll while running or after page reload
         UI->>API: GET job status
         API-->>UI: progress and phase
@@ -1254,14 +1250,14 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 
 1. `POST /api/compute` creates a job with status **`queued`** (or **503** `queue_full` if admission is full).
 2. A dispatcher starts the job when `running_count < MAX_CONCURRENT_JOBS`.
-3. Status becomes **`running`** while the sweep executes; progress is polled via `GET /api/job/{id}`.
-   - Job payload includes **`progress`** (0–1) and **`phase`** (`grid`, `boundaries`, `contours` when element-total isolines run, `packing`, or `compute` for uniform mode).
+3. Status becomes **`running`** for the whole job (grid, optional trace and contours, then packing). Progress is polled via `GET /api/job/{id}`.
+   - Job payload includes **`progress`** (0–1 within the current phase) and **`phase`**: `grid` while an adaptive job builds the base grid, `compute` for a uniform grid (the bar treats that as the grid segment), `boundaries` while edges are traced, `contours` when element-total isolines run, then `packing`.
 4. On completion: **`done`** or **`error`**.
 5. Queued jobs expose **`queue_position`** (1-based) and **`queue_size`** so the UI can show *"Queued — position 2 of 3"*.
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
 7. **Browser reconnect during compute:** the UI stores the active `job_id` in `localStorage` (`phaserActiveJob.v2`) and resumes polling on load after refresh, tab close, or full browser quit (same origin). If the job finished while you were away and is still within `JOB_RESULT_TTL_SEC`, the result is fetched automatically. If the job was already reaped or the server restarted, the UI shows **Job was deleted from the server. Please recompute.** A second tab shows a branded gate (logo + **Transfer here**); only the leader tab polls or starts compute. Closing the browser does **not** DELETE the server job.
 8. **Orphan cleanup:** a background reaper drops finished jobs after `JOB_RESULT_TTL_SEC` (default 1 h from `finished_at`) and queued jobs after `JOB_QUEUE_TTL_SEC` (default 2 h from `created_at`). Status/result GETs refresh `last_seen_at` for diagnostics, but the reaper does **not** use it for pruning.
-9. **Wall-clock timeout:** once PHREEQC compute starts (base grid and, when enabled, boundary tracing and totals-contour root-find), a timer (and the reaper as a safety net) hard-aborts after `JOB_WALL_TIMEOUT_SEC` (default 5 min). DB/catalog setup, packing, and stats persistence are **outside** that wall clock. Process pools use the **`spawn`** start method (not `fork`) so workers do not inherit the server listen socket. The pool stays **bound** for the whole shutdown so a mid-join abort can still `terminate_pool`; unbinding first used to leave `_running_count` held and block the FIFO queue after a timeout. Children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Sweep/trace/contour waits use a short timeout so the job thread can observe the cancel event instead of hanging inside `pool.map` / `as_completed`. Abort checks run through the grid→category-map→trace→contours gap and on packing ticks (client `DELETE` still cancels packing). The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
+9. **Wall-clock timeout:** once PHREEQC compute starts (base grid and, when enabled, boundary tracing and totals-contour root-find), a timer (and the reaper as a safety net) hard-aborts after `JOB_WALL_TIMEOUT_SEC` (default 5 min). DB/catalog setup, packing, and stats persistence are **outside** that wall clock. The one session pool is started with **`spawn`** (not `fork`) so workers do not inherit the server listen socket. It stays **bound** until shutdown finishes, so a cancel during a wait can still `terminate_pool`. Children are **SIGTERM/SIGKILL'd first**, then the executor is shut down without waiting. Grid, trace, and contour waits wake every 0.5 s (`pool_map_abortable` / `iter_futures_abortable`) and check the cancel event. Abort checks also run through the grid→category-map→trace→contours gap and on packing ticks (client `DELETE` still cancels packing). The concurrent slot is freed and the job is marked `error` with `error_code=timed_out`. `DELETE /api/job/{id}` on a running job uses the same abort path.
 10. **Usage statistics:** on successful completion, `services/stats.py` records job metadata (database, grid size, layers, jobs ahead at enqueue, wait time, compute duration) to `data/stats.sqlite`. Failed jobs and browser cache hits are not counted. If recording fails, the diagram is still returned and the server prints a `[phaser stats]` warning.
 
 Job statuses: `queued` → `running` → `done` | `error` (including `error_code` `timed_out` / `cancelled`).
@@ -1270,41 +1266,45 @@ Job statuses: `queued` → `running` → `done` | `error` (including `error_code
 
 ### 4.3 Parallel workers (grid sweep, boundary trace, and totals contours)
 
-The base grid, (when **Trace phase edges** is on) boundary tracing, and (when **Compute element-total contours** is on) totals isolines each use a **`ProcessPoolExecutor`** sized by `PHASER_MAX_WORKERS`, bound through `managed_process_pool` so abort/timeout can hard-kill children. They are **separate pools for separate job phases** (sweep → optional trace → optional contours) — not one shared pool across stages. Geometry: [Trace phase edges](#36-trace-phase-edges), [Element-total contours](#37-element-total-contours-mineral-stability).
+A job opens **one** `ProcessPoolExecutor` for the whole PHREEQC stretch (base grid, then boundary tracing when **Trace phase edges** is on, then element-total isolines when **Compute element-total contours** is on). `open_compute_pool` binds that pool through `managed_process_pool`, so abort and the wall-clock timeout can hard-kill the children at any point inside the stretch, including the gap between phases. The pool closes before packing. Packing and vector fills run on the parent, which already holds every grid row. Geometry: [Trace phase edges](#36-trace-phase-edges), [Element-total contours](#37-element-total-contours-mineral-stability).
+
+Each worker loads IPhreeqc and the job's `GridJobParams` **once** (`bind_worker_session`). Before the first traced root that worker loads the database again, so the root does not follow whichever grid points that process happened to run. Trace punch settings (fewer aqueous slots, extra `-mol`) live on that worker's trace evaluator and do not replace the session parameters, so contour samples still use the original totals.
+
+Calls that run PHREEQC (`run_point_sweep`, `run_boundary_trace`, `find_totals_contours` with a live `params`) require this session pool and raise if it is missing. They do not open a pool of their own. The analytic contour path, and a contour call with no `params`, stays on the parent and does not use the pool.
 
 #### Base grid (`sweep.py`)
 
 A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs** (minus any synthetic outside-water points).
 
-- Pool initializer `_worker_init`: each child loads IPhreeqc and receives **`GridJobParams` once** (`grid_job_params_from_dict`).
 - Work units are chunks of `(pH, pe)` points (`_worker_eval_chunk`), size **`SWEEP_MAP_CHUNKSIZE`** (default `200`, env `PHASER_SWEEP_MAP_CHUNKSIZE`), submitted via `pool_map_abortable` so wall-timeout abort cannot hang inside a blocking `map`.
-- Progress counts completed points for the UI poll loop.
+- Progress counts completed points, including synthetic outside-water points, for the UI poll loop.
 
 #### Boundary trace (`boundary_trace.py`)
 
-After the base grid is labelled, only **mixed cells** (disagreeing corner signatures) are traced.
+After the base grid is labelled, only **mixed cells** (disagreeing corner signatures) are traced. The signature pass reads a view of each row; it does not copy the aqueous rankings.
 
-- Pool initializer `_trace_worker_init`: each child gets IPhreeqc plus `trace_params`, base axis arrays, `brentq` tolerances, refine factor, and `trace_mode` (predominance / mineral moles / costability).
-- Mixed cells are **Morton-sorted** (Z-order) and split by `_chunk_cells` into about **`workers × TRACE_CHUNK_MULTIPLIER`** contiguous chunks (floor `TRACE_MIN_CELLS_PER_CHUNK`), so neighboring boundary cells stay on the same worker and reuse its point/crossing caches.
-- Each future runs `_trace_worker_job` with only that chunk’s cell indices and corner seed data (not the full grid).
-- Futures are collected with `iter_futures_abortable`; progress is **chunks completed**. Results are merged in Morton-chunk order for a deterministic bundle.
+- The same workers switch to tracing (`_install_trace_state`), which loads the database again on that process. One `PointEvaluator` and its crossing cache then cover every Morton chunk that worker runs. The first time a worker touches a grid corner it runs PHREEQC again, because the trace punch is narrower than the grid punch; a later chunk on that same worker reuses the result. An edge root is stored once per worker.
+- Mixed cells are **Morton-sorted** (Z-order) and split by `_chunk_cells` into about **`workers × TRACE_CHUNK_MULTIPLIER`** contiguous chunks (floor `TRACE_MIN_CELLS_PER_CHUNK`). Chunks are dealt round-robin, and each worker receives its corner rows **once**.
+- Progress is **Morton chunks completed**, including a zero report before the first chunk. A shared counter moves the bar as each chunk finishes, even when one worker owns several chunks. Results are merged in Morton-chunk order for a deterministic bundle.
+- If no cell is mixed, the phase is still reported (0, then finished) and only the analytic O₂/H₂ lines are drawn. No trace tasks are submitted.
 
 #### Totals contours (`totals_contours.py`)
 
 After the base grid (and optional boundary trace), Mineral Stability jobs with `totals_contours` root-find `log₁₀(TOT)` isolines.
 
-- Pool initializer `_contour_worker_init`: each child gets IPhreeqc, `GridJobParams`, axis arrays, a light seed of base-grid `aq_total_by_key`, and `brentq` tolerance (`trust_seed_cache=True` on the evaluator).
+- The parent writes aqueous totals into one shared numeric block (NaN where a total is missing or not positive). Each worker attaches with tracking off, so a killed worker cannot delete the block. The parent unlinks the block when the contour pass finishes, including on abort. Workers never unlink.
+- Off-node `brentq` samples still call `evaluate_point` on the worker's existing IPhreeqc. Samples that land on a grid node are read from the block.
 - The cell grid is split into contiguous pH-line strips of **`CONTOUR_BANDS_PER_WORKER`** rows each (`_chunk_contour_cells`, default **1** row/job); isolines stay local; results are merged and re-stitched across band seams.
-- Before band work, one `_contour_worker_ready` future per worker forces initializer completion so progress advances during pool warmup.
-- Futures run `_contour_chunk_job` (key + levels + cells); progress is **warmup workers + band jobs completed** (`phase=contours`).
+- Progress is one tick per worker as it attaches the block, then one tick per pH-line band (`phase=contours`). Lines left off never report this phase. Lines on but no finite totals report the phase complete and return an empty `by_key`.
+- The analytic contour evaluator stays single-process and does not attach to the pool.
 
 | | Grid sweep | Boundary trace | Totals contours |
 |--|------------|----------------|-----------------|
 | Unit of work | `(pH, pe)` points | Mixed base cells | Cell bands × element key |
-| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`) | Contiguous pH-line bands (`CONTOUR_BANDS_PER_WORKER` rows/job) |
-| Heavy payload in init | `GridJobParams` | `trace_params` + axes + tolerances + mode | `GridJobParams` + axes + seed totals |
-| Per-task payload | Point coordinates | Cell indices + corner seeds | Cells + key + levels |
-| Progress | Points done | Chunks done | Worker warmup + band jobs done |
+| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`), one corner table per worker | Contiguous pH-line bands (`CONTOUR_BANDS_PER_WORKER` rows/job) |
+| What the worker already holds | IPhreeqc + `GridJobParams` | The same session, plus one trace evaluator | The same session, plus the shared totals block |
+| Per-task payload | Point coordinates | Cell indices (corners once per worker) | Cells + key + levels |
+| Progress | Points done | Chunks done | Worker attach + band jobs done |
 
 Production CPU / worker sizing: [6.5 CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs).
 
@@ -1324,7 +1324,7 @@ Before compute:
 
 #### Result packing (`packer.py`)
 
-After the sweep, each grid point has SI values and aqueous dominance data (assemblage points also carry `phase_moles`). Two pack entry points keep SI predominance and mineral stability separate:
+After the PHREEQC pool closes, each grid point has SI values and aqueous dominance data (assemblage points also carry `phase_moles`). Packing reads those rows in place. Two pack entry points keep SI predominance and mineral stability separate:
 
 | Entry | Diagram | Solid / mineral layers |
 |-------|---------|------------------------|
@@ -1600,7 +1600,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_TOTALS_CONTOURS` | `false` | Default for per-job `totals_contours` (Mineral Stability isolines) |
 | `PHASER_TOTALS_CONTOUR_LOG_STEP` | `2` | Default for `totals_contour_log_step` |
 | `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN` / `_MAX` | `0.5` / `6` | Clamp for `totals_contour_log_step` |
-| `PHASER_CONTOUR_BANDS_PER_WORKER` | `1` | Consecutive pH-cell rows per contour pool job |
+| `PHASER_CONTOUR_BANDS_PER_WORKER` | `1` | Consecutive pH-cell rows per contour task on the session pool |
 | `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode`. Unknown values stop the server at startup ([3.4](#34-convergence-rescue-knobs)) |
 | `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides (clamped to `GAS_LIMIT_ATM_*`) |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | Component-gas reference pressure |
@@ -1615,9 +1615,9 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `8` | Species packed for hover |
 | `PHASER_HOVER_SATURATED_PHASES` | `8` | Max SI≥0 solids packed per cell for Saturation hover |
 | `PHASER_TRACE_CHUNK_MULTIPLIER` / `PHASER_TRACE_MIN_CELLS_PER_CHUNK` | `16` / `4` | Trace worker chunking |
-| `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Base-grid `pool.map` chunksize |
-| `PHASER_MAX_WORKERS` | `8` | ProcessPool size per sweep |
-| `PHASER_MAX_CONCURRENT_JOBS` | `1` | Simultaneous sweeps (FIFO beyond) |
+| `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Base-grid points per `pool_map_abortable` chunk |
+| `PHASER_MAX_WORKERS` | `8` | Workers in the one session pool (grid, trace, contours) |
+| `PHASER_MAX_CONCURRENT_JOBS` | `1` | Simultaneous jobs (FIFO beyond that) |
 | `PHASER_MAX_QUEUE` | `20` | Cap on `running + queued`; further compute POSTs → 503 `queue_full` |
 | `PHASER_COMPUTE_MIN_INTERVAL_SEC` | `10` | Min seconds between compute attempts per IP (short 429) |
 | `PHASER_JOB_RESULT_TTL_SEC` | `3600` | Drop finished job results |
@@ -1734,7 +1734,7 @@ Built-in PHREEQC databases ship inside the image. An optional `PHASER_DATA_DIR` 
 |----------|-------|---------|
 | `PHASER_CPU_LIMIT` | Docker cgroup | Max CPUs for the container |
 | `PHASER_MEMORY_LIMIT` | Docker cgroup | Max RAM for the container |
-| `PHASER_MAX_WORKERS` | App | PHREEQC worker processes per sweep |
+| `PHASER_MAX_WORKERS` | App | Workers in the one PHREEQC session pool |
 | `PHASER_MAX_CONCURRENT_JOBS` | App | Simultaneous diagram jobs |
 | `PHASER_MAX_QUEUE` | App | Max `running + queued` (default `20`) |
 | `PHASER_COMPUTE_MIN_INTERVAL_SEC` | App | Min gap between compute POSTs per IP (default `10`) |
@@ -1761,8 +1761,8 @@ Built-in PHREEQC databases ship inside the image. An optional `PHASER_DATA_DIR` 
 | Variable | Role |
 |----------|------|
 | `PHASER_CPU_LIMIT` | Docker cgroup CPU cap for the container |
-| `PHASER_MAX_WORKERS` | PHREEQC worker processes **per sweep** (each holds an IPhreeqc instance) |
-| `PHASER_MAX_CONCURRENT_JOBS` | How many sweeps may run at once; extra jobs wait in the FIFO queue |
+| `PHASER_MAX_WORKERS` | PHREEQC worker processes in the one session pool (each holds an IPhreeqc instance) |
+| `PHASER_MAX_CONCURRENT_JOBS` | How many jobs may run at once; extra jobs wait in the FIFO queue |
 | `PHASER_MAX_QUEUE` | Cap on `running + queued`; further POSTs are rejected (`queue_full`) |
 
 With **`PHASER_MAX_CONCURRENT_JOBS=1`** (default), a common starting point is **`PHASER_CPU_LIMIT` = `PHASER_MAX_WORKERS`** so one job can use the full pool.

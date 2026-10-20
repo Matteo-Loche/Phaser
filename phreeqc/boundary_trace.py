@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import os
 from collections import Counter, defaultdict
-from ..services.job_control import check_abort, managed_process_pool, iter_futures_abortable
+from ..services.job_control import check_abort, iter_futures_abortable
 from dataclasses import asdict, dataclass, fields, replace
 from typing import Any, Callable
 
@@ -27,13 +27,21 @@ from skimage.measure import find_contours
 from .. import config
 from ..diagram.packer import label_is_solid, phase_from_label, subset_key
 from .dummy_medium import EXCLUDED_SPECIES
-from .engine import GridJobParams, GridPointResult, evaluate_point, grid_job_params_from_dict, init_phreeqc, point_key
+from .engine import (
+    GridJobParams,
+    GridPointResult,
+    ResultView,
+    evaluate_point,
+    grid_job_params_from_dict,
+    init_phreeqc,
+    point_key,
+    reset_worker_phreeqc,
+    worker_phreeqc,
+)
 
 # Floor for absent aqueous species so log(m_A)-log(m_B) brackets at dominance edges
 # even when a species is below top-N at a far cell corner.
 _MOL_FLOOR = 1e-30
-
-_WORKER_PQ = None
 
 
 @dataclass
@@ -111,19 +119,18 @@ class PointEvaluator:
         params: GridJobParams,
         seed_rows: dict[tuple[float, float], dict],
         *,
-        trust_seed_cache: bool = False,
+        pq=None,
     ):
         self._params = params
         self._cache: dict[tuple[float, float], dict] = dict(seed_rows)
-        # Boundary tracing seeds base-grid corners then re-evaluates with richer
-        # trace punch params — leave ``_full`` empty so ``eval`` refreshes.
-        # Totals contours seed ``aq_total_by_key`` from the same params; trusting
-        # the cache avoids a wasted PHREEQC call on every bracketing corner.
-        self._full: set[tuple[float, float]] = (
-            set(seed_rows.keys()) if trust_seed_cache else set()
-        )
+        # Trace punch settings differ from the grid, so a seeded corner is
+        # refreshed on the first eval. ``_full`` records points this evaluator
+        # has already run.
+        self._full: set[tuple[float, float]] = set()
         self.n_evals = 0
-        self._pq = init_phreeqc(params.dll_path, params.db_path)
+        # The worker pool already loaded the database. A second load per chunk
+        # is the gap between the grid and the trace on a large CPU count.
+        self._pq = pq if pq is not None else init_phreeqc(params.dll_path, params.db_path)
         self._crossing_t: dict[
             tuple[tuple[int, int], tuple[int, int], str, str], float | None
         ] = {}
@@ -255,7 +262,7 @@ def _corner_cats(
 ) -> tuple[str, str, str, str]:
     def row_at(ii: int, jj: int) -> dict:
         r = base_ij[(ii, jj)]
-        return r if isinstance(r, dict) else asdict(r)
+        return r if isinstance(r, dict) else ResultView(r)
 
     return (
         cat_fn(row_at(i, j)),
@@ -387,7 +394,7 @@ def collect_trace_species(
     names: set[str] = set()
     for key in base_ij:
         r = base_ij[key]
-        row = r if isinstance(r, dict) else asdict(r)
+        row = r if isinstance(r, dict) else ResultView(r)
         names.update(
             sp
             for sp in (row.get("aq_molality_by_species") or {})
@@ -508,13 +515,6 @@ def _interp_point(
     return ph0 + t * (ph1 - ph0), pe0 + t * (pe1 - pe0)
 
 
-def count_fallback_grid_evals(factor: int) -> int:
-    """New PHREEQC nodes per fallback cell (shared across all layers)."""
-    if factor <= 1:
-        return 0
-    return (factor + 1) * (factor + 1) - 4
-
-
 def _corner_base_key(
     i: int, j: int, gi: int, gj: int, factor: int
 ) -> tuple[int, int] | None:
@@ -547,7 +547,7 @@ def _fill_shared_cell_grid(
             corner = _corner_base_key(i, j, gi, gj, factor)
             if corner is not None:
                 r = base_ij[corner]
-                rows[(gi, gj)] = r if isinstance(r, dict) else asdict(r)
+                rows[(gi, gj)] = r if isinstance(r, dict) else ResultView(r)
             else:
                 rows[(gi, gj)] = evaluator.eval(float(local_ph[gi]), float(local_pe[gj]))
     return local_ph, local_pe, rows
@@ -1568,6 +1568,32 @@ def _trace_stability_cell(
     return segments
 
 
+_TRACE_CORNER_FIELDS = (
+    "ph",
+    "pe",
+    "converged",
+    "synthetic_label",
+    "si",
+    "dominant_aq_by_element",
+    "aq_molality_by_element",
+    "aq_species_by_element",
+    "aq_molality_by_species",
+    "aq_species_element",
+    "phase_moles",
+)
+
+
+def trace_corner_payload(row: GridPointResult | dict) -> dict:
+    """Fields a corner category needs. Shallow: pickle walks the maps once.
+
+    Aqueous rankings dominate the size. ``asdict`` would deep-copy them on the
+    parent before that pickle, once per chunk, which is the stall after the grid.
+    """
+    if isinstance(row, dict):
+        return {key: row.get(key) for key in _TRACE_CORNER_FIELDS}
+    return {key: getattr(row, key) for key in _TRACE_CORNER_FIELDS}
+
+
 def _corner_seed(
     cells: list[tuple[int, int]],
     base_ij: dict[tuple[int, int], Any],
@@ -1589,7 +1615,7 @@ def _corner_seed(
         r = base_ij.get(key)
         if r is None:
             continue
-        out[key] = r if isinstance(r, dict) else asdict(r)
+        out[key] = r if isinstance(r, dict) else trace_corner_payload(r)
     return out
 
 
@@ -1606,17 +1632,16 @@ def _trace_cells_batch(
     factor: int,
     specs: list[LayerSpec] | None = None,
     resolve_pair: Callable | None = None,
+    evaluator: PointEvaluator | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], TraceStats]:
     """Trace all layers + stability limits for a batch of cells (one worker)."""
-    seed: dict[tuple[float, float], dict] = {}
-    for row in corner_ij.values():
-        seed[point_key(float(row["ph"]), float(row["pe"]))] = row
-
-    evaluator = PointEvaluator(trace_params, seed)
+    if evaluator is None:
+        evaluator = PointEvaluator(trace_params, {})
     if resolve_pair is not None:
         evaluator.resolve_pair = resolve_pair
     if specs is None:
         specs = layer_specs(trace_params, db_path)
+    n_evals_before = evaluator.n_evals
     stats = TraceStats()
     # Per layer: clean-cell dividing lines (smooth fills), sampled fallback nodes,
     # and exact boundary segments (lines).
@@ -1710,11 +1735,10 @@ def _trace_cells_batch(
         }
 
     stats.n_stability_segments = len(stability)
-    stats.n_trace_evals = evaluator.n_evals - stats.n_fallback_evals
+    stats.n_trace_evals = evaluator.n_evals - n_evals_before - stats.n_fallback_evals
     return layers_out, stability, stats
 
 
-_WORKER_PQ = None
 _WORKER_TRACE_PARAMS: GridJobParams | None = None
 _WORKER_BASE_PH: np.ndarray | None = None
 _WORKER_BASE_PE: np.ndarray | None = None
@@ -1722,6 +1746,10 @@ _WORKER_TOL: float = 0.0
 _WORKER_STABILITY_TOL: float = 0.0
 _WORKER_FACTOR: int = 1
 _WORKER_TRACE_MODE: str = "predominance"
+_WORKER_EVAL: PointEvaluator | None = None
+_WORKER_ARMED = False
+_WORKER_SPECS: list[LayerSpec] | None = None
+_WORKER_RESOLVE: Callable | None = None
 
 
 def _normalize_trace_mode(trace_mode: str) -> str:
@@ -1744,20 +1772,20 @@ def _normalize_trace_mode(trace_mode: str) -> str:
     )
 
 
-def _trace_worker_init(
-    dll_path: str,
-    db_path: str,
+def _install_trace_state(
     trace_params_dict: dict[str, Any],
     base_ph: list[float],
     base_pe: list[float],
     tol: float,
     stability_tol: float,
     factor: int,
-    trace_mode: str = "predominance",
+    trace_mode: str,
 ) -> None:
-    global _WORKER_PQ, _WORKER_TRACE_PARAMS, _WORKER_BASE_PH, _WORKER_BASE_PE
+    """Point the worker at this trace and reload its database once."""
+    global _WORKER_TRACE_PARAMS, _WORKER_BASE_PH, _WORKER_BASE_PE
     global _WORKER_TOL, _WORKER_STABILITY_TOL, _WORKER_FACTOR, _WORKER_TRACE_MODE
-    _WORKER_PQ = init_phreeqc(dll_path, db_path)
+    global _WORKER_EVAL, _WORKER_SPECS, _WORKER_RESOLVE, _WORKER_ARMED
+    reset_worker_phreeqc()
     _WORKER_TRACE_PARAMS = grid_job_params_from_dict(trace_params_dict)
     _WORKER_BASE_PH = np.asarray(base_ph, dtype=float)
     _WORKER_BASE_PE = np.asarray(base_pe, dtype=float)
@@ -1765,6 +1793,109 @@ def _trace_worker_init(
     _WORKER_STABILITY_TOL = float(stability_tol)
     _WORKER_FACTOR = int(factor)
     _WORKER_TRACE_MODE = _normalize_trace_mode(trace_mode)
+    _WORKER_SPECS, _WORKER_RESOLVE = _trace_mode_plugins(
+        _WORKER_TRACE_MODE, _WORKER_TRACE_PARAMS, _WORKER_TRACE_PARAMS.db_path
+    )
+    _WORKER_EVAL = PointEvaluator(_WORKER_TRACE_PARAMS, {}, pq=worker_phreeqc())
+    _WORKER_EVAL.resolve_pair = _WORKER_RESOLVE
+    _WORKER_ARMED = True
+
+
+def _ensure_trace_state(cfg: dict[str, Any]) -> None:
+    """Install trace state on this process once.
+
+    A pool does not pin a task to a process, so a warmup batch can land twice
+    on one worker and never on another. The first real task arms the process;
+    later chunks keep the crossing cache.
+    """
+    if _WORKER_ARMED:
+        return
+    _install_trace_state(
+        cfg["params"],
+        cfg["base_ph"],
+        cfg["base_pe"],
+        cfg["tol"],
+        cfg["stability_tol"],
+        cfg["factor"],
+        cfg["trace_mode"],
+    )
+
+
+def _arm_trace_worker(cfg: dict[str, Any]) -> bool:
+    """Switch an already-loaded worker from the grid phase to boundary tracing."""
+    _ensure_trace_state(cfg)
+    return True
+
+
+def _decode_corners(serial: dict) -> dict[tuple[int, int], dict]:
+    return {
+        tuple(int(part) for part in key.split(",")): value
+        for key, value in serial.items()
+    }
+
+
+def _trace_worker_batch(job: dict[str, Any]) -> dict[str, Any]:
+    """Trace every Morton chunk assigned to this worker, reusing one evaluator."""
+    _ensure_trace_state(job["cfg"])
+    assert _WORKER_EVAL is not None
+    assert _WORKER_TRACE_PARAMS is not None
+    assert _WORKER_BASE_PH is not None and _WORKER_BASE_PE is not None
+    corner_ij = _decode_corners(job["corner_ij"])
+    parts = []
+    for idx, cells in job["chunks"]:
+        layers_out, stability, stats = _trace_cells_batch(
+            cells,
+            _WORKER_TRACE_PARAMS,
+            _WORKER_TRACE_PARAMS.db_path,
+            _WORKER_BASE_PH,
+            _WORKER_BASE_PE,
+            corner_ij,
+            tol=_WORKER_TOL,
+            stability_tol=_WORKER_STABILITY_TOL,
+            factor=_WORKER_FACTOR,
+            specs=_WORKER_SPECS,
+            resolve_pair=_WORKER_RESOLVE,
+            evaluator=_WORKER_EVAL,
+        )
+        parts.append(
+            {
+                "idx": idx,
+                "layers": layers_out,
+                "stability": stability,
+                "stats": asdict(stats),
+            }
+        )
+        counter = job["counter"]
+        with job["counter_lock"]:
+            counter.value += 1
+    return {"parts": parts}
+
+
+def _component_gas_batch(job: dict[str, Any]) -> list[dict[str, Any]]:
+    """Root component-gas limits on this worker's existing IPhreeqc."""
+    _ensure_trace_state(job["cfg"])
+    from .gas_limits import _trace_component_gas_edges
+
+    assert _WORKER_EVAL is not None
+    assert _WORKER_BASE_PH is not None and _WORKER_BASE_PE is not None
+    base_ij = _decode_corners(job["base_ij"])
+    segments: list[dict[str, Any]] = []
+    for gas in job["gases"]:
+        for i, j in job["cells"]:
+            segments.extend(
+                _trace_component_gas_edges(
+                    _WORKER_EVAL,
+                    i,
+                    j,
+                    _WORKER_BASE_PH,
+                    _WORKER_BASE_PE,
+                    base_ij,
+                    gas=gas,
+                    limit_atm=job["limit"],
+                    tol=job["tol"],
+                )
+            )
+    return segments
 
 
 def _trace_mode_plugins(trace_mode: str, params: GridJobParams, db_path: str):
@@ -1784,39 +1915,6 @@ def _trace_mode_plugins(trace_mode: str, params: GridJobParams, db_path: str):
             mineral_resolve_pair_for_mode(category_mode),
         )
     return layer_specs(params, db_path), _resolve_pair_scalar
-
-
-def _trace_worker_job(job: dict[str, Any]) -> dict[str, Any]:
-    """Process-pool entry: trace a chunk of boundary cells."""
-    cells: list[tuple[int, int]] = job["cells"]
-    corner_ij = {
-        tuple(int(p) for p in k.split(",")): v for k, v in job["corner_ij"].items()
-    }
-    assert _WORKER_TRACE_PARAMS is not None
-    assert _WORKER_BASE_PH is not None
-    assert _WORKER_BASE_PE is not None
-
-    specs, resolve_pair = _trace_mode_plugins(
-        _WORKER_TRACE_MODE, _WORKER_TRACE_PARAMS, _WORKER_TRACE_PARAMS.db_path
-    )
-    layers_out, stability, stats = _trace_cells_batch(
-        cells,
-        _WORKER_TRACE_PARAMS,
-        _WORKER_TRACE_PARAMS.db_path,
-        _WORKER_BASE_PH,
-        _WORKER_BASE_PE,
-        corner_ij,
-        tol=_WORKER_TOL,
-        stability_tol=_WORKER_STABILITY_TOL,
-        factor=_WORKER_FACTOR,
-        specs=specs,
-        resolve_pair=resolve_pair,
-    )
-    return {
-        "layers": layers_out,
-        "stability": stability,
-        "stats": asdict(stats),
-    }
 
 
 def _morton_code(i: int, j: int) -> int:
@@ -1863,6 +1961,181 @@ def _chunk_cells(
     return chunks
 
 
+def _component_cells(base_ph: np.ndarray, base_pe: np.ndarray) -> list[tuple[int, int]]:
+    return [(i, j) for j in range(len(base_pe) - 1) for i in range(len(base_ph) - 1)]
+
+
+def _gas_corner_rows(base_ij: dict, gases: tuple[str, ...]) -> dict[str, dict]:
+    """Ship only the gas saturation indexes a component-gas root needs."""
+    rows: dict[str, dict] = {}
+    for (i, j), row in base_ij.items():
+        if isinstance(row, dict):
+            src = row.get("gas_si") or {}
+            si = row.get("si") or {}
+            converged = bool(row.get("converged", True))
+        else:
+            src = row.gas_si or {}
+            si = row.si or {}
+            converged = bool(row.converged)
+        picked: dict[str, float] = {}
+        for gas in gases:
+            val = src.get(gas)
+            if val is None:
+                val = si.get(gas)
+            if isinstance(val, (int, float)) and val == val:
+                picked[gas] = float(val)
+        rows[f"{i},{j}"] = {"gas_si": picked, "converged": converged}
+    return rows
+
+
+def _component_gas_on_pool(
+    pool,
+    *,
+    job_id: str | None,
+    workers: int,
+    base_ph: np.ndarray,
+    base_pe: np.ndarray,
+    base_ij: dict,
+    gases: tuple[str, ...],
+    limit: float,
+    tol: float,
+    cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    cells = _component_cells(base_ph, base_pe)
+    if not cells:
+        return []
+    rows = _gas_corner_rows(base_ij, gases)
+    span = max(1, (len(cells) + workers - 1) // workers)
+    futures = []
+    for start in range(0, len(cells), span):
+        group = cells[start : start + span]
+        futures.append(
+            pool.submit(
+                _component_gas_batch,
+                {
+                    "cells": group,
+                    "base_ij": rows,
+                    "gases": gases,
+                    "limit": limit,
+                    "tol": tol,
+                    "cfg": cfg,
+                },
+            )
+        )
+    pending = {fut: idx for idx, fut in enumerate(futures)}
+    ordered: list[list[dict[str, Any]] | None] = [None] * len(futures)
+    for future, idx in iter_futures_abortable(pending, job_id=job_id):
+        ordered[idx] = future.result(timeout=0.1)
+    segments: list[dict[str, Any]] = []
+    for part in ordered:
+        if part:
+            segments.extend(part)
+    return segments
+
+
+def _assign_trace_batches(
+    chunks: list[list[tuple[int, int]]],
+    workers: int,
+    base_ij: dict[tuple[int, int], Any],
+) -> list[dict[str, Any]]:
+    """Deal Morton chunks round-robin and attach each worker's corners once."""
+    groups: list[list[tuple[int, list[tuple[int, int]]]]] = [[] for _ in range(max(workers, 1))]
+    for idx, chunk in enumerate(chunks):
+        groups[idx % len(groups)].append((idx, chunk))
+    jobs = []
+    for group in groups:
+        if not group:
+            continue
+        cells = [cell for _idx, chunk in group for cell in chunk]
+        seed = _corner_seed(cells, base_ij)
+        jobs.append(
+            {
+                "chunks": group,
+                "corner_ij": {f"{i},{j}": row for (i, j), row in seed.items()},
+            }
+        )
+    return jobs
+
+
+def _absorb_trace_part(
+    layers_out: dict[str, Any],
+    stability: list[dict[str, Any]],
+    stats: TraceStats,
+    part: dict[str, Any],
+) -> None:
+    chunk_stats = TraceStats(**part["stats"])
+    _merge_stats(stats, chunk_stats)
+    for layer_id, data in part["layers"].items():
+        bucket = layers_out.setdefault(
+            layer_id,
+            {
+                "node_fi": [],
+                "node_fj": [],
+                "node_cat": [],
+                "cell_lines": [],
+                "cell_regions": [],
+                "boundaries": [],
+            },
+        )
+        bucket["node_fi"].extend(data["node_fi"])
+        bucket["node_fj"].extend(data["node_fj"])
+        bucket["node_cat"].extend(data["node_cat"])
+        bucket["cell_lines"].extend(data.get("cell_lines", []))
+        bucket["cell_regions"].extend(data.get("cell_regions", data.get("cell_wedges", [])))
+        bucket["boundaries"].extend(data.get("boundaries", []))
+    stability.extend(part["stability"])
+
+
+def _run_trace_batches(
+    pool,
+    jobs: list[dict[str, Any]],
+    *,
+    job_id: str | None,
+    n_chunks: int,
+    progress_cb: Callable[[int, int], None] | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]], TraceStats]:
+    """Run worker batches and report progress once per Morton chunk."""
+    import multiprocessing as mp
+    from concurrent.futures import FIRST_COMPLETED, wait
+
+    # A raw shared ctypes Value cannot be pickled to a spawn worker.
+    # A manager proxy can, and the parent polls it while chunks finish.
+    manager = mp.get_context("spawn").Manager()
+    try:
+        counter = manager.Value("i", 0)
+        counter_lock = manager.Lock()
+        for job in jobs:
+            job["counter"] = counter
+            job["counter_lock"] = counter_lock
+        futures = [pool.submit(_trace_worker_batch, job) for job in jobs]
+        pending = set(futures)
+        parts_by_idx: dict[int, dict[str, Any]] = {}
+        last = 0
+        while pending:
+            check_abort(job_id)
+            current = int(counter.value)
+            if progress_cb and current != last:
+                progress_cb(min(current, n_chunks), n_chunks)
+                last = current
+            finished, not_done = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+            pending = set(not_done)
+            for fut in finished:
+                check_abort(job_id)
+                for part in fut.result(timeout=0.1)["parts"]:
+                    parts_by_idx[part["idx"]] = part
+        if progress_cb:
+            progress_cb(n_chunks, n_chunks)
+    finally:
+        manager.shutdown()
+    layers_out: dict[str, Any] = {}
+    stability: list[dict[str, Any]] = []
+    stats = TraceStats()
+    for idx in sorted(parts_by_idx):
+        _absorb_trace_part(layers_out, stability, stats, parts_by_idx[idx])
+    stats.n_stability_segments = len(stability)
+    return layers_out, stability, stats
+
+
 def run_boundary_trace(
     params: GridJobParams,
     *,
@@ -1875,9 +2148,9 @@ def run_boundary_trace(
     stability_tolerance: float | None = None,
     refine_factor: int | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
-    max_workers: int | None = None,
     job_id: str | None = None,
     trace_mode: str = "predominance",
+    compute_pool=None,
 ) -> tuple[dict[str, Any], TraceStats]:
     """Trace boundaries across all plottable layers for mixed base cells.
 
@@ -1888,11 +2161,15 @@ def run_boundary_trace(
         post-precip co-stability (all moles > 0 joined)
     """
     check_abort(job_id)
+    if cells:
+        from .session import require_compute_pool
+
+        compute_pool = require_compute_pool(compute_pool)
     tol = tolerance or config.BOUNDARY_TRACE_TOLERANCE
     stability_tol = stability_tolerance or config.BOUNDARY_TRACE_STABILITY_TOLERANCE
     factor = refine_factor or config.ADAPTIVE_REFINE_FACTOR
     mode = _normalize_trace_mode(trace_mode)
-    specs, resolve_pair = _trace_mode_plugins(mode, params, db_path)
+    specs = _trace_mode_plugins(mode, params, db_path)[0]
     if mode in ("mineral_moles", "mineral_costability"):
         from .mineral_stability_trace import collect_mineral_trace_species
 
@@ -1904,129 +2181,90 @@ def run_boundary_trace(
         aq_species_molality=species,
         top_aq_species_per_element=config.BOUNDARY_TRACE_TOP_AQ_SPECIES,
     )
+    component_gases = tuple(
+        g for g in trace_params.trace_gas_phases if g not in ("O2(g)", "H2(g)")
+    )
+    component_from_pool: list[dict[str, Any]] = []
 
-    workers = max_workers if max_workers is not None else config.MAX_WORKERS
-    chunks = _chunk_cells(cells, workers=workers)
-
-    if workers <= 1 or len(chunks) <= 1:
-        corner_ij = _corner_seed(cells, base_ij)
-        layers_out, stability, stats = _trace_cells_batch(
-            cells,
-            trace_params,
-            db_path,
-            base_ph,
-            base_pe,
-            corner_ij,
-            tol=tol,
-            stability_tol=stability_tol,
-            factor=factor,
-            specs=specs,
-            resolve_pair=resolve_pair,
-        )
-        check_abort(job_id)
+    if not cells:
+        layers_out = {}
+        stability = []
+        stats = TraceStats()
         if progress_cb:
             progress_cb(1, 1)
     else:
-        jobs = []
-        for chunk in chunks:
-            corner_ij = _corner_seed(chunk, base_ij)
-            serial_corner = {f"{i},{j}": v for (i, j), v in corner_ij.items()}
-            jobs.append({"cells": chunk, "corner_ij": serial_corner})
+        workers = compute_pool.workers
+        chunks = _chunk_cells(cells, workers=workers)
+        trace_cfg = {
+            "params": asdict(trace_params),
+            "base_ph": base_ph.tolist(),
+            "base_pe": base_pe.tolist(),
+            "tol": tol,
+            "stability_tol": stability_tol,
+            "factor": factor,
+            "trace_mode": mode,
+        }
+        jobs = _assign_trace_batches(chunks, workers, base_ij)
+        for job in jobs:
+            job["cfg"] = trace_cfg
 
-        layers_out = {}
-        stability: list[dict[str, Any]] = []
-        stats = TraceStats()
-        done = 0
-        with managed_process_pool(
-            job_id,
-            max_workers=workers,
-            initializer=_trace_worker_init,
-            initargs=(
-                params.dll_path,
-                params.db_path,
-                asdict(trace_params),
-                base_ph.tolist(),
-                base_pe.tolist(),
-                tol,
-                stability_tol,
-                factor,
-                mode,
-            ),
-        ) as pool:
-            try:
-                futures = {
-                    pool.submit(_trace_worker_job, job): idx
-                    for idx, job in enumerate(jobs)
-                }
-                completed: list[dict[str, Any] | None] = [None] * len(jobs)
-                for future, idx in iter_futures_abortable(futures, job_id=job_id):
-                    completed[idx] = future.result(timeout=0.1)
-                    done += 1
-                    if progress_cb:
-                        progress_cb(done, len(chunks))
+        def _execute(pool):
+            armed = {pool.submit(_arm_trace_worker, trace_cfg): i for i in range(workers)}
+            for future, _idx in iter_futures_abortable(armed, job_id=job_id):
+                future.result(timeout=0.1)
+            if progress_cb:
+                progress_cb(0, max(len(chunks), 1))
+            from ..services.job_control import hold_phase_for_test
 
-                # Preserve the old deterministic Morton-chunk merge order even
-                # though progress is counted as chunks complete.
-                for result in completed:
-                    if result is None:
-                        continue
-                    chunk_stats = TraceStats(**result["stats"])
-                    _merge_stats(stats, chunk_stats)
-                    for layer_id, data in result["layers"].items():
-                        if layer_id not in layers_out:
-                            layers_out[layer_id] = {
-                                "node_fi": [],
-                                "node_fj": [],
-                                "node_cat": [],
-                                "cell_lines": [],
-                                "cell_regions": [],
-                                "boundaries": [],
-                            }
-                        layers_out[layer_id]["node_fi"].extend(data["node_fi"])
-                        layers_out[layer_id]["node_fj"].extend(data["node_fj"])
-                        layers_out[layer_id]["node_cat"].extend(data["node_cat"])
-                        layers_out[layer_id]["cell_lines"].extend(
-                            data.get("cell_lines", [])
-                        )
-                        layers_out[layer_id]["cell_regions"].extend(
-                            data.get("cell_regions", data.get("cell_wedges", []))
-                        )
-                        layers_out[layer_id]["boundaries"].extend(
-                            data.get("boundaries", [])
-                        )
-                    stability.extend(result["stability"])
-            except Exception as exc:
-                from ..services.job_control import JobAborted
+            hold_phase_for_test(job_id, "trace")
+            traced = _run_trace_batches(
+                pool,
+                jobs,
+                job_id=job_id,
+                n_chunks=len(chunks),
+                progress_cb=progress_cb,
+            )
+            if component_gases and base_ij:
+                component_from_pool.extend(
+                    _component_gas_on_pool(
+                        pool,
+                        job_id=job_id,
+                        workers=workers,
+                        base_ph=base_ph,
+                        base_pe=base_pe,
+                        base_ij=base_ij,
+                        gases=component_gases,
+                        limit=trace_params.component_gas_limit_atm,
+                        tol=tol,
+                        cfg=trace_cfg,
+                    )
+                )
+            return traced
 
-                if isinstance(exc, JobAborted):
-                    raise
-                check_abort(job_id)
-                raise RuntimeError(
-                    f"Boundary-trace worker pool failed ({type(exc).__name__}): {exc}"
-                ) from exc
+        try:
+            layers_out, stability, stats = _execute(compute_pool.pool)
+        except Exception as exc:
+            from ..services.job_control import JobAborted
 
-        stats.n_stability_segments = len(stability)
+            if isinstance(exc, JobAborted):
+                raise
+            check_abort(job_id)
+            raise RuntimeError(
+                f"Boundary-trace worker pool failed ({type(exc).__name__}): {exc}"
+            ) from exc
 
     stats.n_segments = sum(len(layer["node_cat"]) for layer in layers_out.values())
 
     from .gas_limits import trace_gas_limit_segments
 
-    gas_eval = PointEvaluator(
-        trace_params,
-        {
-            point_key(float(r.ph), float(r.pe)): asdict(r)
-            for r in base_ij.values()
-        },
-    )
-    gas_eval.resolve_pair = resolve_pair
     gas_segments = trace_gas_limit_segments(
         trace_params,
         base_ph=base_ph,
         base_pe=base_pe,
-        base_ij=base_ij,
-        evaluator=gas_eval,
         tolerance=tol,
     )
+    if component_gases and base_ij and cells:
+        gas_segments.extend(component_from_pool)
     stats.n_gas_segments = len(gas_segments)
 
     trace_bundle: dict[str, Any] = {

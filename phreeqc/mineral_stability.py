@@ -135,7 +135,7 @@ def category_precip_subset(
     )
     if label:
         return label
-    return dominant_aq_in_subset(dict(row), set(subset))
+    return dominant_aq_in_subset(row, set(subset))
 
 
 def category_costability_subset(
@@ -167,7 +167,7 @@ def category_costability_subset(
     )
     if label:
         return label
-    return dominant_aq_in_subset(dict(row), set(subset))
+    return dominant_aq_in_subset(row, set(subset))
 
 
 def mineral_stability_signature(
@@ -227,7 +227,7 @@ def mineral_stability_signature(
                 )
     if layer_aqueous:
         for subset in subsets:
-            parts.append(dominant_aq_species_subset(dict(row), set(subset)))
+            parts.append(dominant_aq_species_subset(row, set(subset)))
     return tuple(parts)
 
 

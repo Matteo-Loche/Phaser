@@ -361,13 +361,15 @@ def _trace_component_gas_edges(
     limit_atm: float,
     tol: float,
 ) -> list[dict[str, Any]]:
-    from dataclasses import asdict
-
     from .boundary_trace import _edge_coords
 
     def row_at(ii: int, jj: int) -> dict:
         r = base_ij[(ii, jj)]
-        return r if isinstance(r, dict) else asdict(r)
+        if isinstance(r, dict):
+            return r
+        from .engine import ResultView
+
+        return ResultView(r)
 
     corners = [
         row_at(i, j),
@@ -457,15 +459,10 @@ def trace_gas_limit_segments(
         g for g in params.trace_gas_phases if g not in _WATER_GASES
     )
     if component_gases and base_ij is not None:
-        from .boundary_trace import PointEvaluator as _PointEvaluator
-
         if evaluator is None:
-            from dataclasses import asdict
-            seed: dict[tuple[float, float], dict] = {}
-            for r in base_ij.values():
-                d = r if isinstance(r, dict) else asdict(r)
-                seed[point_key(float(d["ph"]), float(d["pe"]))] = d
-            evaluator = _PointEvaluator(params, seed)
+            from .boundary_trace import PointEvaluator as _PointEvaluator
+
+            evaluator = _PointEvaluator(params, {})
         for gas in component_gases:
             for j in range(n_pe - 1):
                 for i in range(n_ph - 1):

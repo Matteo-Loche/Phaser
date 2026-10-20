@@ -16,7 +16,6 @@ Layer ids:
 """
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any, Callable
 
 import numpy as np
@@ -31,7 +30,7 @@ from ..diagram.packer import (
 from ..services.job_control import check_abort
 from .boundary_trace import LayerSpec, TraceStats, _chunk_cells, run_boundary_trace
 from .dummy_medium import EXCLUDED_SPECIES
-from .engine import GridJobParams, GridPointResult
+from .engine import GridJobParams, GridPointResult, ResultView
 from .mineral_stability import (
     MineralCategoryMode,
     _normalize_category_mode,
@@ -154,7 +153,7 @@ def collect_mineral_trace_species(
     names: set[str] = set()
     for key in base_ij:
         r = base_ij[key]
-        row = r if isinstance(r, dict) else asdict(r)
+        row = r if isinstance(r, dict) else ResultView(r)
         names.update(
             sp
             for sp in (row.get("aq_molality_by_species") or {})
@@ -188,9 +187,9 @@ def run_mineral_boundary_trace(
     stability_tolerance: float | None = None,
     refine_factor: int | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
-    max_workers: int | None = None,
     job_id: str | None = None,
     category_mode: MineralCategoryMode = "moles",
+    compute_pool=None,
 ) -> tuple[dict[str, Any], TraceStats]:
     """Trace mineral-stability boundaries (same bundle shape as predominance)."""
     mode = _normalize_category_mode(category_mode)
@@ -205,20 +204,20 @@ def run_mineral_boundary_trace(
         stability_tolerance=stability_tolerance,
         refine_factor=refine_factor,
         progress_cb=progress_cb,
-        max_workers=max_workers,
         job_id=job_id,
         trace_mode=_TRACE_MODE_BY_CATEGORY[mode],
+        compute_pool=compute_pool,
     )
 
 
 def run_adaptive_mineral_stability_sweep(
     params: GridJobParams,
     *,
-    max_workers: int | None = None,
     progress_cb=None,
     refine_factor: int | None = None,
     job_id: str | None = None,
     category_mode: MineralCategoryMode = "moles",
+    compute_pool=None,
 ) -> tuple[GridJobParams, dict[str, Any], list[GridPointResult], dict[str, Any] | None]:
     """Base grid + mineral-stability boundary tracing.
 
@@ -253,11 +252,15 @@ def run_adaptive_mineral_stability_sweep(
     base_rows = run_point_sweep(
         params,
         base_points,
-        max_workers=max_workers,
         progress_cb=(lambda d, _t: report(d, base_total, "grid")) if progress_cb else None,
         job_id=job_id,
+        compute_pool=compute_pool,
     )
     check_abort(job_id)
+    report(0, 1, "boundaries")
+    from ..services.job_control import hold_phase_for_test
+
+    hold_phase_for_test(job_id, "signature")
     base_by_key = {_point_key(r.ph, r.pe): r for r in base_rows}
 
     signature = mineral_stability_signature_fn(params, category_mode=mode)
@@ -267,14 +270,13 @@ def run_adaptive_mineral_stability_sweep(
         check_abort(job_id)
         for i in range(n_ph):
             row = base_by_key[_point_key(float(base_ph[i]), float(base_pe[j]))]
-            categories[j, i] = signature(asdict(row))
+            categories[j, i] = signature(ResultView(row))
             base_result_ij[(i, j)] = row
 
     check_abort(job_id)
     cells = boundary_base_cells(categories)
 
     if not cells:
-        report(base_total, base_total, "grid")
         gas_segments = trace_gas_limit_segments(
             params,
             base_ph=base_ph,
@@ -306,9 +308,13 @@ def run_adaptive_mineral_stability_sweep(
             "stability_limits": {"kind": "stability_limit", "segments": []},
             "gas_limits": {"kind": "gas_limit", "segments": gas_segments},
         }
+        report(1, 1, "boundaries")
         return params, stats, base_rows, trace_bundle
 
-    workers = max_workers if max_workers is not None else config.MAX_WORKERS
+    from .session import require_compute_pool
+
+    compute_pool = require_compute_pool(compute_pool)
+    workers = compute_pool.workers
     n_progress = max(1, len(_chunk_cells(cells, workers=workers)))
     report(0, n_progress, "boundaries")
     trace_bundle, trace_stats = run_mineral_boundary_trace(
@@ -319,12 +325,12 @@ def run_adaptive_mineral_stability_sweep(
         base_ij=base_result_ij,
         cells=cells,
         refine_factor=desired,
-        max_workers=max_workers,
         progress_cb=(
             (lambda d, t: report(d, t, "boundaries")) if progress_cb else None
         ),
         job_id=job_id,
         category_mode=mode,
+        compute_pool=compute_pool,
     )
     report(n_progress, n_progress, "boundaries")
     if isinstance(trace_bundle, dict):

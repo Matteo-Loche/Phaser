@@ -164,6 +164,86 @@ def init_phreeqc(dll_path: str, db_path: str):
     return pq
 
 
+# One IPhreeqc per worker process. The pool initializer binds it. The trace
+# reloads the database once before its first root so that root does not follow
+# the grid points this process happened to run.
+_SESSION_PQ = None
+_SESSION_PARAMS: GridJobParams | None = None
+
+
+def bind_worker_session(dll_path: str, db_path: str, params_dict: dict) -> None:
+    """Load IPhreeqc once in a pool worker and keep the job parameters.
+
+    Grid, boundary trace, and element-total lines share this instance. The
+    trace reloads the database once before its first root. Punch settings for
+    that root live on the trace evaluator, not here, so line tracing still
+    sees the original totals and phases.
+    """
+    global _SESSION_PQ, _SESSION_PARAMS
+    _SESSION_PQ = init_phreeqc(dll_path, db_path)
+    _SESSION_PARAMS = grid_job_params_from_dict(params_dict)
+
+
+def worker_phreeqc():
+    """IPhreeqc opened by ``bind_worker_session`` in this process."""
+    if _SESSION_PQ is None:
+        raise RuntimeError(
+            "This process has no IPhreeqc session. "
+            "Grid, trace, and contour tasks must run inside a PHASER worker pool."
+        )
+    return _SESSION_PQ
+
+
+def reset_worker_phreeqc() -> None:
+    """Load the database again on this worker's IPhreeqc.
+
+    The same instance has already run the grid. The solver starts from the
+    previous solution, so a traced root would follow whichever grid points
+    this process happened to run and would move between jobs.
+    """
+    pq = worker_phreeqc()
+    params = worker_params()
+    pq.load_database(str(params.db_path))
+    from .dummy_medium import WORKER_DEFINITIONS
+
+    pq.run_string(WORKER_DEFINITIONS)
+
+
+def worker_params() -> GridJobParams:
+    """Job parameters stored by ``bind_worker_session``."""
+    if _SESSION_PARAMS is None:
+        raise RuntimeError(
+            "This process has no grid parameters. "
+            "Grid, trace, and contour tasks must run inside a PHASER worker pool."
+        )
+    return _SESSION_PARAMS
+
+
+class ResultView:
+    """Read-only view of one grid row. Nested maps are the row's own objects.
+
+    Packing and boundary signatures read thousands of rows. Copying each row
+    with ``asdict`` duplicates the aqueous rankings before any chemistry runs.
+    """
+
+    __slots__ = ("_row",)
+
+    def __init__(self, row: GridPointResult | dict) -> None:
+        self._row = row
+
+    def get(self, key: str, default=None):
+        if isinstance(self._row, dict):
+            return self._row.get(key, default)
+        return getattr(self._row, key, default)
+
+    def __getitem__(self, key: str):
+        if isinstance(self._row, dict):
+            return self._row[key]
+        if not hasattr(self._row, key):
+            raise KeyError(key)
+        return getattr(self._row, key)
+
+
 def _float_or_nan(value) -> float:
     try:
         out = float(value)
@@ -639,8 +719,10 @@ def _format_selected_output_block(
 ) -> str:
     si_phases = _si_output_phases(params)
     si_list = " ".join(_si_output_token(p) for p in si_phases)
+    # One IPhreeqc serves the grid and then the trace. Each point replaces the
+    # previous punch; columns the new point does not name must not remain.
     return f"""SELECTED_OUTPUT
-    -reset false
+    -reset true
     -pH true
     -pe true
     -si {si_list}
@@ -759,19 +841,19 @@ def evaluate_point(phreeqc, *, ph: float, pe: float, params: GridJobParams) -> G
     for prof, flip in profile_flips:
         if flip and params.solution_mode not in flip_modes:
             continue
+        inp = format_grid_input(ph=ph, pe=pe, params=params, flip_charge=flip)
         try:
-            inp = format_grid_input(ph=ph, pe=pe, params=params, flip_charge=flip)
             selected = run_single_profile(phreeqc, prof, inp)
-            if not selected or len(selected) < 2:
-                continue
-            headers = selected[0]
-            data_row = selected[_selected_output_row_index(params)]
-            row = dict(zip(headers, data_row))
-            result = _parse_grid_row(row, ph=ph, pe=pe, params=params)
-            result.knobs_level = KNOBS_PROFILE_INDEX.get(prof, 0)
-            return result
         except Exception:
             continue
+        if not selected or len(selected) < 2:
+            continue
+        headers = selected[0]
+        data_row = selected[_selected_output_row_index(params)]
+        row = dict(zip(headers, data_row))
+        result = _parse_grid_row(row, ph=ph, pe=pe, params=params)
+        result.knobs_level = KNOBS_PROFILE_INDEX.get(prof, 0)
+        return result
     return base
 
 

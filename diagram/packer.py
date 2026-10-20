@@ -351,6 +351,33 @@ def dominant_aq_species_subset(row: dict, subset: set[str]) -> str:
     return dominant_aq_in_subset(row, subset)
 
 
+def _classified_grid(
+    rows: list,
+    label_fn,
+    ph_lookup: dict[float, int],
+    pe_lookup: dict[float, int],
+    pe_levels: int,
+    ph_levels: int,
+) -> tuple[list[str], np.ndarray]:
+    """Classify each point once, then fill the integer grid from that label."""
+    names_seen: set[str] = set()
+    placed: list[tuple[int, int, str]] = []
+    for row in rows:
+        cat = label_fn(row) or "none"
+        names_seen.add(cat)
+        ix = ph_lookup.get(round(float(row["ph"]), 12))
+        iy = pe_lookup.get(round(float(row["pe"]), 12))
+        if ix is None or iy is None:
+            continue
+        placed.append((iy, ix, cat))
+    names = sorted(names_seen)
+    index = {name: i for i, name in enumerate(names)}
+    grid = np.full((pe_levels, ph_levels), -1, dtype=int)
+    for iy, ix, cat in placed:
+        grid[iy, ix] = index[cat]
+    return names, grid
+
+
 def pack_custom_category_grid(
     rows: list[dict],
     *,
@@ -360,19 +387,14 @@ def pack_custom_category_grid(
     pe_levels: int,
     ph_levels: int,
 ) -> dict[str, Any]:
-    categories: set[str] = set()
-    for row in rows:
-        categories.add(cat_fn(row) or "none")
-    names = sorted(categories)
-    index = {name: i for i, name in enumerate(names)}
-    grid = np.full((pe_levels, ph_levels), -1, dtype=int)
-    for row in rows:
-        ix = ph_lookup.get(round(float(row["ph"]), 12))
-        iy = pe_lookup.get(round(float(row["pe"]), 12))
-        if ix is None or iy is None:
-            continue
-        cat = cat_fn(row) or "none"
-        grid[iy, ix] = index.get(cat, -1)
+    names, grid = _classified_grid(
+        rows,
+        lambda row: cat_fn(row) or "none",
+        ph_lookup,
+        pe_lookup,
+        pe_levels,
+        ph_levels,
+    )
     return {"names": names, "grid": grid.tolist()}
 
 
@@ -386,30 +408,16 @@ def pack_category_grid(
     ph_levels: int,
     element_key: str | None = None,
 ) -> dict[str, Any]:
-    categories: set[str] = set()
-    for row in rows:
+    def label(row) -> str:
         if element_key:
             val = row.get("dominant_aq_by_element", {}).get(element_key, "none")
         else:
             val = row.get(field, "none")
-        categories.add(val if val else "none")
+        return val if val else "none"
 
-    names = sorted(categories)
-    index = {name: i for i, name in enumerate(names)}
-    grid = np.full((pe_levels, ph_levels), -1, dtype=int)
-
-    for row in rows:
-        ix = ph_lookup.get(round(float(row["ph"]), 12))
-        iy = pe_lookup.get(round(float(row["pe"]), 12))
-        if ix is None or iy is None:
-            continue
-        if element_key:
-            cat = row.get("dominant_aq_by_element", {}).get(element_key, "none")
-        else:
-            cat = row.get(field, "none")
-        cat = cat if cat else "none"
-        grid[iy, ix] = index.get(cat, -1)
-
+    names, grid = _classified_grid(
+        rows, label, ph_lookup, pe_lookup, pe_levels, ph_levels
+    )
     return {"names": names, "grid": grid.tolist()}
 
 
@@ -425,27 +433,18 @@ def pack_subset_grid(
     ph_levels: int,
     collision_names: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    categories: set[str] = set()
-    for row in rows:
-        categories.add(
-            category_solid_subset(
-                row, subset, eligible_phases=eligible_phases,
-                job_phases=job_phases, collision_names=collision_names,
-            )
+    def label(row) -> str:
+        return category_solid_subset(
+            row,
+            subset,
+            eligible_phases=eligible_phases,
+            job_phases=job_phases,
+            collision_names=collision_names,
         )
-    names = sorted(categories)
-    index = {name: i for i, name in enumerate(names)}
-    grid = np.full((pe_levels, ph_levels), -1, dtype=int)
-    for row in rows:
-        ix = ph_lookup.get(round(float(row["ph"]), 12))
-        iy = pe_lookup.get(round(float(row["pe"]), 12))
-        if ix is None or iy is None:
-            continue
-        cat = category_solid_subset(
-            row, subset, eligible_phases=eligible_phases,
-            job_phases=job_phases, collision_names=collision_names,
-        )
-        grid[iy, ix] = index.get(cat, -1)
+
+    names, grid = _classified_grid(
+        rows, label, ph_lookup, pe_lookup, pe_levels, ph_levels
+    )
     solid_set = set(job_phases)
     aqueous_names = [n for n in names if not label_is_solid(n, solid_set, collision_names)]
     return {

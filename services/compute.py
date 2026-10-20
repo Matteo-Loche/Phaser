@@ -6,7 +6,6 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
-from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,9 +21,10 @@ from ..diagram.packer import (
 )
 from ..diagram.phases import resolve_phase_names, system_elements_from_totals
 from ..diagram.vectors import pack_traced_display, pack_traced_mineral_display
-from ..phreeqc.engine import GridJobParams, validate_phreeqc_setup
+from ..phreeqc.engine import GridJobParams, ResultView, validate_phreeqc_setup
 from ..phreeqc.adaptive import run_adaptive_boundary_sweep
 from ..phreeqc.mineral_stability_trace import run_adaptive_mineral_stability_sweep
+from ..phreeqc.session import open_compute_pool
 from ..phreeqc.sweep import run_grid_sweep
 from .job_control import (
     JobAborted,
@@ -542,77 +542,82 @@ def _run_job(job_id: str, body: ComputeRequest, *, started_at_perf: float) -> No
         totals_contours_payload = None
 
         # Wall clock covers PHREEQC work only (grid → boundary trace → contours).
+        # One pool stays bound for that whole stretch, so a cancel between phases
+        # still has workers to kill. It closes before packing.
         with _wall_timeout_guard(job_id):
-            if body.adaptive_boundaries:
-                if assemblage:
-                    pack_params, adapt_stats, base_results, trace_bundle = (
-                        run_adaptive_mineral_stability_sweep(
-                            params,
-                            max_workers=config.MAX_WORKERS,
-                            progress_cb=progress,
-                            refine_factor=body.adaptive_refine_factor,
-                            job_id=job_id,
-                            category_mode=category_mode,
+            with open_compute_pool(
+                job_id, params, max_workers=config.MAX_WORKERS
+            ) as compute_pool:
+                if body.adaptive_boundaries:
+                    if assemblage:
+                        pack_params, adapt_stats, base_results, trace_bundle = (
+                            run_adaptive_mineral_stability_sweep(
+                                params,
+                                progress_cb=progress,
+                                refine_factor=body.adaptive_refine_factor,
+                                job_id=job_id,
+                                category_mode=category_mode,
+                                compute_pool=compute_pool,
+                            )
                         )
-                    )
+                    else:
+                        pack_params, adapt_stats, base_results, trace_bundle = (
+                            run_adaptive_boundary_sweep(
+                                params,
+                                progress_cb=progress,
+                                refine_factor=body.adaptive_refine_factor,
+                                job_id=job_id,
+                                compute_pool=compute_pool,
+                            )
+                        )
+                    compute_mode = "adaptive"
                 else:
-                    pack_params, adapt_stats, base_results, trace_bundle = (
-                        run_adaptive_boundary_sweep(
-                            params,
-                            max_workers=config.MAX_WORKERS,
-                            progress_cb=progress,
-                            refine_factor=body.adaptive_refine_factor,
-                            job_id=job_id,
-                        )
+                    results, mask_stats = run_grid_sweep(
+                        params,
+                        progress_cb=progress,
+                        job_id=job_id,
+                        compute_pool=compute_pool,
                     )
-                compute_mode = "adaptive"
-            else:
-                results, mask_stats = run_grid_sweep(
-                    params,
-                    max_workers=config.MAX_WORKERS,
-                    progress_cb=progress,
-                    job_id=job_id,
-                )
-                pack_params = params
-                adapt_stats = dict(mask_stats)
-                base_results = results
-                trace_bundle = None
-                compute_mode = "uniform"
-            check_abort(job_id)
-
-            # Contour root-find (process-pooled PointEvaluator); keep inside wall.
-            if (
-                assemblage
-                and body.totals_contours
-                and pack_params.tot_keys
-            ):
-                from ..phreeqc.sweep import build_grid
-                from ..phreeqc.totals_contours import (
-                    clamp_contour_log_step,
-                    find_totals_contours,
-                )
-
-                progress(0, 1, "contours")
-                ph_arr, pe_arr = build_grid(pack_params)
-
-                def contour_progress(done: int, total: int) -> None:
-                    progress(done, total, "contours")
-
-                totals_contours_payload = find_totals_contours(
-                    ph=ph_arr,
-                    pe=pe_arr,
-                    results=base_results,
-                    keys=pack_params.tot_keys,
-                    log_step=clamp_contour_log_step(body.totals_contour_log_step),
-                    job_id=job_id,
-                    progress_cb=contour_progress,
-                    params=pack_params,
-                    max_workers=config.MAX_WORKERS,
-                )
-                progress(1, 1, "contours")
+                    pack_params = params
+                    adapt_stats = dict(mask_stats)
+                    base_results = results
+                    trace_bundle = None
+                    compute_mode = "uniform"
                 check_abort(job_id)
 
-        rows = [asdict(r) for r in base_results]
+                # Contour root-find stays on the same workers.
+                if (
+                    assemblage
+                    and body.totals_contours
+                    and pack_params.tot_keys
+                ):
+                    from ..phreeqc.sweep import build_grid
+                    from ..phreeqc.totals_contours import (
+                        clamp_contour_log_step,
+                        find_totals_contours,
+                    )
+
+                    progress(0, 1, "contours")
+                    ph_arr, pe_arr = build_grid(pack_params)
+
+                    def contour_progress(done: int, total: int) -> None:
+                        progress(done, total, "contours")
+
+                    totals_contours_payload = find_totals_contours(
+                        ph=ph_arr,
+                        pe=pe_arr,
+                        results=base_results,
+                        keys=pack_params.tot_keys,
+                        log_step=clamp_contour_log_step(body.totals_contour_log_step),
+                        job_id=job_id,
+                        progress_cb=contour_progress,
+                        params=pack_params,
+                        compute_pool=compute_pool,
+                    )
+                    progress(1, 1, "contours")
+                    check_abort(job_id)
+
+        rows = [ResultView(r) for r in base_results]
         pack_layers = count_layer_pack_steps(pack_params)
         # Adaptive jobs pack the base hover grids and then the traced vector
         # display, each with the same layer count. Budget both passes so the

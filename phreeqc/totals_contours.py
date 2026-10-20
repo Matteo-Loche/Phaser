@@ -14,8 +14,8 @@ import numpy as np
 from scipy.optimize import brentq
 
 from .. import config
-from ..services.job_control import check_abort, iter_futures_abortable, managed_process_pool
-from .engine import GridPointResult, grid_job_params_from_dict, point_key
+from ..services.job_control import check_abort, iter_futures_abortable
+from .engine import GridPointResult, point_key
 
 _TOT_FLOOR = 1e-30
 _EDGE_CORNERS = (
@@ -153,22 +153,6 @@ def _edge_crossing(
     return ph0 + t * (ph1 - ph0), pe0 + t * (pe1 - pe0)
 
 
-def _field_log_range(
-    rows_by_ij: list[list[dict | None]], key: str
-) -> tuple[float, float] | None:
-    vals: list[float] = []
-    for row_list in rows_by_ij:
-        for row in row_list:
-            if not row or row.get("synthetic_label"):
-                continue
-            log_t = log_tot_from_row(row, key)
-            if log_t is not None:
-                vals.append(log_t)
-    if not vals:
-        return None
-    return min(vals), max(vals)
-
-
 def _stitch_snap_tol(ph: np.ndarray, pe: np.ndarray, *, tol: float) -> float:
     """Endpoint match tolerance: brentq noise + a fraction of cell size."""
     dph = float(np.min(np.abs(np.diff(ph)))) if ph.size > 1 else 1.0
@@ -184,37 +168,49 @@ def _seed_grid(
     pe: np.ndarray,
     results: list[GridPointResult] | list[dict],
 ) -> list[list[dict | None]]:
+    """Index rows by grid node without copying aqueous rankings."""
+    from .engine import ResultView
+
     by_key: dict[tuple[float, float], dict] = {}
     for row in results:
         if isinstance(row, GridPointResult):
-            d = asdict(row)
+            stored = ResultView(row)
+            phv, pev = float(row.ph), float(row.pe)
         else:
-            d = dict(row)
-        by_key[point_key(float(d["ph"]), float(d["pe"]))] = d
+            stored = row
+            phv, pev = float(row["ph"]), float(row["pe"])
+        by_key[point_key(phv, pev)] = stored
     grid: list[list[dict | None]] = []
-    for i, phv in enumerate(ph):
+    for phv in ph:
         col: list[dict | None] = []
-        for j, pev in enumerate(pe):
+        for pev in pe:
             col.append(by_key.get(point_key(float(phv), float(pev))))
         grid.append(col)
     return grid
 
 
-def _light_seed_rows(results: list[GridPointResult] | list[dict]) -> list[dict]:
-    """Compact seed payload for process-pool workers."""
-    out: list[dict] = []
+def _log_range_results(
+    results: list[GridPointResult] | list[dict], key: str
+) -> tuple[float, float] | None:
+    """Finite log10(TOT) span, read in place. Synthetic points are skipped."""
+    from .engine import ResultView
+
+    vals: list[float] = []
     for row in results:
-        d = asdict(row) if isinstance(row, GridPointResult) else dict(row)
-        out.append(
-            {
-                "ph": float(d["ph"]),
-                "pe": float(d["pe"]),
-                "converged": bool(d.get("converged", True)),
-                "aq_total_by_key": dict(d.get("aq_total_by_key") or {}),
-                "synthetic_label": d.get("synthetic_label"),
-            }
-        )
-    return out
+        if isinstance(row, GridPointResult):
+            if row.synthetic_label:
+                continue
+            view = ResultView(row)
+        else:
+            if row.get("synthetic_label"):
+                continue
+            view = row
+        log_t = log_tot_from_row(view, key)
+        if log_t is not None:
+            vals.append(log_t)
+    if not vals:
+        return None
+    return min(vals), max(vals)
 
 
 def _chunk_contour_cells(
@@ -256,11 +252,6 @@ def _chunk_contour_cells(
             ]
         )
     return strips
-
-
-def _contour_worker_ready() -> bool:
-    """No-op task that runs only after worker initializer finishes."""
-    return _WORKER_EVALUATOR is not None
 
 
 def _canonical_grid_edge(
@@ -410,37 +401,258 @@ def _segments_for_cells(
     return by_level
 
 
-def _contour_worker_init(
-    dll_path: str,
-    db_path: str,
-    params_dict: dict,
-    ph: list[float],
-    pe: list[float],
-    seed_rows: list[dict],
-    tol: float,
-) -> None:
-    global _WORKER_PARAMS, _WORKER_PH, _WORKER_PE, _WORKER_ROWS
-    global _WORKER_EVALUATOR, _WORKER_TOL
-    from .boundary_trace import PointEvaluator
+def _axis_index(axis: np.ndarray, value: float) -> int | None:
+    """Grid-node index when ``value`` lands on the axis, else None."""
+    if axis.size == 0:
+        return None
+    slot = int(np.searchsorted(axis, value))
+    if slot < axis.size and abs(float(axis[slot]) - value) <= 1e-8:
+        return slot
+    if slot > 0 and abs(float(axis[slot - 1]) - value) <= 1e-8:
+        return slot - 1
+    return None
 
-    _WORKER_PARAMS = grid_job_params_from_dict(params_dict)
-    _WORKER_PH = np.asarray(ph, dtype=float)
-    _WORKER_PE = np.asarray(pe, dtype=float)
-    _WORKER_ROWS = _seed_grid(_WORKER_PH, _WORKER_PE, seed_rows)
-    seed_map = {
-        (round(float(r["ph"]), 12), round(float(r["pe"]), 12)): r for r in seed_rows
-    }
-    # Seeds already punch aq_total_by_key with this job's params — trust them.
-    _WORKER_EVALUATOR = PointEvaluator(
-        _WORKER_PARAMS, seed_map, trust_seed_cache=True
-    )
-    _WORKER_TOL = float(tol)
+
+class _SlabTotals:
+    """One node's aqueous totals, read from the shared numeric block."""
+
+    def __init__(self, values: np.ndarray, index: dict[str, int]) -> None:
+        self._values = values
+        self._index = index
+
+    def get(self, key: str, default=None):
+        slot = self._index.get(key)
+        if slot is None:
+            return default
+        val = float(self._values[slot])
+        if not math.isfinite(val) or val <= 0.0:
+            return default
+        return val
+
+
+class _SlabCell:
+    def __init__(self, converged: int, values: np.ndarray, index: dict[str, int]) -> None:
+        self._converged = converged
+        self._values = values
+        self._index = index
+
+    def get(self, key: str, default=None):
+        if key == "converged":
+            return bool(self._converged)
+        if key == "synthetic_label":
+            return None
+        if key == "aq_total_by_key":
+            return _SlabTotals(self._values, self._index)
+        return default
+
+
+class _SlabColumn:
+    def __init__(
+        self,
+        totals: np.ndarray,
+        converged: np.ndarray,
+        index: dict[str, int],
+        i: int,
+    ) -> None:
+        self._totals = totals
+        self._converged = converged
+        self._index = index
+        self._i = i
+
+    def __getitem__(self, j: int) -> _SlabCell:
+        return _SlabCell(
+            int(self._converged[self._i, j]),
+            self._totals[:, self._i, j],
+            self._index,
+        )
+
+
+class _SlabRows:
+    """``rows[ph_index][pe_index]`` over the shared totals block."""
+
+    def __init__(self, totals: np.ndarray, converged: np.ndarray, keys: tuple[str, ...]) -> None:
+        self._totals = totals
+        self._converged = converged
+        self._index = {str(key): i for i, key in enumerate(keys)}
+
+    def __getitem__(self, i: int) -> _SlabColumn:
+        return _SlabColumn(self._totals, self._converged, self._index, i)
+
+
+class _SlabEvaluator:
+    """Grid nodes come from shared memory. Off-node samples call PHREEQC."""
+
+    slab_ready = True
+
+    def __init__(
+        self,
+        ph: np.ndarray,
+        pe: np.ndarray,
+        totals: np.ndarray,
+        converged: np.ndarray,
+        keys: tuple[str, ...],
+    ) -> None:
+        self._ph = ph
+        self._pe = pe
+        self._totals = totals
+        self._converged = converged
+        self._keys = keys
+        self._index = {str(key): i for i, key in enumerate(keys)}
+
+    def eval(self, ph: float, pe: float) -> dict:
+        i = _axis_index(self._ph, float(ph))
+        j = _axis_index(self._pe, float(pe))
+        if i is not None and j is not None:
+            totals: dict[str, float] = {}
+            for key, slot in self._index.items():
+                val = float(self._totals[slot, i, j])
+                if math.isfinite(val) and val > 0.0:
+                    totals[key] = val
+            return {
+                "ph": float(ph),
+                "pe": float(pe),
+                "converged": bool(self._converged[i, j]),
+                "aq_total_by_key": totals,
+            }
+        from .engine import evaluate_point, worker_params, worker_phreeqc
+
+        return asdict(
+            evaluate_point(worker_phreeqc(), ph=float(ph), pe=float(pe), params=worker_params())
+        )
+
+    def eval_at_t(
+        self, t: float, ph0: float, pe0: float, ph1: float, pe1: float
+    ) -> dict:
+        return self.eval(ph0 + t * (ph1 - ph0), pe0 + t * (pe1 - pe0))
+
+
+_WORKER_SHM: list[Any] = []
+_WORKER_CONTOUR_READY = False
+
+
+def _attach_shared(name: str):
+    """Attach a block the parent created without tracking it in this process.
+
+    ``track=False`` keeps a killed worker from unlinking a block other workers
+    are still reading. Linux may store the name with or without a leading
+    slash; both are tried, and a miss raises.
+    """
+    from multiprocessing import shared_memory
+
+    candidates = [name]
+    if name.startswith("/"):
+        candidates.append(name[1:])
+    elif name:
+        candidates.append("/" + name)
+    last_error: FileNotFoundError | None = None
+    for cand in dict.fromkeys(candidates):
+        try:
+            return shared_memory.SharedMemory(name=cand, track=False)
+        except FileNotFoundError as exc:
+            last_error = exc
+    raise FileNotFoundError(f"Shared totals block {name!r} is not available") from last_error
+
+
+def _publish_totals_slab(
+    ph: np.ndarray,
+    pe: np.ndarray,
+    results: list[GridPointResult] | list[dict],
+    keys: list[str],
+):
+    """Copy aqueous totals into one numeric block. Missing values stay NaN."""
+    from multiprocessing import shared_memory
+
+    n_ph = int(ph.size)
+    n_pe = int(pe.size)
+    totals = np.full((len(keys), n_ph, n_pe), np.nan, dtype=np.float64)
+    converged = np.zeros((n_ph, n_pe), dtype=np.uint8)
+    ph_lookup = {round(float(v), 12): i for i, v in enumerate(ph)}
+    pe_lookup = {round(float(v), 12): j for j, v in enumerate(pe)}
+    for row in results:
+        # Synthetic water rows are left out on purpose. They have no aqueous
+        # total, and filling that hole with a PHREEQC call would compute the
+        # water mask. A node that was never evaluated looks the same here.
+        if isinstance(row, GridPointResult):
+            if row.synthetic_label:
+                continue
+            phv, pev = float(row.ph), float(row.pe)
+            ok = bool(row.converged)
+            aq = row.aq_total_by_key or {}
+        else:
+            if row.get("synthetic_label"):
+                continue
+            phv, pev = float(row["ph"]), float(row["pe"])
+            ok = bool(row.get("converged", True))
+            aq = row.get("aq_total_by_key") or {}
+        i = ph_lookup.get(round(phv, 12))
+        j = pe_lookup.get(round(pev, 12))
+        if i is None or j is None:
+            continue
+        converged[i, j] = 1 if ok else 0
+        if not ok:
+            continue
+        for slot, key in enumerate(keys):
+            raw = aq.get(key)
+            try:
+                val = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(val) and val > 0.0:
+                totals[slot, i, j] = val
+    totals_shm = shared_memory.SharedMemory(create=True, size=totals.nbytes)
+    conv_shm = shared_memory.SharedMemory(create=True, size=converged.nbytes)
+    np.ndarray(totals.shape, dtype=np.float64, buffer=totals_shm.buf)[:] = totals
+    np.ndarray(converged.shape, dtype=np.uint8, buffer=conv_shm.buf)[:] = converged
+    return totals_shm, conv_shm
+
+
+def _release_slab(totals_shm, conv_shm) -> None:
+    for shm in (totals_shm, conv_shm):
+        if shm is None:
+            continue
+        try:
+            shm.close()
+        except (BufferError, OSError):
+            pass
+        try:
+            shm.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _install_contour_slab(cfg: dict[str, Any]) -> None:
+    """Attach the shared totals block once on this worker."""
+    global _WORKER_PH, _WORKER_PE, _WORKER_ROWS, _WORKER_EVALUATOR, _WORKER_TOL
+    global _WORKER_PARAMS, _WORKER_CONTOUR_READY
+    if _WORKER_CONTOUR_READY:
+        return
+    totals_shm = _attach_shared(str(cfg["totals_name"]))
+    conv_shm = _attach_shared(str(cfg["conv_name"]))
+    _WORKER_SHM[:] = [totals_shm, conv_shm]
+    totals = np.ndarray(tuple(cfg["totals_shape"]), dtype=np.float64, buffer=totals_shm.buf)
+    converged = np.ndarray(tuple(cfg["conv_shape"]), dtype=np.uint8, buffer=conv_shm.buf)
+    keys = tuple(str(key) for key in cfg["keys"])
+    _WORKER_PH = np.asarray(cfg["ph"], dtype=float)
+    _WORKER_PE = np.asarray(cfg["pe"], dtype=float)
+    _WORKER_ROWS = _SlabRows(totals, converged, keys)
+    _WORKER_EVALUATOR = _SlabEvaluator(_WORKER_PH, _WORKER_PE, totals, converged, keys)
+    _WORKER_TOL = float(cfg["tol"])
+    from .engine import worker_params
+
+    _WORKER_PARAMS = worker_params()
+    _WORKER_CONTOUR_READY = True
+
+
+def _arm_contour_worker(cfg: dict[str, Any]) -> bool:
+    """One progress tick per worker as it attaches the totals block."""
+    _install_contour_slab(cfg)
+    return True
 
 
 def _contour_chunk_job(job: dict[str, Any]) -> dict[str, Any]:
+    _install_contour_slab(job["cfg"])
     assert _WORKER_PH is not None and _WORKER_PE is not None
     assert _WORKER_ROWS is not None and _WORKER_EVALUATOR is not None
-    assert _WORKER_PARAMS is not None
     by_level = _segments_for_cells(
         ph=_WORKER_PH,
         pe=_WORKER_PE,
@@ -453,9 +665,7 @@ def _contour_chunk_job(job: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "key": str(job["key"]),
-        "by_level": {
-            str(lv): segs for lv, segs in by_level.items() if segs
-        },
+        "by_level": {str(lv): segs for lv, segs in by_level.items() if segs},
     }
 
 
@@ -513,28 +723,27 @@ def _find_totals_contours_parallel(
     *,
     ph: np.ndarray,
     pe: np.ndarray,
-    results: list[GridPointResult] | list[dict],
     key_levels: list[tuple[str, list[float]]],
-    params: Any,
     tol: float,
     job_id: str | None,
     progress_cb: Callable[[int, int], None] | None,
-    max_workers: int,
+    slab_cfg: dict[str, Any],
+    compute_pool,
 ) -> dict[str, list[dict[str, Any]]]:
-    chunks = _chunk_contour_cells(int(ph.size), int(pe.size), workers=max_workers)
+    workers = compute_pool.workers
+    chunks = _chunk_contour_cells(int(ph.size), int(pe.size), workers=workers)
     jobs: list[dict[str, Any]] = []
     for key, levels in key_levels:
         if not levels:
             continue
         for chunk in chunks:
-            jobs.append({"key": key, "levels": levels, "cells": chunk})
+            jobs.append({"key": key, "levels": levels, "cells": chunk, "cfg": slab_cfg})
     if not jobs:
+        if progress_cb:
+            progress_cb(1, 1)
         return {}
 
-    # Most contour wall time used to sit at progress=0 while spawn workers ran
-    # ``init_phreeqc``. Budget warmup ticks (one per worker) so the UI advances
-    # through that phase, then one tick per pH-line job.
-    n_workers = max(int(max_workers), 1)
+    n_workers = max(int(workers), 1)
     total_units = n_workers + len(jobs)
     done_units = 0
 
@@ -543,55 +752,42 @@ def _find_totals_contours_parallel(
             progress_cb(done_units, total_units)
 
     report()
-    seed_rows = _light_seed_rows(results)
     merged: dict[str, dict[float, list[list[list[float]]]]] = {}
-    with managed_process_pool(
-        job_id,
-        max_workers=n_workers,
-        initializer=_contour_worker_init,
-        initargs=(
-            params.dll_path,
-            params.db_path,
-            asdict(params),
-            ph.tolist(),
-            pe.tolist(),
-            seed_rows,
-            tol,
-        ),
-    ) as pool:
-        try:
-            # Force initializer on each worker and tick as they become ready.
-            warmups = {
-                pool.submit(_contour_worker_ready): i for i in range(n_workers)
-            }
-            for future, _idx in iter_futures_abortable(warmups, job_id=job_id):
-                future.result(timeout=0.1)
-                done_units += 1
-                report()
 
-            futures = {
-                pool.submit(_contour_chunk_job, job): idx
-                for idx, job in enumerate(jobs)
-            }
-            for future, _idx in iter_futures_abortable(futures, job_id=job_id):
-                result = future.result(timeout=0.1)
-                key = result["key"]
-                bucket = merged.setdefault(key, {})
-                for lv_s, segs in (result.get("by_level") or {}).items():
-                    bucket.setdefault(float(lv_s), []).extend(segs)
-                done_units += 1
-                report()
-        except Exception as exc:
-            from ..services.job_control import JobAborted
+    def _execute(pool) -> None:
+        nonlocal done_units
+        from ..services.job_control import hold_phase_for_test
 
-            if isinstance(exc, JobAborted):
-                raise
-            check_abort(job_id)
-            raise RuntimeError(
-                f"Totals-contour worker pool failed ({type(exc).__name__}): {exc}"
-            ) from exc
+        hold_phase_for_test(job_id, "lines")
+        warmups = {pool.submit(_arm_contour_worker, slab_cfg): i for i in range(n_workers)}
+        for future, _idx in iter_futures_abortable(warmups, job_id=job_id):
+            future.result(timeout=0.1)
+            done_units += 1
+            report()
+        futures = {
+            pool.submit(_contour_chunk_job, job): idx for idx, job in enumerate(jobs)
+        }
+        for future, _idx in iter_futures_abortable(futures, job_id=job_id):
+            result = future.result(timeout=0.1)
+            key = result["key"]
+            bucket = merged.setdefault(key, {})
+            for lv_s, segs in (result.get("by_level") or {}).items():
+                bucket.setdefault(float(lv_s), []).extend(segs)
+            done_units += 1
+            report()
 
-    # Re-stitch after merging worker bands (shared edges across band bounds).
+    try:
+        _execute(compute_pool.pool)
+    except Exception as exc:
+        from ..services.job_control import JobAborted
+
+        if isinstance(exc, JobAborted):
+            raise
+        check_abort(job_id)
+        raise RuntimeError(
+            f"Totals-contour worker pool failed ({type(exc).__name__}): {exc}"
+        ) from exc
+
     snap = _stitch_snap_tol(ph, pe, tol=tol)
     by_key: dict[str, list[dict[str, Any]]] = {}
     for key, levels in key_levels:
@@ -621,14 +817,14 @@ def find_totals_contours(
     job_id: str | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
     params: Any | None = None,
-    max_workers: int | None = None,
+    compute_pool=None,
 ) -> dict[str, Any]:
     """Trace ``log10(TOT)`` isolines for each key.
 
-    When ``params`` is set (live PHREEQC path), contiguous pH-line bands are
-    evaluated in a ``ProcessPoolExecutor`` (trusted seed TOT cache; one job per
-    ``CONTOUR_BANDS_PER_WORKER`` pH rows, plus per-worker warmup ticks — not
-    Morton shards). Synthetic / analytic evaluators stay single-process.
+    When ``params`` is set (live PHREEQC path), contiguous pH-line bands run on
+    the job pool. Workers read one shared totals block and call PHREEQC only for
+    samples that fall between grid nodes. Synthetic / analytic evaluators stay
+    single-process.
     """
     step = clamp_contour_log_step(
         log_step if log_step is not None else config.TOTALS_CONTOUR_LOG_STEP_DEFAULT
@@ -638,38 +834,54 @@ def find_totals_contours(
     )
     ph = np.asarray(ph, dtype=float)
     pe = np.asarray(pe, dtype=float)
-    rows = _seed_grid(ph, pe, results)
 
     key_levels: list[tuple[str, list[float]]] = []
     for key in keys:
-        rng = _field_log_range(rows, key)
+        rng = _log_range_results(results, str(key))
         if rng is None:
             continue
         levels = contour_log_levels(rng[0], rng[1], step)
         if levels:
             key_levels.append((str(key), levels))
 
-    workers = int(max_workers if max_workers is not None else config.MAX_WORKERS)
-    use_pool = (
-        params is not None
-        and workers > 1
-        and not isinstance(evaluator, AnalyticTotEvaluator)
-        and any(levels for _, levels in key_levels)
-    )
+    if not key_levels:
+        if progress_cb:
+            progress_cb(1, 1)
+        return {"units": "mol/kgw", "log_step": step, "by_key": {}}
+
+    use_pool = params is not None and not isinstance(evaluator, AnalyticTotEvaluator)
 
     if use_pool:
-        by_key = _find_totals_contours_parallel(
-            ph=ph,
-            pe=pe,
-            results=results,
-            key_levels=key_levels,
-            params=params,
-            tol=brent_tol,
-            job_id=job_id,
-            progress_cb=progress_cb,
-            max_workers=workers,
-        )
+        from .session import require_compute_pool
+
+        compute_pool = require_compute_pool(compute_pool)
+        key_names = [key for key, _levels in key_levels]
+        totals_shm, conv_shm = _publish_totals_slab(ph, pe, results, key_names)
+        slab_cfg = {
+            "totals_name": totals_shm.name,
+            "conv_name": conv_shm.name,
+            "totals_shape": (len(key_names), int(ph.size), int(pe.size)),
+            "conv_shape": (int(ph.size), int(pe.size)),
+            "keys": key_names,
+            "ph": ph.tolist(),
+            "pe": pe.tolist(),
+            "tol": brent_tol,
+        }
+        try:
+            by_key = _find_totals_contours_parallel(
+                ph=ph,
+                pe=pe,
+                key_levels=key_levels,
+                tol=brent_tol,
+                job_id=job_id,
+                progress_cb=progress_cb,
+                slab_cfg=slab_cfg,
+                compute_pool=compute_pool,
+            )
+        finally:
+            _release_slab(totals_shm, conv_shm)
     else:
+        rows = _seed_grid(ph, pe, results)
         if evaluator is None:
             evaluator = _SeedOnlyEvaluator(rows, ph, pe)
         by_key = _find_totals_contours_serial(
