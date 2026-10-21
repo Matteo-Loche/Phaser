@@ -1917,6 +1917,43 @@ def _trace_mode_plugins(trace_mode: str, params: GridJobParams, db_path: str):
     return layer_specs(params, db_path), _resolve_pair_scalar
 
 
+def _synthetic_label_of(row: Any) -> str | None:
+    """The O2/H2 label on a point that was never sent to PHREEQC."""
+    if isinstance(row, dict):
+        label = row.get("synthetic_label")
+    elif hasattr(row, "get"):
+        label = row.get("synthetic_label")
+    else:
+        label = getattr(row, "synthetic_label", None)
+    if not label:
+        return None
+    return str(label)
+
+
+def _without_water_mask_cells(
+    cells: list[tuple[int, int]],
+    base_ij: dict[tuple[int, int], Any],
+) -> list[tuple[int, int]]:
+    """Drop cells the tracer will not minimise, before they take a worker slot.
+
+    ``_classify_cell`` returns as soon as one corner carries a synthetic O2 or
+    H2 label. The whole cell is refused, including one that also holds two
+    minerals. The analytic water line is drawn afterwards and does not need
+    that cell. Leaving it in the Morton list only deals it to a worker.
+    """
+    kept: list[tuple[int, int]] = []
+    for i, j in cells:
+        masked = False
+        for ii, jj in ((i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)):
+            row = base_ij.get((ii, jj))
+            if row is not None and _synthetic_label_of(row):
+                masked = True
+                break
+        if not masked:
+            kept.append((i, j))
+    return kept
+
+
 def _morton_code(i: int, j: int) -> int:
     """2D Morton (Z-order) key for grid cell lower-left index ``(i, j)``."""
     code = 0
@@ -2161,6 +2198,7 @@ def run_boundary_trace(
         post-precip co-stability (all moles > 0 joined)
     """
     check_abort(job_id)
+    cells = _without_water_mask_cells(cells, base_ij)
     if cells:
         from .session import require_compute_pool
 

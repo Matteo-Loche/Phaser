@@ -154,7 +154,9 @@ def run_adaptive_boundary_sweep(
             base_result_ij[(i, j)] = row
 
     check_abort(job_id)
-    cells = boundary_base_cells(categories)
+    from .boundary_trace import _without_water_mask_cells
+
+    cells = _without_water_mask_cells(boundary_base_cells(categories), base_result_ij)
 
     from .gas_limits import trace_gas_limit_segments
 

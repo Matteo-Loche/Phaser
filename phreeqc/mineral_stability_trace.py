@@ -28,7 +28,13 @@ from ..diagram.packer import (
     subsets_for_job,
 )
 from ..services.job_control import check_abort
-from .boundary_trace import LayerSpec, TraceStats, _chunk_cells, run_boundary_trace
+from .boundary_trace import (
+    LayerSpec,
+    TraceStats,
+    _chunk_cells,
+    _without_water_mask_cells,
+    run_boundary_trace,
+)
 from .dummy_medium import EXCLUDED_SPECIES
 from .engine import GridJobParams, GridPointResult, ResultView
 from .mineral_stability import (
@@ -274,7 +280,7 @@ def run_adaptive_mineral_stability_sweep(
             base_result_ij[(i, j)] = row
 
     check_abort(job_id)
-    cells = boundary_base_cells(categories)
+    cells = _without_water_mask_cells(boundary_base_cells(categories), base_result_ij)
 
     if not cells:
         gas_segments = trace_gas_limit_segments(
