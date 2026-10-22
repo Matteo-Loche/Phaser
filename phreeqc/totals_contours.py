@@ -3,6 +3,10 @@
 Contours are ``log10(TOT(key)) = level`` in mol/kgw. Levels are spaced by
 ``log_step`` (default 2) between the finite field min/max on the base grid.
 Edge zeros use the same ``brentq`` pattern as phase-boundary tracing.
+
+Parallel work keeps the rectangles a dissolved total actually crosses, Morton-orders
+them, and cuts blocks of ``CONTOUR_CELLS_PER_CHUNK`` (default 16). The worker
+count does not set that size.
 """
 from __future__ import annotations
 
@@ -213,45 +217,85 @@ def _log_range_results(
     return min(vals), max(vals)
 
 
-def _chunk_contour_cells(
-    n_ph: int,
-    n_pe: int,
-    *,
-    workers: int,
-    bands_per_worker: int | None = None,
-) -> list[list[tuple[int, int]]]:
-    """Split the cell grid into one pool job per pH-line group.
+def _cell_has_crossing(
+    rows: list[list[dict | None]],
+    key: str,
+    levels: list[float],
+    i: int,
+    j: int,
+) -> bool:
+    """True when any concentration level crosses an edge of cell ``(i, j)``.
 
-    Each job is ``bands_per_worker`` consecutive pH-cell rows (default from
-    ``CONTOUR_BANDS_PER_WORKER``), so progress can advance when a line group
-    finishes. ``workers`` is unused for chunking (the pool caps concurrency);
-    kept for call-site compatibility. Morton-style cell shards are avoided
-    (isolines need locality; seams are re-stitched after merge).
+    The test matches the edge root: both corners known and on opposite sides of
+    the level, or one corner sitting on the level. A missing corner is kept,
+    because that edge is still searched.
     """
-    del workers  # concurrency is enforced by the pool, not by chunk count
-    n_i = max(int(n_ph) - 1, 0)
-    n_j = max(int(n_pe) - 1, 0)
-    if n_i == 0 or n_j == 0:
+    for level in levels:
+        for (di0, dj0), (di1, dj1) in _EDGE_CORNERS:
+            r0 = rows[i + di0][j + dj0]
+            r1 = rows[i + di1][j + dj1]
+            if not r0 or not r1:
+                return True
+            l0 = log_tot_from_row(r0, key)
+            l1 = log_tot_from_row(r1, key)
+            if l0 is None or l1 is None:
+                continue
+            if (l0 - level) * (l1 - level) > 0 and l0 != level and l1 != level:
+                continue
+            return True
+    return False
+
+
+def _crossing_cells(
+    rows: list[list[dict | None]],
+    key: str,
+    levels: list[float],
+    n_i: int,
+    n_j: int,
+) -> list[tuple[int, int]]:
+    """Rectangles crossed by any level of one dissolved total."""
+    return [
+        (i, j)
+        for i in range(n_i)
+        for j in range(n_j)
+        if _cell_has_crossing(rows, key, levels, i, j)
+    ]
+
+
+def _chunk_morton_cells(
+    cells: list[tuple[int, int]],
+    *,
+    cells_per_chunk: int,
+) -> list[list[tuple[int, int]]]:
+    """Morton-order ``cells`` and cut them into fixed-size blocks."""
+    if not cells:
         return []
-    rows_per_job = max(
-        1,
-        int(
-            bands_per_worker
-            if bands_per_worker is not None
-            else config.CONTOUR_BANDS_PER_WORKER
-        ),
-    )
-    strips: list[list[tuple[int, int]]] = []
-    for start in range(0, n_i, rows_per_job):
-        height = min(rows_per_job, n_i - start)
-        strips.append(
-            [
-                (i, j)
-                for i in range(start, start + height)
-                for j in range(n_j)
-            ]
-        )
-    return strips
+    from .boundary_trace import _sort_cells_morton
+
+    ordered = _sort_cells_morton(list(cells))
+    step = max(1, int(cells_per_chunk))
+    return [ordered[start : start + step] for start in range(0, len(ordered), step)]
+
+
+def _contour_chunks(
+    ph: np.ndarray,
+    pe: np.ndarray,
+    rows: list[list[dict | None]],
+    key: str,
+    levels: list[float],
+) -> list[list[tuple[int, int]]]:
+    """Blocks of rectangles a dissolved-total line crosses.
+
+    The block size is ``CONTOUR_CELLS_PER_CHUNK`` (default 16). Cells the
+    chosen levels do not cross are left out. The worker count does not set
+    the block size.
+    """
+    n_i = max(int(ph.size) - 1, 0)
+    n_j = max(int(pe.size) - 1, 0)
+    if n_i == 0 or n_j == 0 or not levels:
+        return []
+    cells = _crossing_cells(rows, key, levels, n_i, n_j)
+    return _chunk_morton_cells(cells, cells_per_chunk=config.CONTOUR_CELLS_PER_CHUNK)
 
 
 def _canonical_grid_edge(
@@ -729,14 +773,15 @@ def _find_totals_contours_parallel(
     progress_cb: Callable[[int, int], None] | None,
     slab_cfg: dict[str, Any],
     compute_pool,
+    results: list[GridPointResult] | list[dict],
 ) -> dict[str, list[dict[str, Any]]]:
     workers = compute_pool.workers
-    chunks = _chunk_contour_cells(int(ph.size), int(pe.size), workers=workers)
+    rows = _seed_grid(ph, pe, results)
     jobs: list[dict[str, Any]] = []
     for key, levels in key_levels:
         if not levels:
             continue
-        for chunk in chunks:
+        for chunk in _contour_chunks(ph, pe, rows, key, levels):
             jobs.append({"key": key, "levels": levels, "cells": chunk, "cfg": slab_cfg})
     if not jobs:
         if progress_cb:
@@ -821,10 +866,10 @@ def find_totals_contours(
 ) -> dict[str, Any]:
     """Trace ``log10(TOT)`` isolines for each key.
 
-    When ``params`` is set (live PHREEQC path), contiguous pH-line bands run on
-    the job pool. Workers read one shared totals block and call PHREEQC only for
-    samples that fall between grid nodes. Synthetic / analytic evaluators stay
-    single-process.
+    When ``params`` is set (live PHREEQC path), Morton blocks of the rectangles
+    a dissolved total crosses run on the job pool. Workers read one shared
+    totals block and call PHREEQC only for samples that fall between grid
+    nodes. Synthetic / analytic evaluators stay single-process.
     """
     step = clamp_contour_log_step(
         log_step if log_step is not None else config.TOTALS_CONTOUR_LOG_STEP_DEFAULT
@@ -877,6 +922,7 @@ def find_totals_contours(
                 progress_cb=progress_cb,
                 slab_cfg=slab_cfg,
                 compute_pool=compute_pool,
+                results=results,
             )
         finally:
             _release_slab(totals_shm, conv_shm)

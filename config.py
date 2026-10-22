@@ -327,9 +327,9 @@ BOUNDARY_TRACE_STABILITY_TOLERANCE = float(
 # Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
 TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "16"))
 TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "4"))
-# Totals-contour pool: consecutive pH-cell rows per pool job (progress ticks
-# once per job; worker warmup is reported separately before band work).
-CONTOUR_BANDS_PER_WORKER = int(os.environ.get("PHASER_CONTOUR_BANDS_PER_WORKER", "1"))
+# Totals-contour pool: Morton blocks of the rectangles a concentration line
+# crosses. The block size is a cell count, not a pH strip.
+CONTOUR_CELLS_PER_CHUNK = int(os.environ.get("PHASER_CONTOUR_CELLS_PER_CHUNK", "16"))
 # Base grid sweep: ProcessPoolExecutor.map chunksize (points per IPC message).
 SWEEP_MAP_CHUNKSIZE = int(os.environ.get("PHASER_SWEEP_MAP_CHUNKSIZE", "200"))
 

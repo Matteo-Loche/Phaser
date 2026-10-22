@@ -1171,9 +1171,11 @@ Optional post-grid step (`phreeqc/totals_contours.py`) when the compute request 
 
 **Levels.** From the finite field min/max on the base grid, levels are spaced by `totals_contour_log_step` (default **2**, clamp **0.5–6**): floor/ceil to the step grid so labels land on round log values.
 
-**Root-find.** Same idea as phase-boundary edges: for each grid cell and level, `brentq` finds zeros of `log₁₀(TOT) − level` on the four cell edges (shared edges rooted once per worker via a canonical edge cache). Two crossings → one chord; four crossings (saddle) → two chords in edge-walk order. Chords are **stitched** into continuous polylines by matching endpoints (grid-aware snap). Water-band clipping is **not** applied here — the UI white masks cut strokes at the gas lines (see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)).
+**Root-find.** Same idea as phase-boundary edges: `brentq` finds zeros of `log₁₀(TOT) − level` on the four edges of a grid rectangle. Two crossings become one chord; four crossings (a saddle) become two chords, paired in edge-walk order. An edge whose corners already lie on the same side of every level is not searched. Chords are **stitched** into continuous polylines by matching endpoints (grid-aware snap). Water-band clipping is **not** applied here — the UI white masks cut strokes at the gas lines (see [Concentration heatmap and contours](#concentration-heatmap-and-contours-mineral-stability)).
 
-**Parallelism.** Isolines run on the same session pool as the grid and the trace. Contiguous **pH-line bands** (`CONTOUR_BANDS_PER_WORKER` consecutive pH-cell rows per job, default **1**), not Morton cell shards — isolines need locality along consecutive `i` rows. The parent publishes aqueous totals in one shared block. A worker attaches that block and reads a grid node from it; a sample that misses the node calls `evaluate_point` on the worker's existing IPhreeqc. Progress ticks once per worker as it attaches, then once per band. Band results are merged and **re-stitched** across band seams. Abort and the wall-clock timeout kill that same pool. Progress phase: **`contours`**.
+**Which rectangles.** Before any new speciation, the parent reads the dissolved totals already stored on the grid corners. A rectangle is kept when any level of that element changes sign across one of its edges, or lands on a corner. Fe and Mn are separate lists. Rectangles no chosen level crosses are not sent to a worker.
+
+**Parallelism.** Isolines run on the same session pool as the grid and the trace. The kept rectangles are Morton-sorted (the same Z-order as phase-boundary cells) and cut into blocks of `CONTOUR_CELLS_PER_CHUNK` (default **16**, env `PHASER_CONTOUR_CELLS_PER_CHUNK`). The number of workers does not change the block size; it only limits how many blocks run at once. Each block carries every level of one element, so a rectangle several concentrations cross is visited once. An edge shared by two rectangles inside a block is rooted once. An edge on the join between two blocks can be rooted from both sides. The parent publishes aqueous totals in one shared block. A worker attaches that block and reads a grid node from it; a sample between nodes calls `evaluate_point` on the worker's existing IPhreeqc. Progress ticks once per worker as it attaches, then once per block. Block results are merged and **re-stitched** across those joins. Abort and the wall-clock timeout kill that same pool. Progress phase: **`contours`**. The previous split, one full pH step per task, is not used.
 
 **Packed shape** (attached on the job result):
 
@@ -1294,17 +1296,17 @@ After the base grid (and optional boundary trace), Mineral Stability jobs with `
 
 - The parent writes aqueous totals into one shared numeric block (NaN where a total is missing or not positive). Each worker attaches with tracking off, so a killed worker cannot delete the block. The parent unlinks the block when the contour pass finishes, including on abort. Workers never unlink.
 - Off-node `brentq` samples still call `evaluate_point` on the worker's existing IPhreeqc. Samples that land on a grid node are read from the block.
-- The cell grid is split into contiguous pH-line strips of **`CONTOUR_BANDS_PER_WORKER`** rows each (`_chunk_contour_cells`, default **1** row/job); isolines stay local; results are merged and re-stitched across band seams.
-- Progress is one tick per worker as it attaches the block, then one tick per pH-line band (`phase=contours`). Lines left off never report this phase. Lines on but no finite totals report the phase complete and return an empty `by_key`.
+- The parent keeps rectangles where any level of one element changes sign on an edge, or lands on a corner, using the dissolved totals already on the grid. Those rectangles are Morton-ordered and split into blocks of **`CONTOUR_CELLS_PER_CHUNK`** (`_contour_chunks`, default **16**). Workers do not change that size. One block carries every level of one element. An edge inside a block is rooted once; an edge on a join between blocks can be rooted twice. Results are merged and re-stitched across those joins. Tasks are not cut as full pH steps.
+- Progress is one tick per worker as it attaches the block, then one tick per block (`phase=contours`). Lines left off never report this phase. Lines on but no finite totals report the phase complete and return an empty `by_key`.
 - The analytic contour evaluator stays single-process and does not attach to the pool.
 
 | | Grid sweep | Boundary trace | Totals contours |
 |--|------------|----------------|-----------------|
-| Unit of work | `(pH, pe)` points | Mixed base cells | Cell bands × element key |
-| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`), one corner table per worker | Contiguous pH-line bands (`CONTOUR_BANDS_PER_WORKER` rows/job) |
+| Unit of work | `(pH, pe)` points | Mixed base cells | Contour cells × element key |
+| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`), one corner table per worker | Morton blocks of contour cells (`CONTOUR_CELLS_PER_CHUNK`) |
 | What the worker already holds | IPhreeqc + `GridJobParams` | The same session, plus one trace evaluator | The same session, plus the shared totals block |
 | Per-task payload | Point coordinates | Cell indices (corners once per worker) | Cells + key + levels |
-| Progress | Points done | Chunks done | Worker attach + band jobs done |
+| Progress | Points done | Chunks done | Worker attach + contour blocks done |
 
 Production CPU / worker sizing: [6.5 CPU, workers, and concurrent jobs](#65-cpu-workers-and-concurrent-jobs).
 
@@ -1600,7 +1602,7 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_TOTALS_CONTOURS` | `false` | Default for per-job `totals_contours` (Mineral Stability isolines) |
 | `PHASER_TOTALS_CONTOUR_LOG_STEP` | `2` | Default for `totals_contour_log_step` |
 | `PHASER_TOTALS_CONTOUR_LOG_STEP_MIN` / `_MAX` | `0.5` / `6` | Clamp for `totals_contour_log_step` |
-| `PHASER_CONTOUR_BANDS_PER_WORKER` | `1` | Consecutive pH-cell rows per contour task on the session pool |
+| `PHASER_CONTOUR_CELLS_PER_CHUNK` | `16` | Morton block size for dissolved-total contours, in grid rectangles |
 | `PHASER_KNOBS_MODE` | `standard` | Default Convergence rescue; per-job `knobs_mode`. Unknown values stop the server at startup ([3.4](#34-convergence-rescue-knobs)) |
 | `PHASER_O2_LIMIT_ATM` / `PHASER_H2_LIMIT_ATM` | `0.21` / `1.0` | Water-window defaults; per-job overrides (clamped to `GAS_LIMIT_ATM_*`) |
 | `PHASER_COMPONENT_GAS_LIMIT_ATM` | `1.0` | Component-gas reference pressure |
