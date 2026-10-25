@@ -30,6 +30,23 @@ def _worker_eval_chunk(chunk: list[tuple[float, float]]) -> list[dict]:
     return [_worker_eval(args) for args in chunk]
 
 
+def _point_batches(
+    points: list[tuple[float, float]],
+    batch_size: int,
+) -> list[list[tuple[float, float]]]:
+    """Cut grid points into fixed batches.
+
+    The batch size is ``SWEEP_MAP_CHUNKSIZE`` (default 50). The worker count
+    does not change it. A short remainder is its own last batch.
+    """
+    step = int(batch_size)
+    if step < 1:
+        raise ValueError(
+            f"PHASER_SWEEP_MAP_CHUNKSIZE must be at least 1, got {step}."
+        )
+    return [points[start : start + step] for start in range(0, len(points), step)]
+
+
 def build_grid(params: GridJobParams) -> tuple[np.ndarray, np.ndarray]:
     ph = np.linspace(params.ph_min, params.ph_max, params.ph_levels)
     pe = np.linspace(params.pe_min, params.pe_max, params.pe_levels)
@@ -108,17 +125,13 @@ def run_point_sweep(
 
     compute_pool = require_compute_pool(compute_pool)
     workers = compute_pool.workers
-    chunksize = max(1, int(config.SWEEP_MAP_CHUNKSIZE))
     done = progress_offset
 
     def _mapped(pool) -> None:
         from ..services.job_control import hold_phase_for_test
 
         hold_phase_for_test(job_id, "grid")
-        chunks = [
-            tasks_list[i : i + chunksize]
-            for i in range(0, len(tasks_list), chunksize)
-        ]
+        chunks = _point_batches(tasks_list, config.SWEEP_MAP_CHUNKSIZE)
         max_in_flight = max(workers * 2, 4)
 
         def _on_chunk(rows, _n):

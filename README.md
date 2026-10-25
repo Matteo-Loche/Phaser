@@ -1070,7 +1070,7 @@ On success, `GridPointResult.knobs_level` is the profile index (`0` / `1` / `2` 
 
 In titration-style modes (`dummy_titration`, `titration`, and their assemblage counterparts), the base grid sweep can skip PHREEQC for points outside the analytic O₂/H₂ window (`SWEEP_SKIP_OUTSIDE_WATER = true` by default). Points with `pe + pH` above the O₂ line or below the H₂ line (plus **`SWEEP_WATER_MARGIN_CELLS`** margin in cell units) receive **synthetic** `GridPointResult` rows: `converged=True`, `synthetic_label` such as `O2(g) > 0.21 atm`, and matching `gas_domain` — no PHREEQC call.
 
-Synthetic categories flow through packing and adaptive tracing; numeric boundary tracing **skips** cells that mix real chemistry with synthetic gas labels (O₂/H₂ lines remain **analytic** via `trace_gas_limit_segments`). Job metadata may include **`n_skipped_water`** (internal diagnostic only).
+Synthetic rows still pack into the category grid and the hover data. A base cell with a synthetic O₂ or H₂ corner is removed from the trace list before Morton chunks are built, on both the predominance and mineral paths, so that cell never takes a worker slot. The drop includes a cell that also holds two minerals. `run_boundary_trace` applies the same filter again. The O₂/H₂ line stays analytic (`trace_gas_limit_segments`). Job metadata may include **`n_skipped_water`** (internal diagnostic only).
 
 Expected savings: roughly 30–40% fewer base-sweep PHREEQC runs on typical pe–pH frames when the water band covers a minority of the plot.
 
@@ -1088,7 +1088,7 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
 
 1. **Solid/aqueous name collisions** — names shared by a solid phase and an aqueous species come from the SQLite catalog (`solid_aqueous_collisions`, from `PHASES` ∩ `SOLUTION_SPECIES` text at scan time). `services/compute.py` loads them onto `GridJobParams` before the sweep; colliding solids are labelled `"<name>(s)"` during packing and tracing (not inferred from grid results).
 2. **Base sweep** — the full selected grid is evaluated (e.g. 100×100 = 10,000 runs). The base grid is kept for hover and per-point data; nothing is downsampled.
-3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid/mineral and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners.
+3. **Boundary detection** — for each base point a composite signature is built across every **enabled** plottable layer family (solid/mineral and/or aqueous, respecting `layer_elements`). A base cell is flagged when this signature differs across its four corners. A flagged cell with a synthetic O₂ or H₂ corner is then dropped, before chunks are built ([Water-band mask](#35-water-band-mask-and-gas-limit-chemistry)).
 
    <img src="docs/schemes/trace-base-cell.png" width="520" alt="Base cell: square between four evaluated grid corners; flagged when corner phase labels disagree; mixed edges get brentq later" />
 
@@ -1155,11 +1155,10 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 |----------|---------|---------|
 | `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI/API default for Trace phase edges |
 | `ADAPTIVE_REFINE_FACTOR` | 6 | Fallback sub-grid / local geometry (`PHASER_ADAPTIVE_REFINE_FACTOR`) |
-| `MAX_ADAPTIVE_POINTS` | 120,000 | Soft cap on total PHREEQC evals in adaptive mode |
 | `BOUNDARY_TRACE_TOLERANCE` | 1e-3 | Phase-boundary `brentq` / 2D roots |
 | `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed edges (looser) |
 | `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N during tracing |
-| `TRACE_CHUNK_MULTIPLIER` / `TRACE_MIN_CELLS_PER_CHUNK` | 16 / 4 | Worker chunking for mixed cells |
+| `TRACE_CELLS_PER_CHUNK` | 16 | Mixed cells per Morton block (`PHASER_TRACE_CELLS_PER_CHUNK`) |
 
 Worker count, packing, and wall-clock timeout: [Part IV](#part-iv-compute-and-packing).
 
@@ -1278,15 +1277,15 @@ Calls that run PHREEQC (`run_point_sweep`, `run_boundary_trace`, `find_totals_co
 
 A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs** (minus any synthetic outside-water points).
 
-- Work units are chunks of `(pH, pe)` points (`_worker_eval_chunk`), size **`SWEEP_MAP_CHUNKSIZE`** (default `200`, env `PHASER_SWEEP_MAP_CHUNKSIZE`), submitted via `pool_map_abortable` so wall-timeout abort cannot hang inside a blocking `map`.
+- Work units are batches of `(pH, pe)` points (`_point_batches` / `_worker_eval_chunk`), size **`SWEEP_MAP_CHUNKSIZE`** (default **50**, env `PHASER_SWEEP_MAP_CHUNKSIZE`). The number of workers does not change the batch size; it only limits how many batches run at once. A short remainder is its own last batch. Batches go through `pool_map_abortable` so a wall-timeout abort cannot hang inside a blocking `map`.
 - Progress counts completed points, including synthetic outside-water points, for the UI poll loop.
 
 #### Boundary trace (`boundary_trace.py`)
 
-After the base grid is labelled, only **mixed cells** (disagreeing corner signatures) are traced. The signature pass reads a view of each row; it does not copy the aqueous rankings.
+After the base grid is labelled, only **mixed cells** (disagreeing corner signatures) are traced. Cells with a synthetic O₂ or H₂ corner are removed before that list is Morton-sorted ([Water-band mask](#35-water-band-mask-and-gas-limit-chemistry)). The signature pass reads a view of each row; it does not copy the aqueous rankings.
 
 - The same workers switch to tracing (`_install_trace_state`), which loads the database again on that process. One `PointEvaluator` and its crossing cache then cover every Morton chunk that worker runs. The first time a worker touches a grid corner it runs PHREEQC again, because the trace punch is narrower than the grid punch; a later chunk on that same worker reuses the result. An edge root is stored once per worker.
-- Mixed cells are **Morton-sorted** (Z-order) and split by `_chunk_cells` into about **`workers × TRACE_CHUNK_MULTIPLIER`** contiguous chunks (floor `TRACE_MIN_CELLS_PER_CHUNK`). Chunks are dealt round-robin, and each worker receives its corner rows **once**.
+- Mixed cells are **Morton-sorted** (Z-order) and split by `_chunk_cells` into blocks of **`TRACE_CELLS_PER_CHUNK`** (default **16**, env `PHASER_TRACE_CELLS_PER_CHUNK`). The number of workers does not change the block size; it only limits how many blocks run at once. A short remainder is its own last block. Chunks are dealt round-robin, and each worker receives its corner rows **once**.
 - Progress is **Morton chunks completed**, including a zero report before the first chunk. A shared counter moves the bar as each chunk finishes, even when one worker owns several chunks. Results are merged in Morton-chunk order for a deterministic bundle.
 - If no cell is mixed, the phase is still reported (0, then finished) and only the analytic O₂/H₂ lines are drawn. No trace tasks are submitted.
 
@@ -1303,7 +1302,7 @@ After the base grid (and optional boundary trace), Mineral Stability jobs with `
 | | Grid sweep | Boundary trace | Totals contours |
 |--|------------|----------------|-----------------|
 | Unit of work | `(pH, pe)` points | Mixed base cells | Contour cells × element key |
-| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton-ordered cell blocks (`TRACE_CHUNK_*`), one corner table per worker | Morton blocks of contour cells (`CONTOUR_CELLS_PER_CHUNK`) |
+| Chunking | Fixed point batches (`SWEEP_MAP_CHUNKSIZE`) | Morton blocks of mixed cells (`TRACE_CELLS_PER_CHUNK`), one corner table per worker | Morton blocks of contour cells (`CONTOUR_CELLS_PER_CHUNK`) |
 | What the worker already holds | IPhreeqc + `GridJobParams` | The same session, plus one trace evaluator | The same session, plus the shared totals block |
 | Per-task payload | Point coordinates | Cell indices (corners once per worker) | Cells + key + levels |
 | Progress | Points done | Chunks done | Worker attach + contour blocks done |
@@ -1609,15 +1608,14 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | `true` | Skip PHREEQC outside water band |
 | `PHASER_SWEEP_WATER_MARGIN_CELLS` | `1.0` | Extra cells beyond analytic clip |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | `6` | Adaptive fallback / local geometry |
-| `PHASER_MAX_ADAPTIVE_POINTS` | `120000` | Soft adaptive PHREEQC budget |
 | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-3` | Phase-boundary roots |
 | `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed roots |
 | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH slots while tracing |
 | `PHASER_TOP_AQ_SPECIES` | `64` | USER_PUNCH slots on base sweep |
 | `PHASER_HOVER_SPECIES_PER_ELEMENT` | `8` | Species packed for hover |
 | `PHASER_HOVER_SATURATED_PHASES` | `8` | Max SI≥0 solids packed per cell for Saturation hover |
-| `PHASER_TRACE_CHUNK_MULTIPLIER` / `PHASER_TRACE_MIN_CELLS_PER_CHUNK` | `16` / `4` | Trace worker chunking |
-| `PHASER_SWEEP_MAP_CHUNKSIZE` | `200` | Base-grid points per `pool_map_abortable` chunk |
+| `PHASER_TRACE_CELLS_PER_CHUNK` | `16` | Morton block size for phase-boundary tracing, in mixed cells |
+| `PHASER_SWEEP_MAP_CHUNKSIZE` | `50` | Base-grid points per worker batch |
 | `PHASER_MAX_WORKERS` | `8` | Workers in the one session pool (grid, trace, contours) |
 | `PHASER_MAX_CONCURRENT_JOBS` | `1` | Simultaneous jobs (FIFO beyond that) |
 | `PHASER_MAX_QUEUE` | `20` | Cap on `running + queued`; further compute POSTs → 503 `queue_full` |
@@ -1741,7 +1739,6 @@ Built-in PHREEQC databases ship inside the image. An optional `PHASER_DATA_DIR` 
 | `PHASER_MAX_QUEUE` | App | Max `running + queued` (default `20`) |
 | `PHASER_COMPUTE_MIN_INTERVAL_SEC` | App | Min gap between compute POSTs per IP (default `10`) |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | App | Adaptive fallback / local-geometry subdivision |
-| `PHASER_MAX_ADAPTIVE_POINTS` | App | Soft cap on adaptive PHREEQC evals |
 | `PHASER_JOB_*_TTL_SEC` | App | Job memory / queue retention |
 | `PHASER_RATE_LIMIT` | App | `1` = on, `0` = off |
 | `PHASER_RATE_LIMIT_WINDOW_SEC` | App | Rate-limit window (default `60` s) |

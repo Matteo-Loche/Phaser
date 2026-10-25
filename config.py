@@ -303,8 +303,6 @@ TOTALS_CONTOUR_LOG_STEP_MAX = float(
 )
 # Subdivision per base cell for fallback sampling and geometric traced fills.
 ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "6"))
-# Soft cap on total PHREEQC evaluations in adaptive mode (base grid + trace work).
-MAX_ADAPTIVE_POINTS = int(os.environ.get("PHASER_MAX_ADAPTIVE_POINTS", "120000"))
 # Aqueous species molalities punched per element (USER_PUNCH via SYS) for
 # predominance and tracing. High count so minor species are not missed.
 TOP_AQ_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_TOP_AQ_SPECIES", "64"))
@@ -324,14 +322,14 @@ BOUNDARY_TRACE_TOLERANCE = float(os.environ.get("PHASER_BOUNDARY_TRACE_TOLERANCE
 BOUNDARY_TRACE_STABILITY_TOLERANCE = float(
     os.environ.get("PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE", "1e-2")
 )
-# Trace multiprocessing: submit workers×multiplier small jobs for pool load-balancing.
-TRACE_CHUNK_MULTIPLIER = int(os.environ.get("PHASER_TRACE_CHUNK_MULTIPLIER", "16"))
-TRACE_MIN_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_MIN_CELLS_PER_CHUNK", "4"))
+# Trace pool: Morton blocks of mixed cells. The block size is a cell count.
+# The worker count does not change it.
+TRACE_CELLS_PER_CHUNK = int(os.environ.get("PHASER_TRACE_CELLS_PER_CHUNK", "16"))
 # Totals-contour pool: Morton blocks of the rectangles a concentration line
 # crosses. The block size is a cell count, not a pH strip.
 CONTOUR_CELLS_PER_CHUNK = int(os.environ.get("PHASER_CONTOUR_CELLS_PER_CHUNK", "16"))
-# Base grid sweep: ProcessPoolExecutor.map chunksize (points per IPC message).
-SWEEP_MAP_CHUNKSIZE = int(os.environ.get("PHASER_SWEEP_MAP_CHUNKSIZE", "200"))
+# Base grid sweep: points per worker batch. The worker count does not change it.
+SWEEP_MAP_CHUNKSIZE = int(os.environ.get("PHASER_SWEEP_MAP_CHUNKSIZE", "50"))
 
 # Completed job results are dropped from server memory after this TTL if the
 # browser never fetched them (or after fetch + DELETE). Also used by the reaper.

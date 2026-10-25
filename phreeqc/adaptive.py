@@ -195,8 +195,7 @@ def run_adaptive_boundary_sweep(
     from .session import require_compute_pool
 
     compute_pool = require_compute_pool(compute_pool)
-    workers = compute_pool.workers
-    n_progress = max(1, len(_chunk_cells(cells, workers=workers)))
+    n_progress = max(1, len(_chunk_cells(cells)))
     report(0, n_progress, "boundaries")
     trace_bundle, trace_stats = run_boundary_trace(
         params,

@@ -1967,35 +1967,21 @@ def _sort_cells_morton(cells: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return sorted(cells, key=lambda ij: _morton_code(ij[0], ij[1]))
 
 
-def _chunk_cells(
-    cells: list[tuple[int, int]],
-    *,
-    workers: int,
-) -> list[list[tuple[int, int]]]:
-    """Split mixed cells into worker chunks (Morton order, contiguous blocks)."""
+def _chunk_cells(cells: list[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """Split mixed cells into fixed Morton blocks.
+
+    The block size is ``TRACE_CELLS_PER_CHUNK`` (default 16). The worker
+    count does not change it. A short remainder is its own last block.
+    """
     if not cells:
         return []
-    mult = config.TRACE_CHUNK_MULTIPLIER
-    min_chunk = config.TRACE_MIN_CELLS_PER_CHUNK
-    if workers <= 1 or len(cells) <= min_chunk:
-        return [cells]
-
-    ordered = _sort_cells_morton(cells)
-
-    target_chunks = workers * max(1, mult)
-    max_chunks = max(1, len(ordered) // min_chunk)
-    n_chunks = min(target_chunks, max_chunks, len(ordered))
-    n_chunks = max(n_chunks, workers)
-
-    base, extra = divmod(len(ordered), n_chunks)
-    chunks: list[list[tuple[int, int]]] = []
-    start = 0
-    for ci in range(n_chunks):
-        size = base + (1 if ci < extra else 0)
-        if size:
-            chunks.append(ordered[start : start + size])
-            start += size
-    return chunks
+    step = int(config.TRACE_CELLS_PER_CHUNK)
+    if step < 1:
+        raise ValueError(
+            f"PHASER_TRACE_CELLS_PER_CHUNK must be at least 1, got {step}."
+        )
+    ordered = _sort_cells_morton(list(cells))
+    return [ordered[start : start + step] for start in range(0, len(ordered), step)]
 
 
 def _component_cells(base_ph: np.ndarray, base_pe: np.ndarray) -> list[tuple[int, int]]:
@@ -2232,7 +2218,7 @@ def run_boundary_trace(
             progress_cb(1, 1)
     else:
         workers = compute_pool.workers
-        chunks = _chunk_cells(cells, workers=workers)
+        chunks = _chunk_cells(cells)
         trace_cfg = {
             "params": asdict(trace_params),
             "base_ph": base_ph.tolist(),

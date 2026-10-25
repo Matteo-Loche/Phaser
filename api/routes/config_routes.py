@@ -109,7 +109,6 @@ def get_config():
         "totals_contour_log_step": config.TOTALS_CONTOUR_LOG_STEP_DEFAULT,
         "totals_contour_log_step_min": config.TOTALS_CONTOUR_LOG_STEP_MIN,
         "totals_contour_log_step_max": config.TOTALS_CONTOUR_LOG_STEP_MAX,
-        "max_adaptive_points": config.MAX_ADAPTIVE_POINTS,
         "default_knobs_mode": config.KNOBS_MODE_DEFAULT,
         "knobs_modes": [
             {"id": mode_id, **config.KNOBS_MODE_META[mode_id]}
