@@ -5,8 +5,8 @@ Each display layer is built from the trace bundle:
 1. A fine categorical grid (base block-fill + traced overrides for boundary cells).
 2. Per-cell fill polygons for traced cells, clipped by the same dividing lines /
    convex regions as the black boundary segments.
-3. Merged mask-contour fills for interior (untraced) regions and for fallback
-   cells (fallback black lines are also mask contours — there is no brentq edge).
+3. Interior (untraced) cells and fallback cells are filled from the categorical sample.
+   Resampled cells are left out of that coarse fill and packed from their own fine grid.
 4. Thin boundary polylines from the tracer (unchanged).
 5. Same-category rings batched into one MultiPolygon (null-separated) so the UI
    paints one Plotly fill trace per phase, not one per cell fragment.
@@ -599,6 +599,7 @@ def _pack_one_layer(
     ph_lookup: dict[float, int],
     pe_lookup: dict[float, int],
     extra: dict[str, Any] | None = None,
+    include_gas: bool = True,
 ) -> dict[str, Any]:
     """Assemble one display layer: geometric cell fills + boundary lines."""
     use_water = water_stability_limits_enabled(params)
@@ -696,22 +697,31 @@ def _pack_one_layer(
         if 0 <= ci < n_ph_cells and 0 <= cj < n_pe_cells and (ci, cj) not in traced_cells:
             fallback_cells.add((ci, cj))
 
+    # Resampled coarse cells are filled by their fine window, not by the
+    # lower-left colour of this grid. A kept chord is not in this set.
+    skip_cells = {
+        (int(pair[0]), int(pair[1]))
+        for pair in (layer_nodes.get("skip_cells") or [])
+    }
+
     polygons: list[dict[str, Any]] = []
 
-    # Analytic O₂ / H₂ outside fills.
-    for gas_idx, gas in ((o2_idx, "O2(g)"), (h2_idx, "H2(g)")):
-        if gas_idx < 0:
-            continue
-        cx, cy = _gas_outside_polygon(
-            gas, params, ph_min=ph_lo, ph_max=ph_hi, pe_min=pe_lo, pe_max=pe_hi,
-        )
-        if len(cx) >= 3:
-            polygons.append({
-                "cat": gas_idx,
-                "area": _ring_area(np.array(cx), np.array(cy)),
-                "x": cx,
-                "y": cy,
-            })
+    # Analytic O₂ / H₂ outside fills. A fine window leaves these to the coarse
+    # pack: drawing them again would lay the same sheet over the chords.
+    if include_gas:
+        for gas_idx, gas in ((o2_idx, "O2(g)"), (h2_idx, "H2(g)")):
+            if gas_idx < 0:
+                continue
+            cx, cy = _gas_outside_polygon(
+                gas, params, ph_min=ph_lo, ph_max=ph_hi, pe_min=pe_lo, pe_max=pe_hi,
+            )
+            if len(cx) >= 3:
+                polygons.append({
+                    "cat": gas_idx,
+                    "area": _ring_area(np.array(cx), np.array(cy)),
+                    "x": cx,
+                    "y": cy,
+                })
 
     # Exact 2-category cells: split by the same divide as the black boundary.
     for r in recs:
@@ -740,7 +750,7 @@ def _pack_one_layer(
 
     # Interior (untraced) cells: one merged mask contour per category — not
     # per-cell rectangles (those leave a white seam grid and fail label area).
-    covered = traced_cells | fallback_cells
+    covered = traced_cells | fallback_cells | skip_cells
     interior_fine = np.full(chem_fine.shape, -1, dtype=int)
     for cj in range(n_pe_cells):
         for ci in range(n_ph_cells):
@@ -836,15 +846,16 @@ def _pack_one_layer(
                 lower=lower_sum,
                 upper=upper_sum,
             )
-        chem_segments.extend(
-            water_gas_boundary_segments(
-                params,
-                ph_min=float(fine_ph[0]),
-                ph_max=float(fine_ph[-1]),
-                pe_min=float(fine_pe[0]),
-                pe_max=float(fine_pe[-1]),
+        if include_gas:
+            chem_segments.extend(
+                water_gas_boundary_segments(
+                    params,
+                    ph_min=float(fine_ph[0]),
+                    ph_max=float(fine_ph[-1]),
+                    pe_min=float(fine_pe[0]),
+                    pe_max=float(fine_pe[-1]),
+                )
             )
-        )
     boundaries = _segments_to_boundary_lines(chem_segments)
 
     # One MultiPolygon per category — Plotly paint cost tracks #phases, not
@@ -860,6 +871,123 @@ def _pack_one_layer(
     }
     if extra:
         layer.update(extra)
+    return layer
+
+
+def _append_packed_rings(
+    dest: dict[str, Any],
+    extra: dict[str, Any],
+) -> None:
+    """Add one window's rings and boundary lines onto a coarse layer.
+
+    Rings of a category already on the coarse layer join that MultiPolygon
+    with a null gap. A category that appears only on the fine grid is appended.
+    """
+    names: list[str] = list(dest["names"])
+    index = {name: i for i, name in enumerate(names)}
+    by_cat = {int(poly["cat"]): poly for poly in dest["polygons"]}
+    extra_names = extra["names"]
+    for poly in extra["polygons"]:
+        name = extra_names[int(poly["cat"])]
+        if name not in index:
+            index[name] = len(names)
+            names.append(name)
+            added = {**poly, "cat": index[name]}
+            dest["polygons"].append(added)
+            by_cat[index[name]] = added
+            continue
+        cat = index[name]
+        existing = by_cat.get(cat)
+        if existing is None:
+            added = {**poly, "cat": cat}
+            dest["polygons"].append(added)
+            by_cat[cat] = added
+            continue
+        existing["x"] = list(existing["x"]) + [None] + list(poly["x"])
+        existing["y"] = list(existing["y"]) + [None] + list(poly["y"])
+        existing["area"] = float(existing.get("area") or 0) + float(poly.get("area") or 0)
+    dest["names"] = names
+    dest["polygons"].sort(key=lambda poly: -float(poly.get("area") or 0.0))
+    dest_x = list((dest.get("boundaries") or {}).get("x") or [])
+    dest_y = list((dest.get("boundaries") or {}).get("y") or [])
+    extra_x = list((extra.get("boundaries") or {}).get("x") or [])
+    extra_y = list((extra.get("boundaries") or {}).get("y") or [])
+    if extra_x:
+        if dest_x:
+            dest_x.append(None)
+            dest_y.append(None)
+        dest_x.extend(extra_x)
+        dest_y.extend(extra_y)
+    dest["boundaries"] = {"x": dest_x, "y": dest_y}
+
+
+def _pack_resample_windows(
+    layer: dict[str, Any],
+    layer_nodes: dict[str, Any],
+    *,
+    cat_fn: Callable[[dict], str],
+    params: GridJobParams,
+    factor: int,
+    solid_set: set[str] | None = None,
+    collisions: frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Pack each fine window on its own axis and lay it over the coarse layer.
+
+    The window axis is the grid those cells were traced on. The refine factor
+    is still the local geometry factor stored in the node indexes. Gas sheets
+    stay on the coarse pack.
+    """
+    from dataclasses import replace
+
+    windows = layer_nodes.get("resample_windows") or []
+    if not windows:
+        return layer
+    outside = set(water_gas_outside_labels(params))
+    for window in windows:
+        fine_ph = np.asarray(window["fine_ph"], dtype=float)
+        fine_pe = np.asarray(window["fine_pe"], dtype=float)
+        n_ph = int(len(fine_ph))
+        n_pe = int(len(fine_pe))
+        wparams = replace(
+            params,
+            ph_min=float(fine_ph[0]),
+            ph_max=float(fine_ph[-1]),
+            ph_levels=n_ph,
+            pe_min=float(fine_pe[0]),
+            pe_max=float(fine_pe[-1]),
+            pe_levels=n_pe,
+        )
+        n_ph_fine = fine_axis_levels(n_ph, factor)
+        n_pe_fine = fine_axis_levels(n_pe, factor)
+        packed = _pack_one_layer(
+            base_rows=list(window["rows"]),
+            layer_nodes=window["layer"],
+            cat_fn=cat_fn,
+            params=wparams,
+            factor=factor,
+            n_ph_fine=n_ph_fine,
+            n_pe_fine=n_pe_fine,
+            fine_ph=np.linspace(float(fine_ph[0]), float(fine_ph[-1]), n_ph_fine),
+            fine_pe=np.linspace(float(fine_pe[0]), float(fine_pe[-1]), n_pe_fine),
+            base_ph=fine_ph,
+            base_pe=fine_pe,
+            ph_lookup={round(float(v), 12): i for i, v in enumerate(fine_ph)},
+            pe_lookup={round(float(v), 12): i for i, v in enumerate(fine_pe)},
+            include_gas=False,
+        )
+        names = packed["names"]
+        packed["polygons"] = [
+            poly
+            for poly in packed["polygons"]
+            if names[int(poly["cat"])] not in outside
+        ]
+        _append_packed_rings(layer, packed)
+    if solid_set is not None and "aqueous_names" in layer:
+        layer["aqueous_names"] = [
+            name
+            for name in layer["names"]
+            if not label_is_solid(name, solid_set, collisions or frozenset())
+        ]
     return layer
 
 
@@ -937,17 +1065,25 @@ def pack_traced_display(
                 | set(_layer.get("node_cat") or [])
                 | {c for r in (_layer.get("cell_lines") or []) for c in (r["pos"], r["neg"])}
             )
-            solid_subsets[key] = _pack_one_layer(
-                layer_nodes=trace_layers.get(f"solid:{key}", {}),
+            solid_subsets[key] = _pack_resample_windows(
+                _pack_one_layer(
+                    layer_nodes=trace_layers.get(f"solid:{key}", {}),
+                    cat_fn=cat_fn,
+                    extra={
+                        "elements": list(subset),
+                        "aqueous_names": [
+                            n for n in names_preview
+                            if not label_is_solid(n, solid_set, collisions)
+                        ],
+                    },
+                    **common,
+                ),
+                trace_layers.get(f"solid:{key}", {}),
                 cat_fn=cat_fn,
-                extra={
-                    "elements": list(subset),
-                    "aqueous_names": [
-                        n for n in names_preview
-                        if not label_is_solid(n, solid_set, collisions)
-                    ],
-                },
-                **common,
+                params=params,
+                factor=factor,
+                solid_set=solid_set,
+                collisions=collisions,
             )
             tick()
 
@@ -958,11 +1094,17 @@ def pack_traced_display(
             def aq_cat_fn(row: dict, s: set[str] = set(subset)) -> str:
                 return dominant_aq_species_subset(row, s)
 
-            aqueous_subsets[key] = _pack_one_layer(
-                layer_nodes=trace_layers.get(f"aqueous:{key}", {}),
+            aqueous_subsets[key] = _pack_resample_windows(
+                _pack_one_layer(
+                    layer_nodes=trace_layers.get(f"aqueous:{key}", {}),
+                    cat_fn=aq_cat_fn,
+                    extra={"elements": list(subset)},
+                    **common,
+                ),
+                trace_layers.get(f"aqueous:{key}", {}),
                 cat_fn=aq_cat_fn,
-                extra={"elements": list(subset)},
-                **common,
+                params=params,
+                factor=factor,
             )
             tick()
 
@@ -1059,17 +1201,25 @@ def pack_traced_mineral_display(
                 | set(_layer.get("node_cat") or [])
                 | {c for r in (_layer.get("cell_lines") or []) for c in (r["pos"], r["neg"])}
             )
-            mineral_subsets[key] = _pack_one_layer(
-                layer_nodes=trace_layers.get(f"mineral:{key}", {}),
+            mineral_subsets[key] = _pack_resample_windows(
+                _pack_one_layer(
+                    layer_nodes=trace_layers.get(f"mineral:{key}", {}),
+                    cat_fn=cat_fn,
+                    extra={
+                        "elements": list(subset),
+                        "aqueous_names": [
+                            n for n in names_preview
+                            if not label_is_solid(n, solid_set, collisions)
+                        ],
+                    },
+                    **common,
+                ),
+                trace_layers.get(f"mineral:{key}", {}),
                 cat_fn=cat_fn,
-                extra={
-                    "elements": list(subset),
-                    "aqueous_names": [
-                        n for n in names_preview
-                        if not label_is_solid(n, solid_set, collisions)
-                    ],
-                },
-                **common,
+                params=params,
+                factor=factor,
+                solid_set=solid_set,
+                collisions=collisions,
             )
             tick()
 
@@ -1080,11 +1230,17 @@ def pack_traced_mineral_display(
             def aq_cat_fn(row: dict, s: set[str] = set(subset)) -> str:
                 return dominant_aq_species_subset(row, s)
 
-            aqueous_subsets[key] = _pack_one_layer(
-                layer_nodes=trace_layers.get(f"aqueous:{key}", {}),
+            aqueous_subsets[key] = _pack_resample_windows(
+                _pack_one_layer(
+                    layer_nodes=trace_layers.get(f"aqueous:{key}", {}),
+                    cat_fn=aq_cat_fn,
+                    extra={"elements": list(subset)},
+                    **common,
+                ),
+                trace_layers.get(f"aqueous:{key}", {}),
                 cat_fn=aq_cat_fn,
-                extra={"elements": list(subset)},
-                **common,
+                params=params,
+                factor=factor,
             )
             tick()
 

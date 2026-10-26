@@ -303,6 +303,21 @@ TOTALS_CONTOUR_LOG_STEP_MAX = float(
 )
 # Subdivision per base cell for fallback sampling and geometric traced fills.
 ADAPTIVE_REFINE_FACTOR = int(os.environ.get("PHASER_ADAPTIVE_REFINE_FACTOR", "6"))
+# Coarse cells around a non-chord cell that are retraced with it. 1 is the
+# eight neighbours. A kept chord is never included.
+RESAMPLE_PAD = int(os.environ.get("PHASER_RESAMPLE_PAD", "1"))
+# Fine step inside a resampled cell: Δ_fine = Δ_coarse / sub, where
+# Δ_coarse = (axis max − axis min) / (levels − 1). sub = 4 is a 4×4 block.
+# sub = 1 leaves Δ_fine = Δ_coarse and keeps the coarse geometry.
+RESAMPLE_SUB = int(os.environ.get("PHASER_RESAMPLE_SUB", "4"))
+if RESAMPLE_PAD < 0:
+    raise RuntimeError(
+        f"PHASER_RESAMPLE_PAD must be 0 or greater, got {RESAMPLE_PAD}."
+    )
+if RESAMPLE_SUB < 1:
+    raise RuntimeError(
+        f"PHASER_RESAMPLE_SUB must be 1 or greater, got {RESAMPLE_SUB}."
+    )
 # Aqueous species molalities punched per element (USER_PUNCH via SYS) for
 # predominance and tracing. High count so minor species are not missed.
 TOP_AQ_SPECIES_PER_ELEMENT = int(os.environ.get("PHASER_TOP_AQ_SPECIES", "64"))

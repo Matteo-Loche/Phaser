@@ -1,13 +1,15 @@
 """Boundary tracing via 1D/2D root finding on mixed base cells.
 
-Clean 2-category cells use edge ``brentq`` and a single dividing line. 3-category
-cells emit convex fill regions bounded by oriented lines: a genuine triple point
-(three crossings) or a diagonal band (four crossings). Triple points are the
-geometric intersection of straight pair-boundary lines (neighbor chords through
-the edge zeros) — a classic Y — with a soft 2D scalar root only as fallback.
-2-category saddles (four edge crossings) split on two crossing lines. Unresolved
-4-category cells and lost brackets share one sampled sub-grid per cell.
-Stability limits (converged vs failed) are traced separately. Solid/aqueous
+A two-category cell with two edge zeros keeps a straight chord. When resampling
+is on (``PHASER_RESAMPLE_SUB`` of 2 or more), every other mixed cell is retraced
+on a grid with step Δ_coarse / sub; see ``resample_trace.py``. With resampling
+off, a 3-category cell emits convex fill regions: a triple point (three
+crossings) or a diagonal band (four crossings). Triple points are the
+geometric intersection of straight
+pair-boundary lines, with a 2D scalar root only as fallback. 2-category saddles
+split on two crossing lines. Unresolved 4-category cells and lost brackets share
+one sampled sub-grid per cell. Those same rules run on each fine cell.
+Stability limits (converged vs failed) are traced on the coarse grid. Solid/aqueous
 category pairs that share a name are disambiguated upstream via the ``(s)``
 suffix (see ``diagram.packer``).
 """
@@ -69,6 +71,9 @@ class TraceStats:
     n_cells_saddle_traced: int = 0
     n_brentq_2d: int = 0
     n_gas_segments: int = 0
+    n_resample_evals: int = 0
+    n_resample_cells: int = 0
+    n_resample_windows: int = 0
 
 
 _CROSSING_UNCACHED = object()
@@ -1633,8 +1638,15 @@ def _trace_cells_batch(
     specs: list[LayerSpec] | None = None,
     resolve_pair: Callable | None = None,
     evaluator: PointEvaluator | None = None,
+    resample: bool = False,
+    trace_stability: bool = True,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], TraceStats]:
-    """Trace all layers + stability limits for a batch of cells (one worker)."""
+    """Trace all layers + stability limits for a batch of cells (one worker).
+
+    ``resample`` keeps a straight chord and records every other mixed cell as
+    a seed. The fine pass traces those seeds with ``resample`` false, so a
+    fine cell still gets a triple, a band, a saddle or a sampled fallback.
+    """
     if evaluator is None:
         evaluator = PointEvaluator(trace_params, {})
     if resolve_pair is not None:
@@ -1653,39 +1665,83 @@ def _trace_cells_batch(
     boundaries: dict[str, list[dict[str, Any]]] = {spec.layer_id: [] for spec in specs}
     stability: list[dict[str, Any]] = []
     fallback_by_cell: dict[tuple[int, int], list[LayerSpec]] = defaultdict(list)
+    resample_seeds: dict[str, list[list[int]]] = {spec.layer_id: [] for spec in specs}
 
     def add_nodes(layer_id: str, i: int, j: int, cats: dict[tuple[int, int], str]) -> None:
         dest = node_overrides[layer_id]
         for (gi, gj), name in cats.items():
             dest[(i * factor + gi, j * factor + gj)] = name
 
-    for spec in specs:
-        for i, j in cells:
-            line_rec, node_cats, segments, region_rec, need_fallback = _classify_cell(
-                evaluator,
-                spec,
-                i,
-                j,
-                base_ph,
-                base_pe,
-                corner_ij,
-                factor,
-                tol=tol,
-                stability_tol=stability_tol,
-                stats=stats,
-            )
-            if need_fallback:
-                fallback_by_cell[(i, j)].append(spec)
-            elif node_cats is not None:
-                add_nodes(spec.layer_id, i, j, node_cats)
-                boundaries[spec.layer_id].extend(segments)
-                if region_rec is not None:
-                    cell_regions[spec.layer_id].append(region_rec)
-                stats.n_cells_traced += 1
-            elif line_rec is not None:
+    if resample:
+        from .gas_limits import synthetic_gas_label_set
+
+        gas_labels = synthetic_gas_label_set(trace_params)
+        for spec in specs:
+            for i, j in cells:
+                corners = _corner_cats(i, j, spec.cat_fn, corner_ij)
+                distinct = set(corners)
+                # A synthetic gas corner is not traced and is not a seed. The
+                # analytic water line covers that side of the cell.
+                if len(distinct) <= 1 or distinct & gas_labels:
+                    continue
+                if len(distinct) != 2:
+                    resample_seeds[spec.layer_id].append([int(i), int(j)])
+                    continue
+                saddle_before = stats.n_cells_saddle_traced
+                triple_before = stats.n_cells_triple_traced
+                complex_before = stats.n_cells_complex_fallback
+                line_rec, node_cats, segments, _region, need_fallback = _classify_cell(
+                    evaluator,
+                    spec,
+                    i,
+                    j,
+                    base_ph,
+                    base_pe,
+                    corner_ij,
+                    factor,
+                    tol=tol,
+                    stability_tol=stability_tol,
+                    stats=stats,
+                )
+                if need_fallback or node_cats is not None or line_rec is None:
+                    # The classifier counted a saddle or a fallback it will not
+                    # keep. The fine grid traces that cell instead.
+                    stats.n_cells_saddle_traced = saddle_before
+                    stats.n_cells_triple_traced = triple_before
+                    stats.n_cells_complex_fallback = complex_before
+                    resample_seeds[spec.layer_id].append([int(i), int(j)])
+                    continue
                 cell_lines[spec.layer_id].append(line_rec)
                 boundaries[spec.layer_id].extend(segments)
                 stats.n_cells_traced += 1
+    else:
+        for spec in specs:
+            for i, j in cells:
+                line_rec, node_cats, segments, region_rec, need_fallback = _classify_cell(
+                    evaluator,
+                    spec,
+                    i,
+                    j,
+                    base_ph,
+                    base_pe,
+                    corner_ij,
+                    factor,
+                    tol=tol,
+                    stability_tol=stability_tol,
+                    stats=stats,
+                )
+                if need_fallback:
+                    fallback_by_cell[(i, j)].append(spec)
+                elif node_cats is not None:
+                    add_nodes(spec.layer_id, i, j, node_cats)
+                    boundaries[spec.layer_id].extend(segments)
+                    if region_rec is not None:
+                        cell_regions[spec.layer_id].append(region_rec)
+                    stats.n_cells_traced += 1
+                elif line_rec is not None:
+                    cell_lines[spec.layer_id].append(line_rec)
+                    boundaries[spec.layer_id].extend(segments)
+                    stats.n_cells_traced += 1
 
     for (i, j), fb_specs in fallback_by_cell.items():
         stats.n_cells_fallback += 1
@@ -1707,13 +1763,14 @@ def _trace_cells_batch(
                 )
             )
 
-    for i, j in cells:
-        stability.extend(
-            _trace_stability_cell(
-                evaluator, i, j, base_ph, base_pe, corner_ij,
-                stability_tol=stability_tol, stats=stats,
+    if trace_stability:
+        for i, j in cells:
+            stability.extend(
+                _trace_stability_cell(
+                    evaluator, i, j, base_ph, base_pe, corner_ij,
+                    stability_tol=stability_tol, stats=stats,
+                )
             )
-        )
 
     # Serialize node overrides as parallel lists for IPC.
     layers_out: dict[str, Any] = {}
@@ -1732,6 +1789,7 @@ def _trace_cells_batch(
             "cell_lines": cell_lines[layer_id],
             "cell_regions": cell_regions[layer_id],
             "boundaries": boundaries[layer_id],
+            "resample_seeds": resample_seeds[layer_id],
         }
 
     stats.n_stability_segments = len(stability)
@@ -1750,6 +1808,38 @@ _WORKER_EVAL: PointEvaluator | None = None
 _WORKER_ARMED = False
 _WORKER_SPECS: list[LayerSpec] | None = None
 _WORKER_RESOLVE: Callable | None = None
+# Cell-index crossing cache is only valid for one axis. The token is the
+# rounded pH and pe samples, so a later chunk of the same window keeps it.
+_WORKER_AXIS_TOKEN: tuple[tuple[float, ...], tuple[float, ...]] | None = None
+
+
+def _axis_token(
+    base_ph: Any, base_pe: Any
+) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    return (
+        tuple(round(float(v), 8) for v in base_ph),
+        tuple(round(float(v), 8) for v in base_pe),
+    )
+
+
+def _retarget_trace_axis(base_ph: Any, base_pe: Any) -> None:
+    """Point this worker at another pH–pe axis without reloading PHREEQC.
+
+    The crossing cache is keyed by cell index, so it is cleared when the axis
+    changes and kept when the next chunk is another piece of the same window.
+    The pH–pe result cache stays: those keys are the coordinates.
+    """
+    global _WORKER_BASE_PH, _WORKER_BASE_PE, _WORKER_AXIS_TOKEN
+    token = _axis_token(base_ph, base_pe)
+    if token == _WORKER_AXIS_TOKEN:
+        return
+    if _WORKER_EVAL is None:
+        raise RuntimeError("The trace worker has no point evaluator.")
+    _WORKER_BASE_PH = np.asarray(base_ph, dtype=float)
+    _WORKER_BASE_PE = np.asarray(base_pe, dtype=float)
+    _WORKER_EVAL._crossing_t.clear()
+    _WORKER_EVAL._convergence_crossing_t.clear()
+    _WORKER_AXIS_TOKEN = token
 
 
 def _normalize_trace_mode(trace_mode: str) -> str:
@@ -1785,6 +1875,7 @@ def _install_trace_state(
     global _WORKER_TRACE_PARAMS, _WORKER_BASE_PH, _WORKER_BASE_PE
     global _WORKER_TOL, _WORKER_STABILITY_TOL, _WORKER_FACTOR, _WORKER_TRACE_MODE
     global _WORKER_EVAL, _WORKER_SPECS, _WORKER_RESOLVE, _WORKER_ARMED
+    global _WORKER_AXIS_TOKEN
     reset_worker_phreeqc()
     _WORKER_TRACE_PARAMS = grid_job_params_from_dict(trace_params_dict)
     _WORKER_BASE_PH = np.asarray(base_ph, dtype=float)
@@ -1798,6 +1889,7 @@ def _install_trace_state(
     )
     _WORKER_EVAL = PointEvaluator(_WORKER_TRACE_PARAMS, {}, pq=worker_phreeqc())
     _WORKER_EVAL.resolve_pair = _WORKER_RESOLVE
+    _WORKER_AXIS_TOKEN = _axis_token(base_ph, base_pe)
     _WORKER_ARMED = True
 
 
@@ -1856,6 +1948,7 @@ def _trace_worker_batch(job: dict[str, Any]) -> dict[str, Any]:
             specs=_WORKER_SPECS,
             resolve_pair=_WORKER_RESOLVE,
             evaluator=_WORKER_EVAL,
+            resample=bool(job["cfg"].get("resample")),
         )
         parts.append(
             {
@@ -2098,6 +2191,7 @@ def _absorb_trace_part(
                 "cell_lines": [],
                 "cell_regions": [],
                 "boundaries": [],
+                "resample_seeds": [],
             },
         )
         bucket["node_fi"].extend(data["node_fi"])
@@ -2106,6 +2200,7 @@ def _absorb_trace_part(
         bucket["cell_lines"].extend(data.get("cell_lines", []))
         bucket["cell_regions"].extend(data.get("cell_regions", data.get("cell_wedges", [])))
         bucket["boundaries"].extend(data.get("boundaries", []))
+        bucket["resample_seeds"].extend(data.get("resample_seeds") or [])
     stability.extend(part["stability"])
 
 
@@ -2219,6 +2314,7 @@ def run_boundary_trace(
     else:
         workers = compute_pool.workers
         chunks = _chunk_cells(cells)
+        resample_on = int(config.RESAMPLE_SUB) >= 2
         trace_cfg = {
             "params": asdict(trace_params),
             "base_ph": base_ph.tolist(),
@@ -2227,6 +2323,7 @@ def run_boundary_trace(
             "stability_tol": stability_tol,
             "factor": factor,
             "trace_mode": mode,
+            "resample": resample_on,
         }
         jobs = _assign_trace_batches(chunks, workers, base_ij)
         for job in jobs:
@@ -2263,6 +2360,28 @@ def run_boundary_trace(
                         cfg=trace_cfg,
                     )
                 )
+            # Component-gas roots use the coarse axis. Resample swaps that
+            # axis, so it runs after the gas pass and then restores it.
+            if resample_on:
+                from .resample_trace import fill_resample_windows
+
+                layers_out, stability, stats = traced
+                fill_resample_windows(
+                    pool,
+                    compute_pool,
+                    layers_out,
+                    stats,
+                    params=trace_params,
+                    base_ph=base_ph,
+                    base_pe=base_pe,
+                    base_ij=base_ij,
+                    trace_cfg=trace_cfg,
+                    job_id=job_id,
+                    pad=int(config.RESAMPLE_PAD),
+                    sub=int(config.RESAMPLE_SUB),
+                    progress_cb=progress_cb,
+                )
+                traced = (layers_out, stability, stats)
             return traced
 
         try:
@@ -2297,6 +2416,8 @@ def run_boundary_trace(
         "tolerance": tol,
         "stability_tolerance": stability_tol,
         "refine_factor": factor,
+        "resample_pad": int(config.RESAMPLE_PAD),
+        "resample_sub": int(config.RESAMPLE_SUB),
         "top_aq_species_per_element": trace_params.top_aq_species_per_element,
         "aq_species": list(species),
         "stability_limits": {
@@ -2326,6 +2447,9 @@ def run_boundary_trace(
             "n_cells_triple_traced": stats.n_cells_triple_traced,
             "n_cells_saddle_traced": stats.n_cells_saddle_traced,
             "n_brentq_2d": stats.n_brentq_2d,
+            "n_resample_evals": stats.n_resample_evals,
+            "n_resample_cells": stats.n_resample_cells,
+            "n_resample_windows": stats.n_resample_windows,
         },
     }
     return trace_bundle, stats

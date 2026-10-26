@@ -547,7 +547,7 @@ Changing units auto-converts species concentrations. Editing chemistry, axes, ph
 | Slot mode | What shows |
 |-----------|------------|
 | **queued** | Wide/mid: status line (`Queued — position 2 of 3`). Mobile (≤900px): compact pill (`Queued 2/3` or `Queued…`); progress bar hidden |
-| **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, `Tracing element-total contours…`, …) |
+| **running** | Spectrum progress bar + phase status (`Computing grid…`, `Tracing phase edges…`, `Resampling complex junctions…`, `Tracing complex junctions…`, `Tracing element-total contours…`, …) |
 | **idle** | Done / error / cache report in the status line (e.g. `Done · 8.2s · 27k runs`) |
 
 While a job runs:
@@ -559,17 +559,19 @@ While a job runs:
 
 The bar is a skewed parallelogram (`skewX(-12deg)`, matching the logo) filled with a **blue → red** spectrum gradient; the percentage is rendered inside the bar.
 
-**Unified progress budget** — packing is always 90–95%. The client then downloads (95–98%), writes the browser cache (98–99%), and renders (99–100%). The front of the bar depends on mode and whether contours run:
+**Unified progress budget** — packing is always 90–95%. The client then downloads (95–98%), writes the browser cache (98–99%), and renders (99–100%). With **Trace phase edges** on and `PHASER_RESAMPLE_SUB` at least 2 (the default), the old trace-edges span is three phases. `PHASER_RESAMPLE_SUB=1` has no resampling phases: coarse trace fills 20–90% without contours, or 20–70% with them.
 
-| Step | Adaptive, no contours | Adaptive + contours | Uniform, no contours | Uniform + contours |
-|------|----------------------|---------------------|----------------------|--------------------|
-| Grid sweep | 0–20% | 0–20% | 0–90% | 0–70% |
-| Trace phase edges | 20–90% | 20–70% | — | — |
-| Element-total contours | — | 70–90% | — | 70–90% |
-| Packing | 90–95% | 90–95% | 90–95% | 90–95% |
-| Download | 95–98% | 95–98% | 95–98% | 95–98% |
-| Browser cache | 98–99% | 98–99% | 98–99% | 98–99% |
-| Render | 99–100% | 99–100% | 99–100% | 99–100% |
+| Step | Adaptive, resampling, no contours | Adaptive, resampling, + contours | Adaptive, no resampling, no contours | Adaptive, no resampling, + contours | Uniform, no contours | Uniform + contours |
+|------|-----------------------------------|----------------------------------|--------------------------------------|-------------------------------------|----------------------|--------------------|
+| Grid sweep | 0–20% | 0–20% | 0–20% | 0–20% | 0–90% | 0–70% |
+| Tracing phase edges | 20–50% | 20–40% | 20–90% | 20–70% | — | — |
+| Resampling complex junctions | 50–70% | 40–55% | — | — | — | — |
+| Tracing complex junctions | 70–90% | 55–70% | — | — | — | — |
+| Element-total contours | — | 70–90% | — | 70–90% | — | 70–90% |
+| Packing | 90–95% | 90–95% | 90–95% | 90–95% | 90–95% | 90–95% |
+| Download | 95–98% | 95–98% | 95–98% | 95–98% | 95–98% | 95–98% |
+| Browser cache | 98–99% | 98–99% | 98–99% | 98–99% | 98–99% | 98–99% |
+| Render | 99–100% | 99–100% | 99–100% | 99–100% | 99–100% | 99–100% |
 
 Contour root-find runs inside the wall-clock timeout and cooperatively checks the job abort flag. Workers: [§4.3](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours).
 
@@ -1093,7 +1095,8 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
    <img src="docs/schemes/trace-base-cell.png" width="520" alt="Base cell: square between four evaluated grid corners; flagged when corner phase labels disagree; mixed edges get brentq later" />
 
 4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, on the same session pool as the base grid (Morton-ordered `_chunk_cells` — see [Parallel workers](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours)). For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
-   - **2-category cells (chord)** — two corner labels, two edge zeros. `brentq` on each mixed edge finds the zero of a continuous pair scalar; the boundary is the **straight chord** between those zeros (fills = both half-planes of that chord). Example: long Hausmannite | Mn²⁺ edge, or Pyrolusite | Manganite. Pair scalars:
+   - **Fine neighbourhood (default)** — `PHASER_RESAMPLE_SUB` of 2 or more (default 4) keeps a straight chord on the coarse cell and retraces every other mixed cell. Each coarse step Δ = (axis max − axis min) / (levels − 1) is split into `sub` equal parts, so the fine step is Δ/`sub` and one coarse cell becomes a `sub`×`sub` block (default 4×4). The fine grid also covers non-chord neighbours out to `PHASER_RESAMPLE_PAD` cells (default 1, the eight adjacent cells). Those cells form solid rectangles, so a kept chord is never inside the fine grid and cannot be painted over by a neighbour. Each fine cell then uses the chord, triple, band, saddle and fallback rules below. The fine sweep and the fine trace have their own stretches of the progress bar, **Resampling complex junctions** and **Tracing complex junctions** ([Header: compute and progress](#26-header-compute-and-progress)). `PHASER_RESAMPLE_SUB=1` leaves every mixed cell on the coarse grid.
+   - **2-category cells (chord)** — two corner labels, two edge zeros. `brentq` on each mixed edge finds the zero of a continuous pair scalar; the boundary is the **straight chord** between those zeros (fills = both half-planes of that chord). On the default path this is the only geometry kept on the coarse cell. Example: long Hausmannite | Mn²⁺ edge, or Pyrolusite | Manganite. Pair scalars:
      - SI predominance solid↔solid: `SI_A − SI_B`
      - mineral moles solid↔solid: precipitated-mole difference
      - mineral costability set edges: moles of the phase entering/leaving the co-stable set
@@ -1113,7 +1116,7 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
 
        <img src="docs/schemes/trace-triple-y.png" width="520" alt="Triple Y: three phases meet at a hub; neighbor chords continue as straight lines through shared edge zeros" />
 
-     - *Thin band* (four edge crossings) — e.g. **middle** of the Manganite strip (Pyrolusite above, Hausmannite below). Three labels but four edge zeros (thin phase on two opposite corners); no single hub inside the cell. Two nearly parallel cuts from the edge zeros keep the ribbon at **base-cell** scale so you do not need sub-cell refinement / sampled fallback just to resolve the strip.
+     - *Thin band* (four edge crossings) — e.g. **middle** of the Manganite strip (Pyrolusite above, Hausmannite below). Three labels but four edge zeros (thin phase on two opposite corners); no single hub inside the cell. Two nearly parallel cuts from the edge zeros keep the ribbon at the scale of the cell being traced.
 
        <img src="docs/schemes/trace-band.png" width="520" alt="Thin band: four edge zeros and two cuts forming a Manganite strip" />
 
@@ -1136,11 +1139,16 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 | Field | Meaning |
 |-------|---------|
 | `refine_factor` | Display subdivision factor (`ADAPTIVE_REFINE_FACTOR`, default 6) |
+| `resample_pad` | Neighbour cells included with a non-chord cell (`PHASER_RESAMPLE_PAD`, default 1) |
+| `resample_sub` | Δ_fine = Δ_coarse / `sub` inside each resampled cell (default 4×4; `1` leaves Δ unchanged). See [3.6](#36-trace-phase-edges) |
 | `base_levels_ph`, `base_levels_pe` | Base grid dimensions (same as the user's plot resolution) |
 | `boundary_cells` | Number of base cells flagged as straddling a boundary |
-| `n_evaluated` | Total PHREEQC runs (base grid + trace/fallback evaluations) |
+| `n_evaluated` | Total PHREEQC runs (base grid + trace, fallback and fine-neighbourhood evaluations) |
 | `n_trace_evals` | On-demand PHREEQC evaluations during root-finding |
 | `n_fallback_evals` | PHREEQC evaluations in sampled fallback sub-grids |
+| `n_resample_evals` | PHREEQC evaluations on the fine neighbourhood (new points only) |
+| `n_resample_cells` | Coarse cells retraced, summed over layers |
+| `n_resample_windows` | Solid fine rectangles, summed over layers |
 | `n_trace_segments` | Exact boundary line segments emitted |
 | `n_stability_segments` | Stability-limit segments (converged↔failed) |
 | `refinement_method` | Always `"trace"` in adaptive mode |
@@ -1155,6 +1163,8 @@ Trace mode requests fewer aqueous species per element (`BOUNDARY_TRACE_TOP_AQ_SP
 |----------|---------|---------|
 | `ADAPTIVE_BOUNDARIES_DEFAULT` | true | UI/API default for Trace phase edges |
 | `ADAPTIVE_REFINE_FACTOR` | 6 | Fallback sub-grid / local geometry (`PHASER_ADAPTIVE_REFINE_FACTOR`) |
+| `RESAMPLE_PAD` | 1 | Non-chord neighbour cells retraced with a complex cell (`PHASER_RESAMPLE_PAD`) |
+| `RESAMPLE_SUB` | 4 | Δ_fine = Δ_coarse / `sub` (4×4 block; `PHASER_RESAMPLE_SUB`; `1` leaves Δ unchanged) |
 | `BOUNDARY_TRACE_TOLERANCE` | 1e-3 | Phase-boundary `brentq` / 2D roots |
 | `BOUNDARY_TRACE_STABILITY_TOLERANCE` | 1e-2 | Converged↔failed edges (looser) |
 | `BOUNDARY_TRACE_TOP_AQ_SPECIES` | 4 | USER_PUNCH top-N during tracing |
@@ -1252,7 +1262,7 @@ When several users (or tabs) submit computes at once, extra jobs wait in a **FIF
 1. `POST /api/compute` creates a job with status **`queued`** (or **503** `queue_full` if admission is full).
 2. A dispatcher starts the job when `running_count < MAX_CONCURRENT_JOBS`.
 3. Status becomes **`running`** for the whole job (grid, optional trace and contours, then packing). Progress is polled via `GET /api/job/{id}`.
-   - Job payload includes **`progress`** (0–1 within the current phase) and **`phase`**: `grid` while an adaptive job builds the base grid, `compute` for a uniform grid (the bar treats that as the grid segment), `boundaries` while edges are traced, `contours` when element-total isolines run, then `packing`.
+   - Job payload includes **`progress`** (0–1 within the current phase) and **`phase`**: `grid` while an adaptive job builds the base grid, `compute` for a uniform grid (the bar treats that as the grid segment), `boundaries` while coarse edges are traced, `resample` while the fine neighbourhood is evaluated, `restrace` while those fine cells are traced, `contours` when element-total isolines run, then `packing`. `resample` and `restrace` are sent only when `PHASER_RESAMPLE_SUB` is at least 2.
 4. On completion: **`done`** or **`error`**.
 5. Queued jobs expose **`queue_position`** (1-based) and **`queue_size`** so the UI can show *"Queued — position 2 of 3"*.
 6. After the browser fetches the result, it calls **`DELETE /api/job/{id}`** to free server memory.
@@ -1286,7 +1296,7 @@ After the base grid is labelled, only **mixed cells** (disagreeing corner signat
 
 - The same workers switch to tracing (`_install_trace_state`), which loads the database again on that process. One `PointEvaluator` and its crossing cache then cover every Morton chunk that worker runs. The first time a worker touches a grid corner it runs PHREEQC again, because the trace punch is narrower than the grid punch; a later chunk on that same worker reuses the result. An edge root is stored once per worker.
 - Mixed cells are **Morton-sorted** (Z-order) and split by `_chunk_cells` into blocks of **`TRACE_CELLS_PER_CHUNK`** (default **16**, env `PHASER_TRACE_CELLS_PER_CHUNK`). The number of workers does not change the block size; it only limits how many blocks run at once. A short remainder is its own last block. Chunks are dealt round-robin, and each worker receives its corner rows **once**.
-- Progress is **Morton chunks completed**, including a zero report before the first chunk. A shared counter moves the bar as each chunk finishes, even when one worker owns several chunks. Results are merged in Morton-chunk order for a deterministic bundle.
+- The page gives **Tracing phase edges**, **Resampling complex junctions** and **Tracing complex junctions** their own stretches of the bar when `PHASER_RESAMPLE_SUB` is at least 2 ([Header: compute and progress](#26-header-compute-and-progress)). Coarse progress is Morton chunks of the base grid. Resampling progress is new fine-grid points. The fine-trace progress is Morton chunks of those cells, from a shared counter, so the bar moves while one worker still holds several chunks. `PHASER_RESAMPLE_SUB=1` reports only the coarse chunks, across the whole trace-edges stretch. Results are merged in Morton-chunk order for a deterministic bundle.
 - If no cell is mixed, the phase is still reported (0, then finished) and only the analytic O₂/H₂ lines are drawn. No trace tasks are submitted.
 
 #### Totals contours (`totals_contours.py`)
@@ -1403,7 +1413,8 @@ When boundary tracing is active, each plottable layer is converted into fill pol
 
 - **Traced 2-category cells** — the base-cell rectangle is clipped by the same local dividing line used for the world-space boundary segment (Sutherland–Hodgman half-planes).
 - **Traced 3-category / band cells** — the cell rectangle is clipped by the same oriented region lines emitted for convex fill regions.
-- **Interior (untraced) cells** — merged mask contours of the coarse category field (one ring family per category) so large regions get a single fill suitable for region labels; avoids a per-cell rectangle mesh.
+- **Interior (untraced) cells** — merged mask contours of the coarse category field (one ring family per category) so large regions get a single fill suitable for region labels; avoids a per-cell rectangle mesh. Cells that were resampled are left out of this fill.
+- **Fine windows** — each solid rectangle of non-chord cells is packed on its own axis and its rings are appended to the coarse layer. Gas sheets stay on the coarse pack, so a window does not paint the water limits over a chord. See [Trace phase edges](#36-trace-phase-edges).
 - **Fallback cells** — mask contours on the fine categorical sample; their black edges are also marching-squares from that sample (no `brentq` line exists).
 - **Boundaries** — polylines taken directly from the trace bundle (`brentq` / triple rays for clean cells; marching-squares rings for fallback).
 - **Batching** — adjacent same-color rings stay geometrically separate (no topology union), then **`batch_polygons_by_category`** concatenates them into one null-separated MultiPolygon per phase so Plotly paints **one fill trace per category** (not one SVG path per cell). Hairline stroke in the fill color seals antialias seams between rings.
@@ -1608,6 +1619,8 @@ Single source of truth for tunables: `config.py` plus `.env` / process environme
 | `PHASER_SWEEP_SKIP_OUTSIDE_WATER` | `true` | Skip PHREEQC outside water band |
 | `PHASER_SWEEP_WATER_MARGIN_CELLS` | `1.0` | Extra cells beyond analytic clip |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | `6` | Adaptive fallback / local geometry |
+| `PHASER_RESAMPLE_PAD` | `1` | Non-chord neighbour cells retraced with a complex cell |
+| `PHASER_RESAMPLE_SUB` | `4` | Δ_fine = Δ_coarse / `sub` (4×4 block; `1` leaves Δ unchanged). See [3.6](#36-trace-phase-edges) |
 | `PHASER_BOUNDARY_TRACE_TOLERANCE` | `1e-3` | Phase-boundary roots |
 | `PHASER_BOUNDARY_TRACE_STABILITY_TOLERANCE` | `1e-2` | Converged↔failed roots |
 | `PHASER_TRACE_TOP_AQ_SPECIES` | `4` | USER_PUNCH slots while tracing |
@@ -1739,6 +1752,8 @@ Built-in PHREEQC databases ship inside the image. An optional `PHASER_DATA_DIR` 
 | `PHASER_MAX_QUEUE` | App | Max `running + queued` (default `20`) |
 | `PHASER_COMPUTE_MIN_INTERVAL_SEC` | App | Min gap between compute POSTs per IP (default `10`) |
 | `PHASER_ADAPTIVE_REFINE_FACTOR` | App | Adaptive fallback / local-geometry subdivision |
+| `PHASER_RESAMPLE_PAD` | App | Non-chord neighbour cells retraced with a complex cell (default `1`) |
+| `PHASER_RESAMPLE_SUB` | App | Δ_fine = Δ_coarse / `sub` (default 4×4 block; `1` leaves Δ unchanged) |
 | `PHASER_JOB_*_TTL_SEC` | App | Job memory / queue retention |
 | `PHASER_RATE_LIMIT` | App | `1` = on, `0` = off |
 | `PHASER_RATE_LIMIT_WINDOW_SEC` | App | Rate-limit window (default `60` s) |

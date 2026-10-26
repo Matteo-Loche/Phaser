@@ -5369,8 +5369,9 @@
     // Queued: compact queue indicator. Running: progress (+ phase text on wide).
     // Idle/done: status report sits where the bar was on mobile.
     const JobProgress = (() => {
-      // Fixed skeleton: 0–20 → 20–90 → 90–95 → 95–100.
-      // Only the middle (20–90) changes when contours are on.
+      // Packing is always 90–95. With resampling (the default), the old
+      // trace-edges span is three phases: coarse trace, fine-point sweep,
+      // fine trace. PHASER_RESAMPLE_SUB=1 keeps one trace-edges span.
       const TAIL = [
         { id: "packing", start: 90, end: 95 },
         { id: "download", start: 95, end: 98 },
@@ -5388,6 +5389,21 @@
         { id: "boundaries", start: 20, end: 90 },
         ...TAIL,
       ];
+      const ADAPTIVE_RESAMPLE = [
+        { id: "grid", start: 0, end: 20 },
+        { id: "boundaries", start: 20, end: 50 },
+        { id: "resample", start: 50, end: 70 },
+        { id: "restrace", start: 70, end: 90 },
+        ...TAIL,
+      ];
+      const ADAPTIVE_RESAMPLE_CONTOURS = [
+        { id: "grid", start: 0, end: 20 },
+        { id: "boundaries", start: 20, end: 40 },
+        { id: "resample", start: 40, end: 55 },
+        { id: "restrace", start: 55, end: 70 },
+        { id: "contours", start: 70, end: 90 },
+        ...TAIL,
+      ];
       const UNIFORM = [
         { id: "grid", start: 0, end: 70 },
         { id: "contours", start: 70, end: 90 },
@@ -5401,6 +5417,8 @@
         grid: "Computing grid",
         compute: "Computing grid",
         boundaries: "Tracing phase edges",
+        resample: "Resampling complex junctions",
+        restrace: "Tracing complex junctions",
         contours: "Tracing element-total contours",
         packing: "Packing diagram",
         download: "Downloading",
@@ -5409,11 +5427,21 @@
       };
       let segments = UNIFORM_NO_CONTOURS;
       let adaptiveMode = false;
+      let contourMode = false;
 
+      function resampleBudget() {
+        const sub = Number(runtime.cfg && runtime.cfg.resample_sub);
+        return !Number.isFinite(sub) || sub >= 2;
+      }
+      function pickSegments(adaptive, withContours, resample) {
+        if (!adaptive) return withContours ? UNIFORM : UNIFORM_NO_CONTOURS;
+        if (resample) return withContours ? ADAPTIVE_RESAMPLE_CONTOURS : ADAPTIVE_RESAMPLE;
+        return withContours ? ADAPTIVE : ADAPTIVE_NO_CONTOURS;
+      }
       function begin(adaptive, withContours = false) {
         adaptiveMode = !!adaptive;
-        if (adaptiveMode) segments = withContours ? ADAPTIVE : ADAPTIVE_NO_CONTOURS;
-        else segments = withContours ? UNIFORM : UNIFORM_NO_CONTOURS;
+        contourMode = !!withContours;
+        segments = pickSegments(adaptiveMode, contourMode, resampleBudget());
       }
       function phaseId(id) {
         return id === "compute" ? "grid" : id;
@@ -5427,6 +5455,10 @@
         // even if the client request flag was missing (e.g. stale reconnect).
         if (!s && phaseId(id) === "contours") {
           begin(adaptiveMode, true);
+          s = segment(id);
+        }
+        if (!s && (phaseId(id) === "resample" || phaseId(id) === "restrace")) {
+          segments = pickSegments(true, contourMode, true);
           s = segment(id);
         }
         if (!s) return 0;
@@ -8598,6 +8630,8 @@
               grid: "Computing grid",
               compute: "Computing grid",
               boundaries: "Tracing phase edges",
+              resample: "Resampling complex junctions",
+              restrace: "Tracing complex junctions",
               contours: "Tracing element-total contours",
               packing: "Packing diagram",
             }[phase] || "Computing";

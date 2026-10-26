@@ -331,17 +331,20 @@ def run_adaptive_mineral_stability_sweep(
         cells=cells,
         refine_factor=desired,
         progress_cb=(
-            (lambda d, t: report(d, t, "boundaries")) if progress_cb else None
+            (lambda d, t, phase="boundaries": report(d, t, phase)) if progress_cb else None
         ),
         job_id=job_id,
         category_mode=mode,
         compute_pool=compute_pool,
     )
-    report(n_progress, n_progress, "boundaries")
     if isinstance(trace_bundle, dict):
         trace_bundle = {**trace_bundle, "mineral_category_mode": mode}
 
-    n_trace = trace_stats.n_trace_evals + trace_stats.n_fallback_evals
+    n_trace = (
+        trace_stats.n_trace_evals
+        + trace_stats.n_fallback_evals
+        + trace_stats.n_resample_evals
+    )
     stats = {
         "n_evaluated": base_total + n_trace,
         "n_total": base_total,
@@ -349,10 +352,15 @@ def run_adaptive_mineral_stability_sweep(
         "base_levels_ph": n_ph,
         "base_levels_pe": n_pe,
         "refine_factor": desired,
+        "resample_pad": int(trace_bundle.get("resample_pad", 0)) if isinstance(trace_bundle, dict) else 0,
+        "resample_sub": int(trace_bundle.get("resample_sub", 1)) if isinstance(trace_bundle, dict) else 1,
         "boundary_cells": len(cells),
         "n_boundary_evaluated": n_trace,
         "n_trace_evals": trace_stats.n_trace_evals,
         "n_fallback_evals": trace_stats.n_fallback_evals,
+        "n_resample_evals": trace_stats.n_resample_evals,
+        "n_resample_cells": trace_stats.n_resample_cells,
+        "n_resample_windows": trace_stats.n_resample_windows,
         "n_trace_segments": trace_stats.n_segments,
         "n_stability_segments": trace_stats.n_stability_segments,
         "n_gas_segments": trace_stats.n_gas_segments,
