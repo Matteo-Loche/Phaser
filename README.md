@@ -192,6 +192,7 @@ flowchart TB
         Sweep["sweep - parallel grid"]
         Adaptive["adaptive - boundary trace"]
         Trace["boundary_trace - root finding"]
+        Resample["resample_trace - fine neighbourhood"]
         MinStab["mineral_stability_trace - assemblage trace"]
         Contours["totals_contours - TOT isolines"]
         PqCatalog["catalog - .dat scan"]
@@ -219,6 +220,7 @@ flowchart TB
     Pool --> Contours
     Pool --> JobCtl
     Adaptive --> Trace
+    Trace --> Resample
     Compute --> Packer
     Compute --> Vectors
     Compute --> Catalog
@@ -259,74 +261,75 @@ Repository tree (main packages and entry points). Layer roles: [Architecture ove
 
 ```
 PHASER/
-├── run_server.py          # CLI entry point (uvicorn)
+├── .github/workflows/
+│   └── docker-publish.yml # Build & push to GHCR on version tags (v*)
 ├── __version__.py         # App version and optional DOI (SemVer)
-├── config.py              # Paths, limits, defaults (env-overridable)
-├── LICENSE.txt            # AGPL-3.0
 ├── api/                   # HTTP layer (FastAPI)
 │   ├── app.py             # Application factory, static files, rate-limit middleware
-│   ├── rate_limit.py      # Per-IP sliding-window limits and post-burst cooldowns
-│   ├── models.py          # Pydantic request bodies
 │   ├── dependencies.py    # DB resolution for routes
+│   ├── models.py          # Pydantic request bodies
+│   ├── rate_limit.py      # Per-IP sliding-window limits and post-burst cooldowns
 │   └── routes/            # One module per API concern
 │       ├── compute.py     # GET /api/queue, POST /api/compute, job status / result / DELETE
 │       ├── config_routes.py
 │       ├── databases.py
 │       ├── elements.py
+│       ├── health.py
 │       ├── phases.py
-│       ├── stats.py
-│       └── health.py
+│       └── stats.py
 ├── chemistry/             # Unit conversion; formal charge guesses (dummy medium)
-│   ├── units.py
-│   └── charges.py         # formal_eq_of_total_key() for charge-side guessing
+│   ├── charges.py         # formal_eq_of_total_key() for charge-side guessing
+│   └── units.py
+├── config.py              # Paths, limits, defaults (env-overridable)
+├── data/
+│   ├── catalog.sqlite     # Auto-created PHREEQC catalog cache (gitignored)
+│   ├── databases/
+│   │   └── generated/     # External .dat drop zone (future ingest; optional .meta.json)
+│   └── stats.sqlite       # Auto-created per-server usage log (gitignored)
 ├── db/                    # PHREEQC database handling
-│   ├── registry.py        # Server-side database catalog (trusted paths)
 │   ├── catalog_store.py   # SQLite PHREEQC catalog (elements/phases/species/collisions)
+│   ├── registry.py        # Server-side database catalog (trusted paths)
 │   └── stats_store.py     # SQLite per-server compute usage statistics
+├── diagram/               # Phase diagram assembly
+│   ├── packer.py          # Pack grid results; SI + mineral-stability category grids + totals_heatmap
+│   ├── phases.py          # Phase name resolution for a chemical system
+│   └── vectors.py         # Vector fills (predominance + mineral-stability traced display)
+├── docker-compose.yml     # Server deployment (pull GHCR; optional local build)
+├── Dockerfile             # Image build (used by GitHub Actions and compose --build)
+├── Icon/                  # Branding assets (served at /icons/)
+│   ├── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
+│   ├── phaser_logo.svg        # Animated header logo (in-app)
+│   └── phaser_logo_v8.png     # Static wordmark (README / docs)
+├── LICENSE.txt            # AGPL-3.0
 ├── phreeqc/               # PHREEQC solver integration
+│   ├── adaptive.py        # Adaptive boundary orchestration (SI predominance)
+│   ├── boundary_trace.py  # Root-finding tracer (brentq; predominance + mineral plugins)
 │   ├── catalog.py         # .dat text parsers + optional SI probe → catalog snapshot
+│   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
 │   ├── engine.py          # Single-point evaluation via phreeqpy/IPhreeqc
-│   ├── knobs.py           # Numerical KNOBS retry ladder (convergence rescue)
-│   ├── input_titration.py # Real electrolyte (Cl⁻/NaOH) pH + O₂(g) titration input
-│   ├── input_dummy_titration.py # Dummy-electrolyte titration (SI predominance)
+│   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
 │   ├── input_assemblage_dummy.py # Dummy titration + EQUI solids (mineral stability)
 │   ├── input_assemblage_titration.py # Real electrolyte + EQUI solids (mineral stability)
+│   ├── input_dummy_titration.py # Dummy-electrolyte titration (SI predominance)
+│   ├── input_titration.py # Real electrolyte (Cl⁻/NaOH) pH + O₂(g) titration input
+│   ├── knobs.py           # Numerical KNOBS retry ladder (convergence rescue)
 │   ├── mineral_stability.py # Precipitated-mole categories + root scalars (moles / costability)
 │   ├── mineral_stability_trace.py # Adaptive trace orchestration for mineral modes
-│   ├── totals_contours.py # log₁₀(TOT) isolines on the session pool (shared totals block)
-│   ├── dummy_medium.py    # Bgc+/Bga- inert medium definitions
-│   ├── gas_limits.py      # O₂/H₂ water window and component-gas helpers
+│   ├── resample_trace.py  # Fine neighbourhood of non-chord cells (pad and sub)
 │   ├── session.py         # One spawn pool for the PHREEQC stretch of a job
 │   ├── sweep.py           # Base-grid chunks on that session pool
-│   ├── adaptive.py        # Adaptive boundary orchestration (SI predominance)
-│   └── boundary_trace.py  # Root-finding tracer (brentq; predominance + mineral plugins)
-├── diagram/               # Phase diagram assembly
-│   ├── phases.py          # Phase name resolution for a chemical system
-│   ├── packer.py          # Pack grid results; SI + mineral-stability category grids + totals_heatmap
-│   └── vectors.py         # Vector fills (predominance + mineral-stability traced display)
+│   └── totals_contours.py # log₁₀(TOT) isolines on the session pool (shared totals block)
+├── run_server.py          # CLI entry point (uvicorn)
+├── scripts/
+│   └── smoke_check.py     # Import/registry smoke test
 ├── services/              # Orchestration logic
 │   ├── catalog.py         # Startup / background catalog scans (text parse + SI probe)
 │   ├── compute.py         # FIFO compute queue, reaper, wall-clock timeout
 │   ├── job_control.py     # Cancel tokens, spawn ProcessPool, hard-kill on abort
-│   ├── stats.py           # Per-server usage statistics recording
-│   └── species.py         # Species picker suggestions
-├── Icon/                  # Branding assets (served at /icons/)
-│   ├── phaser_logo.svg        # Animated header logo (in-app)
-│   ├── phaser_logo_v8.png     # Static wordmark (README / docs)
-│   └── phaser_favicon.svg     # Square browser-tab icon (spectrum P)
-├── static/
-│   └── index.html         # Single-page web UI
-├── scripts/
-│   └── smoke_check.py     # Import/registry smoke test
-├── docker-compose.yml     # Server deployment (pull GHCR; optional local build)
-├── Dockerfile             # Image build (used by GitHub Actions and compose --build)
-├── .github/workflows/
-│   └── docker-publish.yml # Build & push to GHCR on version tags (v*)
-└── data/
-    ├── catalog.sqlite     # Auto-created PHREEQC catalog cache (gitignored)
-    ├── stats.sqlite       # Auto-created per-server usage log (gitignored)
-    └── databases/
-        └── generated/     # External .dat drop zone (future ingest; optional .meta.json)
+│   ├── species.py         # Species picker suggestions
+│   └── stats.py           # Per-server usage statistics recording
+└── static/
+    └── index.html         # Single-page web UI
 ```
 
 
@@ -1095,7 +1098,6 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
    <img src="docs/schemes/trace-base-cell.png" width="520" alt="Base cell: square between four evaluated grid corners; flagged when corner phase labels disagree; mixed edges get brentq later" />
 
 4. **Boundary tracing** (`boundary_trace.py`) — only flagged cells are processed, on the same session pool as the base grid (Morton-ordered `_chunk_cells` — see [Parallel workers](#43-parallel-workers-grid-sweep-boundary-trace-and-totals-contours)). For each layer and cell, `brentq` runs **only on cell edges** (1D between corner nodes); lines inside a cell are geometry from those zeros (fills use the same divides). Mn mineral-stability examples below: aqueous **Mn²⁺**, **Pyrolusite**, thin **Manganite** ribbon, **Hausmannite**.
-   - **Fine neighbourhood (default)** — `PHASER_RESAMPLE_SUB` of 2 or more (default 4) keeps a straight chord on the coarse cell and retraces every other mixed cell. Each coarse step Δ = (axis max − axis min) / (levels − 1) is split into `sub` equal parts, so the fine step is Δ/`sub` and one coarse cell becomes a `sub`×`sub` block (default 4×4). The fine grid also covers non-chord neighbours out to `PHASER_RESAMPLE_PAD` cells (default 1, the eight adjacent cells). Those cells form solid rectangles, so a kept chord is never inside the fine grid and cannot be painted over by a neighbour. Each fine cell then uses the chord, triple, band, saddle and fallback rules below. The fine sweep and the fine trace have their own stretches of the progress bar, **Resampling complex junctions** and **Tracing complex junctions** ([Header: compute and progress](#26-header-compute-and-progress)). `PHASER_RESAMPLE_SUB=1` leaves every mixed cell on the coarse grid.
    - **2-category cells (chord)** — two corner labels, two edge zeros. `brentq` on each mixed edge finds the zero of a continuous pair scalar; the boundary is the **straight chord** between those zeros (fills = both half-planes of that chord). On the default path this is the only geometry kept on the coarse cell. Example: long Hausmannite | Mn²⁺ edge, or Pyrolusite | Manganite. Pair scalars:
      - SI predominance solid↔solid: `SI_A − SI_B`
      - mineral moles solid↔solid: precipitated-mole difference
@@ -1107,6 +1109,7 @@ UI toggle **Trace phase edges** (`adaptive_boundaries` in the API). When on, PHA
      <img src="docs/schemes/trace-chord.png" width="520" alt="Two-phase chord: edge brentq zeros joined by a straight chord with matching fills" />
 
    - **Solid/aqueous scalar choice** — the tracer reads solid vs aqueous from the category label (`label_is_solid` in `packer.py`): `"<name>(s)"` ⇒ solid, bare colliding name ⇒ aqueous; co-precip joins `"A + B"` count as solid sets. No per-corner SI guess.
+   - **Fine neighbourhood (default)** — `resample_trace.py`, called from `run_boundary_trace` while the session pool is still open. After the chord test above, `PHASER_RESAMPLE_SUB` of 2 or more (default 4) keeps that straight chord on the coarse cell and retraces every other mixed cell. Each coarse step Δ = (axis max − axis min) / (levels − 1) is split into `sub` equal parts, so the fine step is Δ/`sub` and one coarse cell becomes a `sub`×`sub` block (default 4×4). The fine grid also covers non-chord neighbours out to `PHASER_RESAMPLE_PAD` cells (default 1, the eight adjacent cells). Those cells form solid rectangles, so a kept chord is never inside the fine grid and cannot be painted over by a neighbour. Each fine cell then uses the chord, triple, band, saddle and fallback rules below. The fine sweep and the fine trace have their own stretches of the progress bar, **Resampling complex junctions** and **Tracing complex junctions** ([Header: compute and progress](#26-header-compute-and-progress)). `PHASER_RESAMPLE_SUB=1` leaves every mixed cell on the coarse grid, including the three-phase junctions that follow.
    - **3-category cells** — split into **convex fill regions** (a category fills where every oriented line's signed distance is ≥ 0). Two topologies:
      - *Triple Y* (three edge crossings) — e.g. the **tip** of a thin Manganite ribbon where Pyrolusite, Manganite, and Mn²⁺ meet. The figure shows the usual case: three phase fields around a **hub**, with edge dots from 1D `brentq` on mixed edges. How the hub is placed (in order):
 
@@ -1238,8 +1241,8 @@ sequenceDiagram
     end
     Job->>Pool: close pool
     Job->>Pack: category grids and hover
-    opt Trace phase edges on
-        Job->>Vec: traced fills
+    opt traced job
+        Job->>Vec: traced fills and boundaries
     end
     loop Poll while running or after page reload
         UI->>API: GET job status
@@ -1292,7 +1295,7 @@ A phase diagram with 100×100 resolution = **10,000 independent PHREEQC runs** (
 
 #### Boundary trace (`boundary_trace.py`)
 
-After the base grid is labelled, only **mixed cells** (disagreeing corner signatures) are traced. Cells with a synthetic O₂ or H₂ corner are removed before that list is Morton-sorted ([Water-band mask](#35-water-band-mask-and-gas-limit-chemistry)). The signature pass reads a view of each row; it does not copy the aqueous rankings.
+After the base grid is labelled, only **mixed cells** (disagreeing corner signatures) are traced. Cells with a synthetic O₂ or H₂ corner are removed before that list is Morton-sorted ([Water-band mask](#35-water-band-mask-and-gas-limit-chemistry)). The signature pass reads a view of each row; it does not copy the aqueous rankings. When `PHASER_RESAMPLE_SUB` is at least 2, `resample_trace.py` then builds the fine neighbourhood on this same pool ([Trace phase edges](#36-trace-phase-edges)).
 
 - The same workers switch to tracing (`_install_trace_state`), which loads the database again on that process. One `PointEvaluator` and its crossing cache then cover every Morton chunk that worker runs. The first time a worker touches a grid corner it runs PHREEQC again, because the trace punch is narrower than the grid punch; a later chunk on that same worker reuses the result. An edge root is stored once per worker.
 - Mixed cells are **Morton-sorted** (Z-order) and split by `_chunk_cells` into blocks of **`TRACE_CELLS_PER_CHUNK`** (default **16**, env `PHASER_TRACE_CELLS_PER_CHUNK`). The number of workers does not change the block size; it only limits how many blocks run at once. A short remainder is its own last block. Chunks are dealt round-robin, and each worker receives its corner rows **once**.
